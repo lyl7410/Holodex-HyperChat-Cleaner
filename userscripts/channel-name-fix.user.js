@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Channel Name Fix
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      2.5.2
+// @version      2.6.0
 // @description  修复 Holodex 多视图频道名、直播标题、频道ID，以及媒体控制/布局面板头像。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -20,16 +20,21 @@
 (() => {
     'use strict';
 
-    const V = '2.5.2';
+    const V = '2.6.0';
     const VIDEO = /^[\w-]{11}$/;
     const CHANNEL = /^UC[\w-]{22}$/;
     const KEY = 'hcnf_video_metadata_v25';
     const CHANNEL_KEY = 'hcnf_channel_metadata_v25';
+    const AVATAR_KEY = 'hcnf_avatar_by_channel_v26';
     const CACHE_AGE = 14 * 86400000;
     const INCOMPLETE_AGE = 86400000;
     const doc = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.document : document);
     const videoCache = GM_getValue(KEY, {}) || {};
     const channelCache = GM_getValue(CHANNEL_KEY, {}) || {};
+    // Persistent channel -> avatar URL index; decoded image data stays in the current tab.
+    const avatarByChannel = GM_getValue(AVATAR_KEY, {}) || {};
+    const avatarAssets = new Map();
+    const AVATAR_MEMORY_LIMIT = 80;
     const pending = new Map(), channelPending = new Map(), failures = new Map();
     const queue = [];
     let running = 0, storeCache = null, debounce = null;
@@ -135,13 +140,30 @@
             onerror:()=>resolve(null),ontimeout:()=>resolve(null)
         }));
     }
+    function rememberAvatar(channelId, url) {
+        const avatar = imageUrl(url);
+        if (!isChannel(channelId) || !avatar) return;
+        if (avatarByChannel[channelId]?.url === avatar) return;
+        avatarByChannel[channelId] = { url: avatar, updated: Date.now() };
+        GM_setValue(AVATAR_KEY, avatarByChannel);
+    }
+    function avatarFor(video) {
+        if (!isVideo(video?.id)) return null;
+        const metadata = videoCache[video.id] || {};
+        const channelId = isChannel(metadata.channelId) ? metadata.channelId : video.channel?.id;
+        return imageUrl(metadata.avatar) ||
+            (isChannel(channelId) ? imageUrl(avatarByChannel[channelId]?.url) : null);
+    }
     function saveVideo(id, data) {
         videoCache[id] = { ...data, updated: Date.now() };
         GM_setValue(KEY,videoCache);
+        rememberAvatar(data.channelId, data.avatar);
+        preloadAvatar(data.avatar);
     }
     function saveChannel(url, data) {
         channelCache[url] = { ...data, updated: Date.now() };
         GM_setValue(CHANNEL_KEY,channelCache);
+        rememberAvatar(data.channelId, data.avatar);
     }
     function legacyName(id) {
         for (const k of ['hcc_channel_names_v24','holodex_channel_name_v24',
@@ -299,21 +321,81 @@
         'height:100%;z-index:2;border-radius:50%;object-fit:cover;pointer-events:none}' +
         '.hcnf-avatar:not(.loaded){visibility:hidden}'
     );
+    // Keep one decoded image in memory per unique URL (shared across videos of a channel).
+    // This avoids recreating a network request on each dialog opening in the same tab.
+    function preloadAvatar(url) {
+        const avatar = imageUrl(url);
+        if (!avatar) return null;
+        let asset = avatarAssets.get(avatar);
+        if (asset && !(asset.state === 'error' && Date.now() - asset.failedAt > 600000)) {
+            asset.used = Date.now();
+            return asset;
+        }
+        if (asset) avatarAssets.delete(avatar);
+        const img = new Image();
+        img.referrerPolicy = 'no-referrer';
+        img.decoding = 'async';
+        asset = { img, state: 'loading', used: Date.now(), failedAt: 0 };
+        avatarAssets.set(avatar, asset);
+        img.onload = async () => {
+            if (asset.state !== 'loading') return;
+            if (typeof img.decode === 'function') {
+                try { await img.decode(); } catch {}
+            }
+            if (img.naturalWidth > 0) {
+                asset.state = 'ready';
+                schedule(20);
+            } else {
+                asset.state = 'error';
+                asset.failedAt = Date.now();
+            }
+        };
+        img.onerror = () => {
+            asset.state = 'error';
+            asset.failedAt = Date.now();
+        };
+        img.src = avatar;
+        if (avatarAssets.size > AVATAR_MEMORY_LIMIT) {
+            const oldest = [...avatarAssets.entries()]
+                .filter(([key, value]) => key !== avatar && value.state !== 'loading')
+                .sort((a, b) => a[1].used - b[1].used);
+            for (const [key] of oldest.slice(0, avatarAssets.size - AVATAR_MEMORY_LIMIT))
+                avatarAssets.delete(key);
+        }
+        return asset;
+    }
     function showAvatar(target,id,url) {
-        const avatar=imageUrl(url);
-        if (!target || !isVideo(id) || !avatar) return;
-        let el=target.querySelector(':scope > img.hcnf-avatar');
-        if (el?.dataset.videoId===id && el.src===avatar) return;
-        el?.remove();
-        el=doc.createElement('img');
-        el.className='hcnf-avatar';
-        el.alt='频道头像';
-        el.dataset.videoId=id;
-        el.referrerPolicy='no-referrer';
-        el.onload=()=>el.classList.add('loaded');
-        el.onerror=()=>el.remove();
-        el.src=avatar;
-        target.appendChild(el);
+        if (!target || !isVideo(id)) return;
+        const avatar = imageUrl(url);
+        const existing = [...target.querySelectorAll(':scope > img.hcnf-avatar')];
+        // The row can be recycled for a DIFFERENT channel. Never leave its old avatar visible.
+        for (const el of existing) if (el.dataset.videoId !== id) el.remove();
+        if (!avatar) return;
+        const already = existing.find(el => el.isConnected &&
+            el.dataset.videoId === id && el.dataset.avatarUrl === avatar);
+        if (already) return;
+        const asset = preloadAvatar(avatar);
+        // Keep the old image from the SAME video visible until the replacement is decoded.
+        if (asset?.state !== 'ready') return;
+        const img = doc.createElement('img');
+        img.className = 'hcnf-avatar';
+        img.alt = '频道头像';
+        img.decoding = 'async';
+        img.loading = 'eager';
+        img.referrerPolicy = 'no-referrer';
+        img.dataset.videoId = id;
+        img.dataset.avatarUrl = avatar;
+        const finish = () => {
+            if (!img.isConnected) return;
+            img.classList.add('loaded');
+            for (const old of target.querySelectorAll(':scope > img.hcnf-avatar'))
+                if (old !== img) old.remove();
+        };
+        img.onload = finish;
+        img.onerror = () => img.remove();
+        img.src = avatar;
+        target.appendChild(img);
+        if (img.complete && img.naturalWidth > 0) finish();
     }
     function fixLayout(s) {
         const layout=s?.state.multiview.layout||[];
@@ -325,8 +407,8 @@
             layout.forEach((item,i)=>{
                 const record=contents[item.i];
                 const video=record?.type==='video' && record.video;
-                const avatar=isVideo(video?.id) && videoCache[video.id]?.avatar;
-                if (avatar) showAvatar(cells[i].querySelector('.grabbable'),video.id,avatar);
+                if (isVideo(video?.id))
+                    showAvatar(cells[i].querySelector('.grabbable'), video.id, avatarFor(video));
             });
         }
     }
@@ -344,9 +426,9 @@
             videos.forEach((video,i)=>{
                 if (!isVideo(video?.id)) return;
                 const data=videoCache[video.id];
-                if (data?.avatar)
-                    showAvatar(rows[i].querySelector('.v-list-item__avatar'),video.id,data.avatar);
-                const text=rows[i].querySelector('.v-list-item-title');
+                showAvatar(rows[i].querySelector('.v-list-item__avatar'),
+                    video.id, avatarFor(video));
+                const text=rows[i].querySelector('.v-list-item__title');
                 if (text && validTitle(data?.title,video.id) &&
                     [video.id,video.channel?.name].includes(text.textContent?.trim()))
                     text.textContent=data.title;
@@ -378,6 +460,12 @@
         for (const [id,v] of videos) {
             const cached=videoCache[id];
             if (cached) writeStore(s,id,cached);
+            const avatar = avatarFor(v);
+            if (avatar) {
+                if (cached?.channelId && cached?.avatar)
+                    rememberAvatar(cached.channelId, cached.avatar);
+                preloadAvatar(avatar);
+            }
             const complete=cached && validTitle(cached.title,id) &&
                 validName(cached.name) && isChannel(cached.channelId) && imageUrl(cached.avatar);
             const fresh=cached && Date.now()-cached.updated <
@@ -413,8 +501,13 @@
         if (!confirm('清空频道名称、直播标题和频道头像缓存？')) return;
         for (const id of Object.keys(videoCache)) delete videoCache[id];
         for (const id of Object.keys(channelCache)) delete channelCache[id];
+        for (const id of Object.keys(avatarByChannel)) delete avatarByChannel[id];
+        avatarAssets.clear();
         failures.clear();
-        GM_setValue(KEY,videoCache);GM_setValue(CHANNEL_KEY,channelCache);
+        GM_setValue(KEY,videoCache);
+        GM_setValue(CHANNEL_KEY,channelCache);
+        GM_setValue(AVATAR_KEY,avatarByChannel);
+        doc.querySelectorAll('img.hcnf-avatar').forEach(img=>img.remove());
         schedule(50);
     });
     schedule(0);
