@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Channel Name Fix
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      2.6.1
+// @version      2.6.2
 // @description  修复 Holodex 多视图频道名、直播标题、频道ID，以及媒体控制/布局面板头像。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -20,7 +20,7 @@
 (() => {
     'use strict';
 
-    const V = '2.6.1';
+    const V = '2.6.2';
     const VIDEO = /^[\w-]{11}$/;
     const CHANNEL = /^UC[\w-]{22}$/;
     const KEY = 'hcnf_video_metadata_v25';
@@ -515,15 +515,29 @@
     schedule(0);
     [400,1200,3000,6500].forEach(n=>setTimeout(()=>schedule(),n));
     const watcher=new MutationObserver(mutations=>{
-        for (const mutation of mutations) for (const n of mutation.addedNodes) {
-            if (n.nodeType!==1) continue;
-            if (n.matches?.('.layout-preview,.media-controls-list,.mv-cell,.multiview,.v-dialog__content--active') ||
-                n.querySelector?.('.layout-preview,.media-controls-list,.mv-cell,.multiview')) {
-                schedule();return;
+        for (const mutation of mutations) {
+            // Vuetify often opens an already mounted dialog by toggling CLASS only.
+            // Detect that transition instead of waiting for the 4-second safety poll.
+            if (mutation.type==='attributes') {
+                const node=mutation.target;
+                if (node.matches?.('.v-dialog__content,.v-dialog,.layout-preview,.media-controls-list') &&
+                    (node.classList.contains('v-dialog__content--active') || node.getClientRects().length)) {
+                    schedule(0);return;
+                }
+                continue;
+            }
+            for (const n of mutation.addedNodes) {
+                if (n.nodeType!==1) continue;
+                if (n.matches?.('.layout-preview,.media-controls-list,.mv-cell,.multiview,.v-dialog__content--active') ||
+                    n.querySelector?.('.layout-preview,.media-controls-list,.mv-cell,.multiview')) {
+                    schedule(0);return;
+                }
             }
         }
     });
-    watcher.observe(doc.documentElement,{childList:true,subtree:true});
+    watcher.observe(doc.documentElement,{
+        childList:true,subtree:true,attributes:true,attributeFilter:['class','style']
+    });
     setInterval(()=>{if (!doc.hidden) tick();},4000);
     doc.addEventListener('visibilitychange',()=>{if (!doc.hidden) schedule(80);});
 })();
