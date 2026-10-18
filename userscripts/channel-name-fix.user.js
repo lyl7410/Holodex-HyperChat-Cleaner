@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Channel Name Fix
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      2.5.0
+// @version      2.5.1
 // @description  修复 Holodex 多视图频道名、直播标题、频道ID，以及媒体控制/布局面板头像。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -20,7 +20,7 @@
 (() => {
     'use strict';
 
-    const V = '2.5.0';
+    const V = '2.5.1';
     const VIDEO = /^[\w-]{11}$/;
     const CHANNEL = /^UC[\w-]{22}$/;
     const KEY = 'hcnf_video_metadata_v25';
@@ -334,9 +334,11 @@
         for (const list of doc.querySelectorAll('.media-controls-list')) {
             if (!list.getClientRects().length) continue;
             const vm=findVue(list,'MediaControls');
-            const videos=vm?.cells?.map(c=>c.video).filter(Boolean)||[];
-            const rows=[...list.querySelectorAll(':scope > .v-list-item')]
-                .filter(row=>row.querySelector('.v-list-item-avatar'));
+            const videos=(vm?.cells || vm?.$parent?.$refs?.videoCell || [])
+                .map(c=>c.video).filter(Boolean);
+            const rows=[...list.children]
+                .filter(row=>row.classList?.contains('v-list-item') &&
+                    row.querySelector('.v-list-item-avatar'));
             // Do not guess at the row-to-video mapping.
             if (!videos.length || videos.length!==rows.length) continue;
             videos.forEach((video,i)=>{
