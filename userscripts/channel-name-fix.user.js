@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Channel Name Fix
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      2.6.0
+// @version      2.6.1
 // @description  修复 Holodex 多视图频道名、直播标题、频道ID，以及媒体控制/布局面板头像。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -20,7 +20,7 @@
 (() => {
     'use strict';
 
-    const V = '2.6.0';
+    const V = '2.6.1';
     const VIDEO = /^[\w-]{11}$/;
     const CHANNEL = /^UC[\w-]{22}$/;
     const KEY = 'hcnf_video_metadata_v25';
@@ -140,30 +140,32 @@
             onerror:()=>resolve(null),ontimeout:()=>resolve(null)
         }));
     }
-    function rememberAvatar(channelId, url) {
+    function rememberAvatar(channelId, url, updated = Date.now()) {
         const avatar = imageUrl(url);
         if (!isChannel(channelId) || !avatar) return;
-        if (avatarByChannel[channelId]?.url === avatar) return;
-        avatarByChannel[channelId] = { url: avatar, updated: Date.now() };
+        const previous = avatarByChannel[channelId];
+        if (previous?.url === avatar || (previous?.updated || 0) > updated) return;
+        avatarByChannel[channelId] = { url: avatar, updated };
         GM_setValue(AVATAR_KEY, avatarByChannel);
     }
     function avatarFor(video) {
         if (!isVideo(video?.id)) return null;
         const metadata = videoCache[video.id] || {};
         const channelId = isChannel(metadata.channelId) ? metadata.channelId : video.channel?.id;
-        return imageUrl(metadata.avatar) ||
-            (isChannel(channelId) ? imageUrl(avatarByChannel[channelId]?.url) : null);
+        // Prefer the newest channel-level avatar across multiple streams.
+        return (isChannel(channelId) ? imageUrl(avatarByChannel[channelId]?.url) : null) ||
+            imageUrl(metadata.avatar);
     }
     function saveVideo(id, data) {
         videoCache[id] = { ...data, updated: Date.now() };
         GM_setValue(KEY,videoCache);
-        rememberAvatar(data.channelId, data.avatar);
-        preloadAvatar(data.avatar);
+        rememberAvatar(data.channelId, data.avatar, videoCache[id].updated);
+        preloadAvatar(avatarByChannel[data.channelId]?.url || data.avatar);
     }
     function saveChannel(url, data) {
         channelCache[url] = { ...data, updated: Date.now() };
         GM_setValue(CHANNEL_KEY,channelCache);
-        rememberAvatar(data.channelId, data.avatar);
+        rememberAvatar(data.channelId, data.avatar, channelCache[url].updated);
     }
     function legacyName(id) {
         for (const k of ['hcc_channel_names_v24','holodex_channel_name_v24',
@@ -463,7 +465,7 @@
             const avatar = avatarFor(v);
             if (avatar) {
                 if (cached?.channelId && cached?.avatar)
-                    rememberAvatar(cached.channelId, cached.avatar);
+                    rememberAvatar(cached.channelId, cached.avatar, cached.updated || 0);
                 preloadAvatar(avatar);
             }
             const complete=cached && validTitle(cached.title,id) &&
