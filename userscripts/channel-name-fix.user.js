@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Channel Name Fix
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      2.5.1
+// @version      2.5.2
 // @description  修复 Holodex 多视图频道名、直播标题、频道ID，以及媒体控制/布局面板头像。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -20,7 +20,7 @@
 (() => {
     'use strict';
 
-    const V = '2.5.1';
+    const V = '2.5.2';
     const VIDEO = /^[\w-]{11}$/;
     const CHANNEL = /^UC[\w-]{22}$/;
     const KEY = 'hcnf_video_metadata_v25';
@@ -294,7 +294,7 @@
         '.layout-preview .hcnf-avatar{position:absolute;top:50%;left:50%;' +
         'transform:translate(-50%,-50%);width:40px;height:40px;z-index:2;' +
         'border-radius:50%;object-fit:cover;pointer-events:none}' +
-        '.media-controls-list .v-list-item-avatar{position:relative}' +
+        '.media-controls-list .v-list-item__avatar{position:relative}' +
         '.media-controls-list .hcnf-avatar{position:absolute;inset:0;width:100%;' +
         'height:100%;z-index:2;border-radius:50%;object-fit:cover;pointer-events:none}' +
         '.hcnf-avatar:not(.loaded){visibility:hidden}'
@@ -338,14 +338,14 @@
                 .map(c=>c.video).filter(Boolean);
             const rows=[...list.children]
                 .filter(row=>row.classList?.contains('v-list-item') &&
-                    row.querySelector('.v-list-item-avatar'));
+                    row.querySelector('.v-list-item__avatar'));
             // Do not guess at the row-to-video mapping.
             if (!videos.length || videos.length!==rows.length) continue;
             videos.forEach((video,i)=>{
                 if (!isVideo(video?.id)) return;
                 const data=videoCache[video.id];
                 if (data?.avatar)
-                    showAvatar(rows[i].querySelector('.v-list-item-avatar'),video.id,data.avatar);
+                    showAvatar(rows[i].querySelector('.v-list-item__avatar'),video.id,data.avatar);
                 const text=rows[i].querySelector('.v-list-item-title');
                 if (text && validTitle(data?.title,video.id) &&
                     [video.id,video.channel?.name].includes(text.textContent?.trim()))
