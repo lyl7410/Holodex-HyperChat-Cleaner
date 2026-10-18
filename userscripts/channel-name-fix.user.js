@@ -3,18 +3,18 @@
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
 // @version      2.5.0
 // @description  修复 Holodex 多视图频道名、直播标题、频道ID，以及媒体控制/布局面板头像。
- // @match        https://holodex.net/*
- // @match        https://www.holodex.net/*
- // @run-at       document-idle
- // @grant        GM_getValue
- // @grant        GM_setValue
- // @grant        GM_xmlhttpRequest
- // @grant        GM_addStyle
- // @grant        GM_registerMenuCommand
- // @grant        unsafeWindow
- // @connect      www.youtube.com
- // @updateURL    https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/channel-name-fix.user.js
- // @downloadURL  https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/channel-name-fix.user.js
+// @match        https://holodex.net/*
+// @match        https://www.holodex.net/*
+// @run-at       document-idle
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addStyle
+// @grant        GM_registerMenuCommand
+// @grant        unsafeWindow
+// @connect      www.youtube.com
+// @updateURL    https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/channel-name-fix.user.js
+// @downloadURL  https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/channel-name-fix.user.js
 // ==/UserScript==
 
 (() => {
