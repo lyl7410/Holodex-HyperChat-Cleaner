@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Mobile Quick Add（精简手机版）
 // @namespace    holodex-mobile-quick-add
-// @version      0.2.0
+// @version      0.2.1
 // @description  当前 YouTube 视频一键跳转 Holodex 并自动添加；不包含聊天、频道名修复或收藏功能。
 // @match        https://youtube.com/*
 // @match        https://www.youtube.com/*
@@ -14,6 +14,7 @@
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM.setValue
 // @grant        GM_deleteValue
 // @grant        GM_listValues
 // @grant        GM_addValueChangeListener
@@ -27,11 +28,21 @@
   const REQUEST_KEY = 'hma_request';
   const TARGET_KEY = 'hma_v2_target';
   const PREFIX = 'hma_v2_request_';
+  const WAKE_KEY = 'hma_v2_wake';
   const TTL = 12 * 60 * 60 * 1000;
   const uid = () => crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Array.from(crypto.getRandomValues(new Uint32Array(3))).join('-');
   const read = (key, fallback) => Promise.resolve(GM_getValue(key, fallback));
-  const write = (key, value) => Promise.resolve(GM_setValue(key, value));
+  // ScriptCat's legacy GM_setValue returns void before background persistence.
+  // Await the real async API before navigating or announcing a queued request.
+  const write = (key, value) => {
+    if (typeof GM !== 'undefined' && typeof GM.setValue === 'function') return GM.setValue(key, value);
+    throw new Error('E_STORAGE：需要脚本猫 GM.setValue 权限，请重新安装当前版本并确认授权');
+  };
   let sourcePending = null, targetSession = null, draining = false;
+  const receiverToken = uid();
+  const incoming = new Map();
+  let receiverStarted = false;
+  let failedRequest = null;
   let hideTimer;
   const IS_HD = /^(www\.)?holodex\.net$/.test(location.hostname);
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
@@ -92,9 +103,10 @@
       }
       const request = { requestId, target: target.id, videoId: id, created: Date.now(), status: 'pending' };
       await write(PREFIX + requestId, request);
+      await write(WAKE_KEY, request);
       sourcePending = { requestId, videoId: id };
       makeButton().textContent = '已排队：' + id;
-      showNotice('已发送视频 ' + id + '。请切回首次打开的 Holodex 分屏；后台休眠时会在切回后添加。');
+      showNotice('视频 ' + id + ' 已保存到队列。请切回 Holodex；若没有“接收中”按钮，点击“使用此分屏接收”。');
       if (createdNew) {
         const url = new URL('https://holodex.net/multiview/');
         url.searchParams.set('hma_session', target.id);
@@ -316,19 +328,29 @@
     draining = true;
     try {
       const target = await read(TARGET_KEY, null);
-      if (target?.id !== targetSession) return;
+      if (target?.id !== targetSession || (target.owner && target.owner !== receiverToken)) {
+        showReceiverButton(false);
+        return;
+      }
       const keys = await Promise.resolve(GM_listValues());
-      const pending = [];
+      const requests = new Map(incoming);
       for (const key of keys) {
         if (!key.startsWith(PREFIX)) continue;
         const request = await read(key, null);
         if (!request) continue;
         if (Date.now() - request.created > TTL) { await Promise.resolve(GM_deleteValue(key)); continue; }
-        if (request.target === targetSession && request.status === 'pending' && VIDEO_RE.test(request.videoId)) pending.push(request);
+        if (request.target === targetSession && request.status === 'pending' && VIDEO_RE.test(request.videoId)) requests.set(request.requestId, request);
       }
+      const latest = await read(WAKE_KEY, null);
+      if (latest?.target === targetSession && latest.status === 'pending' && VIDEO_RE.test(latest.videoId)) {
+        const saved = await read(PREFIX + latest.requestId, null);
+        if (saved?.status === 'pending') requests.set(saved.requestId, saved);
+      }
+      const pending = [...requests.values()].filter(request => request.target === targetSession && request.status === 'pending' && Date.now() - request.created <= TTL);
       pending.sort((a, b) => a.created - b.created);
       for (const request of pending) {
-        if ((await read(TARGET_KEY, null))?.id !== targetSession) break;
+        const active = await read(TARGET_KEY, null);
+        if (active?.id !== targetSession || (active.owner && active.owner !== receiverToken)) break;
         clearTimeout(hideTimer);
         const btn = makeButton();
         btn.textContent = '正在添加 ' + request.videoId;
@@ -337,47 +359,94 @@
         try {
           const result = await addViaPage(request);
           await write(PREFIX + request.requestId, { ...request, status: 'done', result });
+          incoming.delete(request.requestId);
+          failedRequest = null;
           btn.textContent = result === 'already' ? '此视频已存在' : '已加入多视图';
           showNotice('视频 ' + request.videoId + (result === 'already' ? ' 已在此布局中，没有重复添加。' : ' 已加入此分屏。若未播放，请点击播放器。'));
-          hideTimer = setTimeout(() => { button?.remove(); notice?.remove(); }, 7000);
+          hideTimer = setTimeout(() => { showReceiverButton(true); notice?.remove(); }, 7000);
         } catch (error) {
           await write(PREFIX + request.requestId, { ...request, status: 'error', error: error.message });
+          incoming.delete(request.requestId);
+          failedRequest = request;
           btn.textContent = '添加失败，点此重试';
           btn.disabled = false;
           btn.onclick = async () => {
+            failedRequest = null;
             await write(PREFIX + request.requestId, { ...request, status: 'pending' });
             drain();
           };
-          showNotice('Quick Add 0.2.0：' + request.videoId + ' 添加失败：' + error.message);
+          showNotice('Quick Add 0.2.1：' + request.videoId + ' 添加失败：' + error.message);
           break;
         }
       }
+      if (!pending.length && !failedRequest) showReceiverButton(true);
     } catch (error) { showNotice('队列读取失败：' + error.message); }
     finally { draining = false; }
   }
 
+  function showReceiverButton(active) {
+    const btn = makeButton();
+    btn.disabled = false;
+    btn.textContent = active ? '接收中 · 检查队列' : '使用此分屏接收';
+    btn.onclick = async () => {
+      try {
+        if (!active) await claimReceiver();
+        showNotice('Quick Add 0.2.1：正在检查待添加视频…');
+        await drain();
+      } catch (error) { showNotice('接收启动失败：' + error.message); }
+    };
+  }
+
+  async function claimReceiver() {
+    const target = await read(TARGET_KEY, null);
+    // Keep the queue's target ID so already queued videos are not stranded.
+    targetSession = target?.id || targetSession || uid();
+    sessionStorage.setItem('hma_v2_session', targetSession);
+    await write(TARGET_KEY, { id: targetSession, owner: receiverToken, updated: Date.now(), ready: true });
+    showReceiverButton(true);
+  }
+
   async function initReceiver() {
     if (!/^\/multiview(?:\/|$)/.test(location.pathname)) return;
+    if (receiverStarted) return;
+    receiverStarted = true;
     const url = new URL(location.href);
     const supplied = url.searchParams.get('hma_session');
     targetSession = supplied || sessionStorage.getItem('hma_v2_session');
-    if (!targetSession) return;
-    sessionStorage.setItem('hma_v2_session', targetSession);
+    if (targetSession) sessionStorage.setItem('hma_v2_session', targetSession);
     // Remove old request parameters once. The queue, not Vue Router's cached query,
     // is now the only source of video IDs; old 0.1.x IDs can never be replayed.
     url.searchParams.delete(ADD_KEY);
     url.searchParams.delete(REQUEST_KEY);
     url.searchParams.delete('hma_session');
     history.replaceState(history.state, '', url.href);
-    if ((await read(TARGET_KEY, null))?.id !== targetSession) return;
-    await write(TARGET_KEY, { id: targetSession, updated: Date.now() });
-    showNotice('Quick Add 0.2.0：此页为接收分屏。后续视频会排队加入这里，切回此页即可处理。');
+    const target = await read(TARGET_KEY, null);
+    if (targetSession && (!target || target.id === targetSession)) {
+      await claimReceiver();
+      showNotice('Quick Add 0.2.1：此页正在接收，切回即可处理队列。');
+    } else {
+      showReceiverButton(false);
+      showNotice('Quick Add 0.2.1：点击“使用此分屏接收”，把已排队的视频加入当前布局。');
+    }
     try { GM_addValueChangeListener(TARGET_KEY, () => drain()); } catch {}
+    try {
+      GM_addValueChangeListener(WAKE_KEY, (_key, _old, request) => {
+        if (request?.target === targetSession && VIDEO_RE.test(request.videoId) && request.status === 'pending') {
+          incoming.set(request.requestId, request);
+          drain();
+        }
+      });
+    } catch {}
     document.addEventListener('visibilitychange', () => { if (!document.hidden) drain(); });
     window.addEventListener('focus', drain);
     setInterval(drain, 1200);
     setInterval(async () => {
-      if ((await read(TARGET_KEY, null))?.id === targetSession) await write(TARGET_KEY, { id: targetSession, updated: Date.now() });
+      try {
+        const target = await read(TARGET_KEY, null);
+        if (target?.id === targetSession && target.owner === receiverToken) {
+          await write(TARGET_KEY, { ...target, updated: Date.now() });
+        }
+      } catch (error) { showNotice('接收同步失败：' + error.message); }
     }, 15000);
     drain();
   }
@@ -395,7 +464,13 @@
   }
 
   if (IS_HD) {
-    initReceiver();
+    const initialize = () => initReceiver().catch(error => {
+      receiverStarted = false;
+      showReceiverButton(false);
+      showNotice('Quick Add 0.2.1 初始化失败：' + error.message);
+    });
+    initialize();
+    setInterval(initialize, 1500);
   } else {
     refreshYouTubeButton();
     document.addEventListener('yt-navigate-finish', refreshYouTubeButton);
