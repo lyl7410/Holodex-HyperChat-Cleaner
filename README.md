@@ -2,19 +2,13 @@
 
 面向 **YouTube、Holodex Watch / Multiview** 的轻量级用户脚本，包含聊天清理、频道资料修复和手机端一键添加视频。
 
-> 当前为社区自用优化版，未获 YouTube、Holodex 或 LiveTL 官方支持。脚本针对网页 DOM，网站升级后可能需要调整。
-
 ## 安装
-
-先安装浏览器支持的脚本管理器，再按需打开下列脚本的 Raw 页面安装。桌面可使用 Tampermonkey / Violentmonkey；手机版 Quick Add 的当前反馈环境为 **安卓狐猴浏览器 + 脚本猫**。
 
 1. [HyperChat Cleaner](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/hyperchat-cleaner.user.js)
 2. [Channel Name Fix](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/channel-name-fix.user.js)
 3. [Holodex Mobile Quick Add](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-mobile-quick-add.user.js)
 
 三个脚本可独立安装。Quick Add 不要求安装另外两个脚本；要使用聊天清理或频道名修复时再分别安装。更新时覆盖同名脚本并刷新相关页面，不要同时启用多份旧版。
-
-**请禁用旧版 Cleaner v1.x / v2.x 和旧版 Channel Name Fix**，避免重复注入 CSS 或互相覆盖。
 
 ## 功能
 
