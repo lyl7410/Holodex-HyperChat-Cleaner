@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Mobile Quick Add（精简手机版）
 // @namespace    holodex-mobile-quick-add
-// @version      0.2.1
+// @version      0.2.2
 // @description  当前 YouTube 视频一键跳转 Holodex 并自动添加；不包含聊天、频道名修复或收藏功能。
 // @match        https://youtube.com/*
 // @match        https://www.youtube.com/*
@@ -18,6 +18,7 @@
 // @grant        GM_deleteValue
 // @grant        GM_listValues
 // @grant        GM_addValueChangeListener
+// @grant        GM_registerMenuCommand
 // ==/UserScript==
 
 (() => {
@@ -44,6 +45,7 @@
   let receiverStarted = false;
   let failedRequest = null;
   let hideTimer;
+  let noticeTimer, buttonTimer;
   const IS_HD = /^(www\.)?holodex\.net$/.test(location.hostname);
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   let button, notice, busy = false;
@@ -67,12 +69,20 @@
     button = document.createElement('button');
     button.id = 'hma-quick-add-button';
     button.type = 'button';
-    button.style.cssText = 'position:fixed;right:12px;bottom:calc(88px + env(safe-area-inset-bottom,0px));z-index:2147483000;min-height:44px;max-width:calc(100vw - 24px);padding:10px 16px;border:1px solid #ffffff55;border-radius:24px;background:#234b83;color:#fff;font:600 14px/1.4 system-ui,sans-serif;box-shadow:0 3px 12px #0005;cursor:pointer;touch-action:manipulation';
+    button.style.cssText = 'position:fixed;right:8px;bottom:calc(80px + env(safe-area-inset-bottom,0px));z-index:2147483000;min-height:44px;max-width:calc(100vw - 16px);padding:8px 10px;border:1px solid #ffffff44;border-radius:22px;background:#234b83;color:#fff;opacity:.7;font:600 13px/1.4 system-ui,sans-serif;box-shadow:0 2px 6px #0003;cursor:pointer;touch-action:manipulation';
     document.body.appendChild(button);
+    revealButton();
     return button;
   }
 
-  function showNotice(text) {
+  function revealButton() {
+    if (!button?.isConnected) return;
+    button.style.visibility = 'visible';
+    clearTimeout(buttonTimer);
+    buttonTimer = setTimeout(() => { if (button?.isConnected) button.style.visibility = 'hidden'; }, 4500);
+  }
+
+  function showNotice(text, duration = 6000) {
     if (!notice?.isConnected) {
       notice = document.createElement('div');
       notice.id = 'hma-quick-add-notice';
@@ -81,6 +91,8 @@
       document.body.appendChild(notice);
     }
     notice.textContent = text;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => notice?.remove(), duration);
   }
 
   async function openHolodex(forceNew = false) {
@@ -203,9 +215,9 @@
       const content = state.layoutContent[cell.i];
       return content?.type === 'video' && content.video?.id === id;
     });
-    if (contains()) return 'already';
+    if (contains()) { autoArrange(store); return 'already'; }
     // Check known mutations before making any changes (Vuex may only log missing ones).
-    for (const name of ['addLayoutItem', 'setLayoutContentById']) {
+    for (const name of ['addLayoutItem', 'setLayoutContentById', 'setLayout']) {
       if (!store._mutations?.[`multiview/${name}`]?.length) {
         throw new Error('Holodex 添加接口已变化，请更新脚本');
       }
@@ -225,6 +237,7 @@
         content: { id, type: 'video', video: { id, channel: { id, name: id } } }
       }));
       if (!contains()) throw new Error('未能确认视频已写入布局');
+      autoArrange(store);
     } catch (error) {
       if (createdId !== undefined && !state.layoutContent[createdId] &&
           store._mutations?.['multiview/removeLayoutItem']?.length) {
@@ -242,6 +255,31 @@
       } catch (error) { console.info('[HMA] 原生元数据暂不可用', error); }
     }
     return 'added';
+  }
+
+  function autoArrange(store) {
+    const state = store.state.multiview;
+    if (!store._mutations?.['multiview/setLayout']?.length) throw new Error('自动布局接口不可用');
+    const occupied = state.layout.filter(cell => !!state.layoutContent[cell.i]);
+    if (!occupied.length) return;
+    // Holodex uses a 24-by-24 coordinate space. Fit every occupied cell into it.
+    // Keep each existing reactive object and its key, so players/chats stay mounted.
+    const wide = (page.innerWidth || 390) > (page.innerHeight || 844);
+    const columns = wide ? Math.ceil(Math.sqrt(occupied.length)) : (occupied.length <= 3 ? 1 : 2);
+    const rows = Math.ceil(occupied.length / columns);
+    occupied.forEach((cell, index) => {
+      const row = Math.floor(index / columns);
+      const rowCount = Math.min(columns, occupied.length - row * columns);
+      const col = index % columns;
+      const x = Math.floor(24 * col / rowCount);
+      const y = Math.floor(24 * row / rows);
+      cell.x = x;
+      cell.y = y;
+      cell.w = Math.floor(24 * (col + 1) / rowCount) - x;
+      cell.h = Math.floor(24 * (row + 1) / rows) - y;
+    });
+    // Drop only unused placeholders; preserve all video/chat/custom content.
+    store.commit('multiview/setLayout', pageValue(occupied));
   }
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -285,7 +323,7 @@
     });
     const script = document.createElement('script');
     script.textContent = '(()=>{const page=window;const pageValue=x=>x;' +
-      findContext.toString() + ';' + appendVideo.toString() + ';(' +
+      findContext.toString() + ';' + autoArrange.toString() + ';' + appendVideo.toString() + ';(' +
       pageAgent.toString() + ')(' + JSON.stringify(rpcChannel) + ');})();';
     // Reuse a page nonce when available, without changing the page CSP.
     const nonce = document.querySelector('script[nonce]')?.nonce;
@@ -375,7 +413,7 @@
             await write(PREFIX + request.requestId, { ...request, status: 'pending' });
             drain();
           };
-          showNotice('Quick Add 0.2.1：' + request.videoId + ' 添加失败：' + error.message);
+          showNotice('Quick Add 0.2.2：' + request.videoId + ' 添加失败：' + error.message, 15000);
           break;
         }
       }
@@ -385,13 +423,15 @@
   }
 
   function showReceiverButton(active) {
+    // A registered receiver needs no permanent overlay during playback.
+    if (active) { button?.remove(); return; }
     const btn = makeButton();
     btn.disabled = false;
     btn.textContent = active ? '接收中 · 检查队列' : '使用此分屏接收';
     btn.onclick = async () => {
       try {
         if (!active) await claimReceiver();
-        showNotice('Quick Add 0.2.1：正在检查待添加视频…');
+        showNotice('Quick Add 0.2.2：正在检查待添加视频…');
         await drain();
       } catch (error) { showNotice('接收启动失败：' + error.message); }
     };
@@ -423,10 +463,10 @@
     const target = await read(TARGET_KEY, null);
     if (targetSession && (!target || target.id === targetSession)) {
       await claimReceiver();
-      showNotice('Quick Add 0.2.1：此页正在接收，切回即可处理队列。');
+      showNotice('Quick Add 0.2.2：此页正在接收，切回即可处理队列。');
     } else {
       showReceiverButton(false);
-      showNotice('Quick Add 0.2.1：点击“使用此分屏接收”，把已排队的视频加入当前布局。');
+      showNotice('Quick Add 0.2.2：点击“使用此分屏接收”，把已排队的视频加入当前布局。');
     }
     try { GM_addValueChangeListener(TARGET_KEY, () => drain()); } catch {}
     try {
@@ -458,21 +498,36 @@
     if (!busy && sourcePending && sourcePending.videoId !== id) sourcePending = null;
     const btn = makeButton();
     if (busy || sourcePending) return;
-    btn.textContent = '＋ 加入 Holodex';
+    btn.textContent = '＋H';
     btn.setAttribute('aria-label', '将当前视频加入 Holodex 多视图');
     btn.onclick = () => startSend(false);
   }
 
   if (IS_HD) {
+    try {
+      GM_registerMenuCommand('使用当前分屏接收 / 检查队列', async () => {
+        try {
+          await claimReceiver();
+          if (failedRequest) {
+            await write(PREFIX + failedRequest.requestId, { ...failedRequest, status: 'pending' });
+            failedRequest = null;
+          }
+          await drain();
+        }
+        catch (error) { showNotice('接收失败：' + error.message, 15000); }
+      });
+    } catch {}
     const initialize = () => initReceiver().catch(error => {
       receiverStarted = false;
       showReceiverButton(false);
-      showNotice('Quick Add 0.2.1 初始化失败：' + error.message);
+      showNotice('Quick Add 0.2.2 初始化失败：' + error.message, 15000);
     });
     initialize();
     setInterval(initialize, 1500);
   } else {
+    try { GM_registerMenuCommand('将当前视频加入 Holodex', () => startSend(false)); } catch {}
     refreshYouTubeButton();
+    document.addEventListener('pointerdown', () => revealButton(), { passive: true });
     document.addEventListener('yt-navigate-finish', refreshYouTubeButton);
     window.addEventListener('popstate', refreshYouTubeButton);
     setInterval(() => { if (!document.hidden) refreshYouTubeButton(); }, 1000);
