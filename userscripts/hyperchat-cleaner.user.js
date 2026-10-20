@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube / Holodex HyperChat Cleaner
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      2.4.0
+// @version      2.4.1
 // @description  Pure chat, font size, paid messages, compact Holodex multiview, native compose toggle.
 // @match        https://www.youtube.com/*
 // @match        https://youtube.com/*
@@ -82,15 +82,89 @@ function changePaid(v,save=true){paid=!!v;sync();if(save)set(KEY.paid,paid);broa
 if(typeof GM_addValueChangeListener==='function'){GM_addValueChangeListener(KEY.font,(_,a,b)=>{if(b!==font)changeFont(b,false)});GM_addValueChangeListener(KEY.paid,(_,a,b)=>{if(b!==paid)changePaid(b,false)})}
 window.addEventListener('message',e=>{if(e.source!==parent||!originAllowed(e.origin)||e.data?.tag!==tag)return;if(e.data.type==='font')changeFont(e.data.value,false);if(e.data.type==='paid')changePaid(e.data.value,false)});
 function videoId(u=location.href){try{let x=new URL(u,location.href);let id=x.searchParams.get('v')||x.pathname.match(/^\/(?:live|embed)\/([\w-]{11})/)?.[1];return /^[\w-]{11}$/.test(id||'')?id:null}catch{return null}}
-async function native(doc,open){if(!doc?.documentElement)return false;if(!open){doc.documentElement.classList.remove('hcc-write');return true}const panel=doc.querySelector('yt-live-chat-renderer #input-panel');const editor=panel?.querySelector('yt-live-chat-text-input-field-renderer [contenteditable="true"],[contenteditable="true"]');if(!editor){doc.documentElement.classList.remove('hcc-write');return false}doc.documentElement.classList.add('hcc-write');await new Promise(r=>setTimeout(r,100));if(!editor.getClientRects().length){doc.documentElement.classList.remove('hcc-write');return false}editor.focus();return true}
-if(CHAT)window.addEventListener('message',async e=>{if(!originAllowed(e.origin)||e.data?.tag!==tag||e.data.type!=='compose')return;const ok=(!videoId()||videoId()===e.data.videoId)&&await native(document,e.data.open);e.source?.postMessage({tag,type:'result',id:e.data.id,ok},e.origin)});
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const result=(ok,reason='')=>({ok,reason});
+async function native(doc,open){
+    const root=doc?.documentElement;
+    if(!root)return result(false,'loading');
+    if(!open){root.classList.remove('hcc-write');return result(true)}
+    const panel=doc.querySelector('yt-live-chat-renderer #input-panel');
+    const editor=panel?.querySelector('yt-live-chat-text-input-field-renderer [contenteditable]:not([contenteditable="false" i])')||panel?.querySelector('[contenteditable]:not([contenteditable="false" i])');
+    if(!editor){root.classList.remove('hcc-write');return result(false,'no-editor')}
+    root.classList.add('hcc-write');
+    await pause(100);
+    const visibility=doc.defaultView.getComputedStyle(editor).visibility;
+    if(!editor.isConnected||!editor.getClientRects().length||visibility==='hidden'||visibility==='collapse'){
+        root.classList.remove('hcc-write');return result(false,'hidden-editor');
+    }
+    try{editor.focus()}catch{root.classList.remove('hcc-write');return result(false,'focus')}
+    return result(true);
+}
+if(CHAT)window.addEventListener('message',async e=>{
+    if(e.source!==parent||!originAllowed(e.origin)||e.data?.tag!==tag||e.data.type!=='compose')return;
+    const current=videoId();
+    const response=current&&current!==e.data.videoId?result(false,'video-mismatch'):await native(document,!!e.data.open);
+    e.source?.postMessage({tag,type:'result',id:e.data.id,...response},e.origin);
+});
 let seq=0;const pending=new Map();
-if(TOP)window.addEventListener('message',e=>{if(!originAllowed(e.origin)||e.data?.tag!==tag||e.data.type!=='result')return;let p=pending.get(e.data.id);if(!p||p.frame.contentWindow!==e.source)return;clearTimeout(p.timer);pending.delete(e.data.id);p.resolve(!!e.data.ok)});
-async function control(frame,id,open){if(!frame)return false;try{if(frame.contentDocument?.documentElement)return await native(frame.contentDocument,open)}catch{}let origin;try{origin=new URL(frame.src,location.href).origin;if(!originAllowed(origin))return false}catch{return false}return new Promise(resolve=>{const n=++seq;const timer=setTimeout(()=>{pending.delete(n);resolve(false)},1800);pending.set(n,{frame,timer,resolve});frame.contentWindow?.postMessage({tag,type:'compose',id:n,videoId:id,open},origin)})}
+if(TOP)window.addEventListener('message',e=>{
+    if(!originAllowed(e.origin)||e.data?.tag!==tag||e.data.type!=='result')return;
+    const p=pending.get(e.data.id);
+    if(!p||p.frame.contentWindow!==e.source||p.origin!==e.origin)return;
+    clearTimeout(p.timer);pending.delete(e.data.id);p.resolve(result(!!e.data.ok,e.data.reason||'no-editor'));
+});
+async function control(frame,id,open){
+    if(!frame?.contentWindow)return result(false,'loading');
+    let origin;
+    try{origin=new URL(frame.src,location.href).origin;if(!originAllowed(origin))return result(false,'unsupported')}catch{return result(false,'unsupported')}
+    try{
+        const doc=frame.contentDocument;
+        if(doc?.documentElement&&/^https?:/.test(doc.URL)){
+            const current=videoId(doc.URL);
+            if(current&&current!==id)return result(false,'video-mismatch');
+            return await native(doc,open);
+        }
+    }catch{}
+    return new Promise(resolve=>{
+        const n=++seq;
+        const finish=response=>{clearTimeout(timer);pending.delete(n);resolve(response)};
+        const timer=setTimeout(()=>finish(result(false,'timeout')),900);
+        pending.set(n,{frame,origin,timer,resolve});
+        try{frame.contentWindow.postMessage({tag,type:'compose',id:n,videoId:id,open},origin)}catch{finish(result(false,'loading'))}
+    });
+}
+function hdContext(cell){
+    const frame=cell?.querySelector('.embedded-chat iframe')||cell?.querySelector('iframe[src*="/live_chat"]');
+    let id=frame&&videoId(frame.src);
+    if(!id){
+        let vm=cell?.__vue__;
+        for(let i=0;vm&&i<20;i++,vm=vm.$parent){
+            if(vm.$options?.name==='ChatCell'){id=vm.currentVideo?.id;break}
+        }
+    }
+    return {frame,id:/^[\w-]{11}$/.test(id||'')?id:null};
+}
+const composeErrors={loading:'聊天 iframe 尚未加载完成，请稍后重试。',timeout:'聊天 iframe 未响应，请等待加载完成，并确认 Cleaner 已在 YouTube iframe 中启用。',unsupported:'当前聊天 iframe 地址不受支持，请切换到 YouTube 原生聊天。','missing-id':'尚未取得当前视频 ID，请等待频道加载完成。','video-mismatch':'聊天正在切换视频，请等待切换完成后重试。','no-editor':'当前聊天没有可用的原生文字输入框。请确认已登录、直播聊天权限，以及是否为聊天回放。','hidden-editor':'原生文字输入框存在但不可见，请检查聊天状态或其他脚本的隐藏规则。',focus:'原生文字输入框无法获得焦点，请刷新聊天后重试。'};
+async function toggleCompose(btn,context){
+    if(btn.dataset.busy==='1')return;
+    btn.dataset.busy='1';btn.disabled=true;
+    const open=!btn.classList.contains('hcc-active');
+    try{
+        let response=result(false,'loading');
+        for(let attempt=0;attempt<3;attempt++){
+            const {frame,id}=context();
+            response=!frame?result(false,'loading'):!id?result(false,'missing-id'):await control(frame,id,open);
+            if(response.ok||response.reason==='unsupported')break;
+            if(attempt<2)await pause(300);
+        }
+        if(response.ok){btn.classList.toggle('hcc-active',open);btn.textContent=open?'✓':'✎'}
+        else alert(composeErrors[response.reason]||composeErrors['no-editor']);
+    }finally{delete btn.dataset.busy;btn.disabled=false}
+}
 function watchHost(){return document.querySelector('ytd-live-chat-frame')||document.querySelector('ytd-watch-flexy #chat')}
-async function clickYT(btn){let h=watchHost(),f=h?.querySelector('iframe#chatframe,iframe[src*="/live_chat"],iframe'),id=videoId();if(!f||!id)return;let open=!btn.classList.contains('hcc-active'),ok=await control(f,id,open);if(ok){btn.classList.toggle('hcc-active',open);btn.textContent=open?'✓':'✎'}else alert('当前嵌入聊天未生成可用的原生文字输入框。请确认登录状态及直播聊天权限。')}
+async function clickYT(btn){await toggleCompose(btn,()=>({frame:watchHost()?.querySelector('iframe#chatframe,iframe[src*="/live_chat"],iframe'),id:videoId()}))}
 function attachYT(){if(!YT||!TOP)return;let eligible=(location.pathname==='/watch'||/^\/live\/[\w-]{11}/.test(location.pathname))&&compose;let h=eligible?watchHost():null;if(!h){button?.remove();button=null;host=null;return}if(button?.isConnected&&host===h)return;button?.remove();h.classList.add('hcc-chat-anchor');button=document.createElement('button');button.className='hcc-compose-trigger';button.type='button';button.textContent='✎';button.title='临时发言';button.onclick=e=>{e.preventDefault();e.stopPropagation();clickYT(button)};h.append(button);host=h}
-function attachHD(){if(!HD||!compose)return;document.querySelectorAll('.multiview .tabbed-chat-select').forEach(sel=>{let header=sel.closest('.d-flex.flex-row');if(!header||header.querySelector('.hcc-hd-compose'))return;let b=document.createElement('button');b.className='hcc-hd-compose';b.textContent='✎';b.title='临时发言';b.onclick=async e=>{e.stopPropagation();let cell=b.closest('.cell-content'),f=cell?.querySelector('iframe[src*="/live_chat"]'),id=f&&videoId(f.src);if(!id)return;let open=!b.classList.contains('hcc-active'),ok=await control(f,id,open);if(ok){b.classList.toggle('hcc-active',open);b.textContent=open?'✓':'✎'}else alert('当前嵌入聊天没有可用的原生文字输入框。')};header.append(b)})}
+function attachHD(){if(!HD||!compose)return;document.querySelectorAll('.multiview .tabbed-chat-select').forEach(sel=>{let header=sel.closest('.d-flex.flex-row');if(!header||header.querySelector('.hcc-hd-compose'))return;let b=document.createElement('button');b.className='hcc-hd-compose';b.textContent='✎';b.title='临时发言';b.onclick=async e=>{e.preventDefault();e.stopPropagation();await toggleCompose(b,()=>hdContext(b.closest('.cell-content')))};header.append(b)})}
 function attachAA(){if(!HD||!TOP||!document.body)return;let allowed=/^\/(?:watch|multiview)(?:\/|$)/.test(location.pathname);if(!aa||!allowed){aaBox?.remove();aaBox=null;return}if(aaBox?.isConnected)return;aaBox=document.createElement('div');aaBox.id='hcc-aa';aaBox.innerHTML='<button class="ball">Aa</button><div class="panel" hidden><strong>聊天字体</strong><div class="line"><button class="minus">−</button><input type="range" min="12" max="40"><button class="plus">+</button><span class="val"></span></div><label><input type="checkbox"> 显示付费留言（SC / 贴纸）</label></div>';document.body.append(aaBox);let p=aaBox.querySelector('.panel'),range=aaBox.querySelector('input[type=range]');aaBox.querySelector('.ball').onclick=()=>p.hidden=!p.hidden;aaBox.querySelector('.minus').onclick=()=>changeFont(font-1);aaBox.querySelector('.plus').onclick=()=>changeFont(font+1);range.value=font;range.oninput=()=>changeFont(range.value,false);range.onchange=()=>changeFont(range.value);aaBox.querySelector('.val').textContent=font+'px';let check=aaBox.querySelector('input[type=checkbox]');check.checked=paid;check.onchange=()=>changePaid(check.checked)}
 if(TOP){GM_registerMenuCommand('A+ 放大聊天字体',()=>changeFont(font+2));GM_registerMenuCommand('A− 缩小聊天字体',()=>changeFont(font-2));GM_registerMenuCommand('显示/隐藏付费留言',()=>changePaid(!paid));GM_registerMenuCommand('临时发言入口开关',()=>{set(KEY.compose,!compose);location.reload()});if(HD)GM_registerMenuCommand('Aa 按钮开关',()=>{set(KEY.aa,!aa);location.reload()})}
 sync();
