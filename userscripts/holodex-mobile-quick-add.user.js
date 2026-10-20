@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Mobile Quick Add（精简手机版）
 // @namespace    holodex-mobile-quick-add
-// @version      0.1.1
+// @version      0.2.0
 // @description  当前 YouTube 视频一键跳转 Holodex 并自动添加；不包含聊天、频道名修复或收藏功能。
 // @match        https://youtube.com/*
 // @match        https://www.youtube.com/*
@@ -11,8 +11,12 @@
 // @match        https://www.holodex.net/*
 // @run-at       document-end
 // @noframes
-// @grant        none
-// @inject-into  page
+// @grant        unsafeWindow
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_listValues
+// @grant        GM_addValueChangeListener
 // ==/UserScript==
 
 (() => {
@@ -21,9 +25,17 @@
   const VIDEO_RE = /^[A-Za-z0-9_-]{11}$/;
   const ADD_KEY = 'hma_add';
   const REQUEST_KEY = 'hma_request';
+  const TARGET_KEY = 'hma_v2_target';
+  const PREFIX = 'hma_v2_request_';
+  const TTL = 12 * 60 * 60 * 1000;
+  const uid = () => crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Array.from(crypto.getRandomValues(new Uint32Array(3))).join('-');
+  const read = (key, fallback) => Promise.resolve(GM_getValue(key, fallback));
+  const write = (key, value) => Promise.resolve(GM_setValue(key, value));
+  let sourcePending = null, targetSession = null, draining = false;
+  let hideTimer;
   const IS_HD = /^(www\.)?holodex\.net$/.test(location.hostname);
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  let button, notice, busy = false, completed = false;
+  let button, notice, busy = false;
 
   function videoIdFromURL(input) {
     try {
@@ -60,26 +72,72 @@
     notice.textContent = text;
   }
 
-  function openHolodex() {
-    // Read again at click time: YouTube navigation may have changed the video.
+  async function openHolodex(forceNew = false) {
+    // Each click reads this tab's current URL, never the previous receive URL.
     const id = videoIdFromURL(location.href);
-    if (!id) return showNotice('当前页面没有有效的视频 ID，请打开具体视频。');
-    const target = new URL('https://holodex.net/multiview/');
-    target.searchParams.set(ADD_KEY, id);
-    const random = new Uint32Array(2);
-    crypto.getRandomValues(random);
-    target.searchParams.set(REQUEST_KEY, `${Date.now()}-${random[0]}-${random[1]}`);
+    if (!id) return showNotice('当前页面没有有效的视频 ID。');
+    if (busy) return;
+    busy = true;
+    const requestId = uid();
+    let blank = sourceBlank;
+    sourceBlank = null;
+    let createdNew = false;
     try {
-      // No GM grants: run in the website realm, including ScriptCat on Android.
-      // Open synchronously within the click gesture to avoid popup blocking.
-      const opened = window.open(target.href, '_blank');
-      if (!opened) throw new Error('浏览器阻止新标签页');
-      try { opened.opener = null; } catch { /* Cross-origin access may be restricted. */ }
-      showNotice('已打开 Holodex，接收页将自动添加。若未切换，请打开新标签页。');
-    } catch {
-      // A direct user action may safely navigate the current tab as a fallback.
-      location.assign(target.href);
-    }
+      let target = await read(TARGET_KEY, null);
+      if (forceNew || !target || Date.now() - target.updated > TTL) {
+        // The handler pre-opens a blank tab synchronously when a new receiver is needed.
+        createdNew = true;
+        target = { id: uid(), updated: Date.now() };
+        await write(TARGET_KEY, target);
+      }
+      const request = { requestId, target: target.id, videoId: id, created: Date.now(), status: 'pending' };
+      await write(PREFIX + requestId, request);
+      sourcePending = { requestId, videoId: id };
+      makeButton().textContent = '已排队：' + id;
+      showNotice('已发送视频 ' + id + '。请切回首次打开的 Holodex 分屏；后台休眠时会在切回后添加。');
+      if (createdNew) {
+        const url = new URL('https://holodex.net/multiview/');
+        url.searchParams.set('hma_session', target.id);
+        if (blank) { blank.location.href = url.href; blank = null; }
+        else location.assign(url.href);
+      } else {
+        if (blank) { try { blank.close(); } catch {} blank = null; }
+        if (sourceReceiver && !sourceReceiver.closed) {
+          try { sourceReceiver.focus(); } catch { /* Android may require switching tabs manually. */ }
+        }
+      }
+      const until = Date.now() + 45000;
+      while (Date.now() < until) {
+        const result = await read(PREFIX + requestId, null);
+        if (result?.status === 'done') {
+          showNotice('视频 ' + id + (result.result === 'already' ? ' 已在目标布局中，没有重复添加。' : ' 已加入同一个 Holodex 分屏。'));
+          sourcePending = null;
+          return;
+        }
+        if (result?.status === 'error') throw new Error(result.error);
+        await delay(700);
+      }
+      showNotice('视频 ' + id + ' 仍在等待，请切回原 Holodex 页。若接收页已关闭，可点击“新建接收页”。');
+      makeButton().textContent = '新建接收页';
+      makeButton().onclick = () => startSend(true);
+    } catch (error) {
+      if (blank) { try { blank.close(); } catch {} }
+      showNotice('发送 ' + id + ' 失败：' + error.message);
+      sourcePending = null;
+    } finally { busy = false; }
+  }
+
+  let sourceBlank = null, sourceReceiver = null;
+  let knownTarget = null;
+  read(TARGET_KEY, null).then(value => { knownTarget = value; });
+  try { GM_addValueChangeListener(TARGET_KEY, (_key, _old, value) => { knownTarget = value; }); } catch {}
+
+  function startSend(forceNew = false) {
+    if (busy) return;
+    const needsNew = forceNew || !knownTarget || Date.now() - knownTarget.updated > TTL;
+    sourceBlank = needsNew ? window.open('about:blank', '_blank') : null;
+    if (sourceBlank) sourceReceiver = sourceBlank;
+    openHolodex(forceNew);
   }
 
   function findContext() {
@@ -174,105 +232,174 @@
     return 'added';
   }
 
-  async function cleanRequest(vm) {
-    const url = new URL(location.href);
-    url.searchParams.delete(ADD_KEY);
-    url.searchParams.delete(REQUEST_KEY);
-    // Keep Vue Router and address bar in sync, preserving other query parameters.
-    if (vm.$router && vm.$route) {
-      const query = { ...vm.$route.query };
-      delete query[ADD_KEY];
-      delete query[REQUEST_KEY];
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const rpcChannel = 'hma-page-' + uid();
+  let bridgeInstalled = false;
+
+  function pageAgent(channel) {
+    // This function and the layout helpers run inside the website realm.
+    document.addEventListener(channel + '-request', async event => {
+      let data;
+      try { data = JSON.parse(event.detail); } catch { return; }
+      if (!/^[A-Za-z0-9_-]{11}$/.test(data.videoId || '')) return;
+      const reply = result => document.dispatchEvent(new CustomEvent(channel + '-reply', {
+        detail: JSON.stringify({ requestId: data.requestId, ...result })
+      }));
       try {
-        await vm.$router.replace(pageValue({ path: vm.$route.path, query, hash: vm.$route.hash }));
-        return;
-      } catch (error) { console.info('[HMA] 路由参数清理失败', error); }
-    }
-    history.replaceState(history.state, '', url.href);
+        let context;
+        const end = Date.now() + 30000;
+        while (Date.now() < end) {
+          context = findContext();
+          if (context) break;
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+        if (!context) throw new Error('E_VUE：未找到可用分屏，请保持 Holodex 页面在前台');
+        await new Promise(resolve => setTimeout(resolve, 350));
+        if (!document.querySelector('.multiview') || context.vm._isDestroyed) throw new Error('分屏页面已切换');
+        reply({ result: appendVideo(context.store, data.videoId) });
+      } catch (error) { reply({ error: error.message }); }
+    });
+    document.dispatchEvent(new CustomEvent(channel + '-ready'));
   }
 
-  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-  async function receive() {
-    if (busy || completed) return;
-    const url = new URL(location.href);
-    const id = url.searchParams.get(ADD_KEY);
-    if (!/^\/multiview\/?$/.test(url.pathname) || !id) return;
-    const btn = makeButton();
-    btn.onclick = receive;
-    if (!VIDEO_RE.test(id)) {
-      btn.textContent = '无效的视频链接';
-      btn.disabled = true;
-      return showNotice('接收参数无效：需要 11 位 YouTube 视频 ID。');
+  async function installBridge() {
+    if (bridgeInstalled) return;
+    // GM storage stays in the userscript sandbox; only a small layout agent enters MAIN.
+    // String event payloads avoid cross-compartment object access on Firefox/ScriptCat.
+    const ready = new Promise(resolve => {
+      const handler = () => { bridgeInstalled = true; resolve(); };
+      document.addEventListener(rpcChannel + '-ready', handler, { once: true });
+      setTimeout(() => { document.removeEventListener(rpcChannel + '-ready', handler); resolve(); }, 1200);
+    });
+    const script = document.createElement('script');
+    script.textContent = '(()=>{const page=window;const pageValue=x=>x;' +
+      findContext.toString() + ';' + appendVideo.toString() + ';(' +
+      pageAgent.toString() + ')(' + JSON.stringify(rpcChannel) + ');})();';
+    // Reuse a page nonce when available, without changing the page CSP.
+    const nonce = document.querySelector('script[nonce]')?.nonce;
+    if (nonce) script.nonce = nonce;
+    (document.head || document.documentElement).appendChild(script);
+    script.remove();
+    await ready;
+  }
+
+  async function addViaPage(request) {
+    await installBridge();
+    if (!bridgeInstalled) {
+      // Some managers expose a usable unsafeWindow even when inline injection is blocked.
+      const context = findContext();
+      if (context) return appendVideo(context.store, request.videoId);
+      throw new Error('E_BRIDGE：页面桥接被阻止，请确认脚本猫允许页面注入');
     }
-    busy = true;
-    btn.disabled = true;
-    btn.textContent = '正在添加…';
-    showNotice('正在等待 Holodex 多视图加载，请保持此页面在前台。');
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => finish(new Error('E_TIMEOUT：接收超时，请切回 Holodex 后重试')), 35000);
+      function finish(error, value) {
+        clearTimeout(timer);
+        document.removeEventListener(rpcChannel + '-reply', handler);
+        error ? reject(error) : resolve(value);
+      }
+      function handler(event) {
+        let result;
+        try { result = JSON.parse(event.detail); } catch { return; }
+        if (result.requestId !== request.requestId) return;
+        finish(result.error ? new Error(result.error) : null, result.result);
+      }
+      document.addEventListener(rpcChannel + '-reply', handler);
+      document.dispatchEvent(new CustomEvent(rpcChannel + '-request', {
+        detail: JSON.stringify({ requestId: request.requestId, videoId: request.videoId })
+      }));
+    });
+  }
+
+  async function drain() {
+    if (draining || !targetSession || document.hidden) return;
+    draining = true;
     try {
-      let context;
-      const deadline = Date.now() + 30000;
-      while (Date.now() < deadline) {
-        if (location.pathname !== url.pathname || new URL(location.href).searchParams.get(ADD_KEY) !== id) {
-          throw new Error('页面已切换，请返回原接收链接重试');
+      const target = await read(TARGET_KEY, null);
+      if (target?.id !== targetSession) return;
+      const keys = await Promise.resolve(GM_listValues());
+      const pending = [];
+      for (const key of keys) {
+        if (!key.startsWith(PREFIX)) continue;
+        const request = await read(key, null);
+        if (!request) continue;
+        if (Date.now() - request.created > TTL) { await Promise.resolve(GM_deleteValue(key)); continue; }
+        if (request.target === targetSession && request.status === 'pending' && VIDEO_RE.test(request.videoId)) pending.push(request);
+      }
+      pending.sort((a, b) => a.created - b.created);
+      for (const request of pending) {
+        if ((await read(TARGET_KEY, null))?.id !== targetSession) break;
+        clearTimeout(hideTimer);
+        const btn = makeButton();
+        btn.textContent = '正在添加 ' + request.videoId;
+        btn.disabled = true;
+        showNotice('接收视频 ' + request.videoId + '，正在追加到此分屏…');
+        try {
+          const result = await addViaPage(request);
+          await write(PREFIX + request.requestId, { ...request, status: 'done', result });
+          btn.textContent = result === 'already' ? '此视频已存在' : '已加入多视图';
+          showNotice('视频 ' + request.videoId + (result === 'already' ? ' 已在此布局中，没有重复添加。' : ' 已加入此分屏。若未播放，请点击播放器。'));
+          hideTimer = setTimeout(() => { button?.remove(); notice?.remove(); }, 7000);
+        } catch (error) {
+          await write(PREFIX + request.requestId, { ...request, status: 'error', error: error.message });
+          btn.textContent = '添加失败，点此重试';
+          btn.disabled = false;
+          btn.onclick = async () => {
+            await write(PREFIX + request.requestId, { ...request, status: 'pending' });
+            drain();
+          };
+          showNotice('Quick Add 0.2.0：' + request.videoId + ' 添加失败：' + error.message);
+          break;
         }
-        context = findContext();
-        if (context) break;
-        await delay(300);
       }
-      if (!context) {
-        const hasLayout = !!page.document.querySelector('.multiview');
-        throw new Error(hasLayout
-          ? 'E_VUE：分屏已显示，但脚本无法访问 Vuex；请提供浏览器和脚本管理器名称'
-          : 'E_LOAD：30 秒内未出现分屏，请确认 Holodex 页面本身已正常加载');
-      }
-      // Let the mounted component finish its initial synchronous layout restoration.
-      await delay(400);
-      if (new URL(location.href).searchParams.get(ADD_KEY) !== id ||
-          context.vm._isMounted === false || context.vm._isDestroyed ||
-          !page.document.querySelector('.multiview')) throw new Error('接收页面已变化');
-      const result = appendVideo(context.store, id);
-      completed = true;
-      btn.textContent = result === 'already' ? '此视频已在布局中' : '已加入多视图';
-      showNotice(result === 'already' ? '此视频已存在，没有重复添加。' : '已加入多视图。若未自动播放，请点一下播放器；频道名称稍后由 Holodex 加载。');
-      await cleanRequest(context.vm);
-      setTimeout(() => { button?.remove(); notice?.remove(); }, 7000);
-    } catch (error) {
-      btn.textContent = '添加失败，点此重试';
-      showNotice(`Quick Add 0.1.1 未完成添加：${error.message}。可点击按钮重试；接收参数会保留。`);
-      console.warn('[HMA]', error);
-    } finally {
-      busy = false;
-      btn.disabled = completed;
-    }
+    } catch (error) { showNotice('队列读取失败：' + error.message); }
+    finally { draining = false; }
+  }
+
+  async function initReceiver() {
+    if (!/^\/multiview(?:\/|$)/.test(location.pathname)) return;
+    const url = new URL(location.href);
+    const supplied = url.searchParams.get('hma_session');
+    targetSession = supplied || sessionStorage.getItem('hma_v2_session');
+    if (!targetSession) return;
+    sessionStorage.setItem('hma_v2_session', targetSession);
+    // Remove old request parameters once. The queue, not Vue Router's cached query,
+    // is now the only source of video IDs; old 0.1.x IDs can never be replayed.
+    url.searchParams.delete(ADD_KEY);
+    url.searchParams.delete(REQUEST_KEY);
+    url.searchParams.delete('hma_session');
+    history.replaceState(history.state, '', url.href);
+    if ((await read(TARGET_KEY, null))?.id !== targetSession) return;
+    await write(TARGET_KEY, { id: targetSession, updated: Date.now() });
+    showNotice('Quick Add 0.2.0：此页为接收分屏。后续视频会排队加入这里，切回此页即可处理。');
+    try { GM_addValueChangeListener(TARGET_KEY, () => drain()); } catch {}
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) drain(); });
+    window.addEventListener('focus', drain);
+    setInterval(drain, 1200);
+    setInterval(async () => {
+      if ((await read(TARGET_KEY, null))?.id === targetSession) await write(TARGET_KEY, { id: targetSession, updated: Date.now() });
+    }, 15000);
+    drain();
   }
 
   function refreshYouTubeButton() {
     if (!document.body) return;
     const id = videoIdFromURL(location.href);
     if (!id) { button?.remove(); notice?.remove(); return; }
+    if (!busy && sourcePending && sourcePending.videoId !== id) sourcePending = null;
     const btn = makeButton();
+    if (busy || sourcePending) return;
     btn.textContent = '＋ 加入 Holodex';
     btn.setAttribute('aria-label', '将当前视频加入 Holodex 多视图');
-    btn.onclick = openHolodex;
+    btn.onclick = () => startSend(false);
   }
 
   if (IS_HD) {
-    receive();
-    // Also support navigation into the receive URL without a document reload.
-    let lastURL = location.href;
-    setInterval(() => {
-      if (location.href === lastURL) return;
-      lastURL = location.href;
-      if (!busy && new URL(location.href).searchParams.has(ADD_KEY)) {
-        completed = false;
-        receive();
-      }
-    }, 1000);
+    initReceiver();
   } else {
     refreshYouTubeButton();
     document.addEventListener('yt-navigate-finish', refreshYouTubeButton);
     window.addEventListener('popstate', refreshYouTubeButton);
-    // Mobile YouTube does not consistently emit the desktop navigation event.
     setInterval(() => { if (!document.hidden) refreshYouTubeButton(); }, 1000);
   }
 })();
