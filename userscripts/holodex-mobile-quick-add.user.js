@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Mobile Quick Add（精简手机版）
 // @namespace    holodex-mobile-quick-add
-// @version      0.1.0
+// @version      0.1.1
 // @description  当前 YouTube 视频一键跳转 Holodex 并自动添加；不包含聊天、频道名修复或收藏功能。
 // @match        https://youtube.com/*
 // @match        https://www.youtube.com/*
@@ -11,8 +11,8 @@
 // @match        https://www.holodex.net/*
 // @run-at       document-end
 // @noframes
-// @grant        unsafeWindow
-// @grant        GM_openInTab
+// @grant        none
+// @inject-into  page
 // ==/UserScript==
 
 (() => {
@@ -70,8 +70,11 @@
     crypto.getRandomValues(random);
     target.searchParams.set(REQUEST_KEY, `${Date.now()}-${random[0]}-${random[1]}`);
     try {
-      if (typeof GM_openInTab !== 'function') throw new Error('没有新标签页接口');
-      GM_openInTab(target.href, { active: true, insert: true, setParent: true });
+      // No GM grants: run in the website realm, including ScriptCat on Android.
+      // Open synchronously within the click gesture to avoid popup blocking.
+      const opened = window.open(target.href, '_blank');
+      if (!opened) throw new Error('浏览器阻止新标签页');
+      try { opened.opener = null; } catch { /* Cross-origin access may be restricted. */ }
       showNotice('已打开 Holodex，接收页将自动添加。若未切换，请打开新标签页。');
     } catch {
       // A direct user action may safely navigate the current tab as a fallback.
@@ -80,16 +83,40 @@
   }
 
   function findContext() {
-    const root = page.document.querySelector('.multiview');
-    if (!root) return null;
-    let vm = root.__vue__;
-    for (let i = 0; vm && i < 20; i++, vm = vm.$parent) {
-      if (vm.$options?.name === 'MultiView' && vm._isMounted && vm.$store) {
-        return { vm, store: vm.$store };
-      }
+    // A DOM root can belong to a child component or have no __vue__ expando.
+    // Do not require one exact component name on that one element.
+    const doc = page.document;
+    if (!doc.querySelector('.multiview')) return null;
+    const seeds = [doc.querySelector('#app'), doc.querySelector('.multiview')];
+    const queue = [];
+    const seen = new Set();
+    const unwrap = value => value?.wrappedJSObject || value;
+    function enqueueElement(element) {
+      const el = unwrap(element);
+      if (el?.__vue__) queue.push(unwrap(el.__vue__));
+      const app = el?.__vue_app__;
+      if (app?.config?.globalProperties?.$store) queue.push(app.config.globalProperties);
     }
-    // Do not mutate an unrelated app store before the Multiview has mounted.
-    return null;
+    seeds.forEach(enqueueElement);
+    // Also find Vue roots below #app when the wrapper itself has no instance.
+    for (const el of doc.querySelectorAll('#app *')) enqueueElement(el);
+    let fallback = null;
+    while (queue.length && seen.size < 5000) {
+      const vm = unwrap(queue.shift());
+      if (!vm || seen.has(vm)) continue;
+      seen.add(vm);
+      const store = unwrap(vm.$store);
+      const state = store?.state?.multiview;
+      if (!vm._isDestroyed && vm._isMounted !== false &&
+          Array.isArray(state?.layout) && state.layoutContent && typeof store.commit === 'function') {
+        const context = { vm, store };
+        if (vm.$options?.name === 'MultiView') return context;
+        fallback ||= context;
+      }
+      if (vm.$parent) queue.push(vm.$parent);
+      if (vm.$children) queue.push(...vm.$children);
+    }
+    return fallback;
   }
 
   function pageValue(value) {
@@ -192,11 +219,17 @@
         if (context) break;
         await delay(300);
       }
-      if (!context) throw new Error('等待多视图超时，或无法访问 Vue 页面环境');
+      if (!context) {
+        const hasLayout = !!page.document.querySelector('.multiview');
+        throw new Error(hasLayout
+          ? 'E_VUE：分屏已显示，但脚本无法访问 Vuex；请提供浏览器和脚本管理器名称'
+          : 'E_LOAD：30 秒内未出现分屏，请确认 Holodex 页面本身已正常加载');
+      }
       // Let the mounted component finish its initial synchronous layout restoration.
       await delay(400);
       if (new URL(location.href).searchParams.get(ADD_KEY) !== id ||
-          !context.vm._isMounted || context.vm._isDestroyed) throw new Error('接收页面已变化');
+          context.vm._isMounted === false || context.vm._isDestroyed ||
+          !page.document.querySelector('.multiview')) throw new Error('接收页面已变化');
       const result = appendVideo(context.store, id);
       completed = true;
       btn.textContent = result === 'already' ? '此视频已在布局中' : '已加入多视图';
@@ -205,7 +238,7 @@
       setTimeout(() => { button?.remove(); notice?.remove(); }, 7000);
     } catch (error) {
       btn.textContent = '添加失败，点此重试';
-      showNotice(`未完成添加：${error.message}。可点击按钮重试；接收参数会保留。`);
+      showNotice(`Quick Add 0.1.1 未完成添加：${error.message}。可点击按钮重试；接收参数会保留。`);
       console.warn('[HMA]', error);
     } finally {
       busy = false;
