@@ -1,15 +1,18 @@
 # Holodex HyperChat Cleaner
 
-面向 **YouTube、Holodex Watch / Multiview** 的轻量级 Tampermonkey/Violentmonkey 用户脚本。
+面向 **YouTube、Holodex Watch / Multiview** 的轻量级用户脚本，包含聊天清理、频道资料修复和手机端一键添加视频。
 
 > 当前为社区自用优化版，未获 YouTube、Holodex 或 LiveTL 官方支持。脚本针对网页 DOM，网站升级后可能需要调整。
 
 ## 安装
 
-先安装 Tampermonkey 或 Violentmonkey，再分别打开下列脚本的 Raw 页面安装：
+先安装浏览器支持的脚本管理器，再按需打开下列脚本的 Raw 页面安装。桌面可使用 Tampermonkey / Violentmonkey；手机版 Quick Add 的当前反馈环境为 **安卓狐猴浏览器 + 脚本猫**。
 
 1. [HyperChat Cleaner](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/hyperchat-cleaner.user.js)
 2. [Channel Name Fix](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/channel-name-fix.user.js)
+3. [Holodex Mobile Quick Add](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-mobile-quick-add.user.js)
+
+三个脚本可独立安装。Quick Add 不要求安装另外两个脚本；要使用聊天清理或频道名修复时再分别安装。更新时覆盖同名脚本并刷新相关页面，不要同时启用多份旧版。
 
 **请禁用旧版 Cleaner v1.x / v2.x 和旧版 Channel Name Fix**，避免重复注入 CSS 或互相覆盖。
 
@@ -36,6 +39,20 @@
 
 ## 使用说明
 
+### 手机版一键添加视频
+
+1. 在支持脚本管理器的浏览器中打开 YouTube 视频网页，点击短暂显示的 **＋H**，或使用脚本菜单「将当前视频加入 Holodex」。
+2. 首次添加会打开 Holodex 接收页；后续从其他 YouTube 标签页添加的视频也会排队进入这个分屏。
+3. 切回 Holodex 处理队列。已有页面可通过脚本菜单「使用当前分屏接收 / 检查队列」指定为接收页。
+
+**Quick Add v0.2.3** 优先使用 Holodex 中已保存的默认自动布局，通过原生布局合并方法调整视频与聊天区域。新增视频会尝试自动播放；切回时尝试恢复此前正在播放的视频。手机限制有声自动播放时，新视频会尝试静音播放，必要时点一下页面或播放器。
+
+YouTube 的 ＋H 入口闲置约 4.5 秒后隐藏，触碰页面后短暂显示；Holodex 接收成功后不保留常驻按钮。普通状态提示约 6 秒后消失，脚本菜单始终可用。
+
+完整安装步骤、默认布局选择、接收页切换和排错见 [手机版 Quick Add 使用说明](docs/mobile-quick-add.md)。
+
+### 聊天清理和频道名称
+
 - 在 Holodex Multiview 中点击频道名称区域，仍可展开原来的频道选择列表。
 - ✎ 发言功能取决于当前 YouTube 聊天 iframe 是否实际提供文字输入组件、登录状态及直播权限。部分嵌入环境无法恢复输入区。
 - 若出现只剩表情、爱心而没有文字输入的情况，说明 YouTube 未提供可用编辑器；此脚本不会模拟发言。
@@ -49,6 +66,7 @@
 - **第一次获取头像**仍依赖网络，不能保证不显示默认头像；关闭/重开面板通常不需要再次取回频道资料，但浏览器是否联网重验图片由其缓存策略决定。
 - 部分受限视频或频道，以及无法从 YouTube 网页取得真实头像的情形，仍可能回退为默认图标。
 - 该版本未在所有桌面/安卓浏览器组合上完成回归测试；若更新后仍有默认头像，可在油猴菜单中选择「重新获取当前视频资料」并刷新页面。
+- Quick Add 运行于浏览器网页，不能直接接收 YouTube App 的 Android 分享，也不能保证后台页面立即处理或自动有声播放。YouTube 和 Holodex 需使用同一浏览器、同一脚本管理器中的同一份脚本；普通模式和隐私模式不应混用。
 
 ## 目录
 
@@ -56,10 +74,15 @@
 userscripts/
   hyperchat-cleaner.user.js
   channel-name-fix.user.js
+  holodex-mobile-quick-add.user.js
+docs/
+  mobile-quick-add.md
 README.md
 ```
 
 ## 版本记录
+
+- **2026-10-20 — Mobile Quick Add v0.2.3**：手机端当前视频入口、跨标签页共享添加队列、单个 Holodex 接收页、重复视频检查；优先采用已保存的默认布局，调用 Holodex 原生方法合并；新增/切回时尝试播放，新增视频支持静音播放回退；浮动入口和状态提示按需隐藏。安卓狐猴 + 脚本猫的基本流程已获用户反馈可用，其他组合尚未完成实际回归。
 
 - **2026-10-18 — Channel Name Fix v2.6.2**：频道级头像持久索引、当前标签页图片预加载/复用、减少控制面板闪烁、监听弹窗显示变化；修复媒体控制面板标题选择器。
 - **2026-10-18 — Channel Name Fix v2.5.x**：补全 Holodex Vuex 视频资料、增加媒体控制与布局面板的头像修复。
