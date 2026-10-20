@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Mobile Quick Add（精简手机版）
 // @namespace    holodex-mobile-quick-add
-// @version      0.2.2
+// @version      0.2.3
 // @description  当前 YouTube 视频一键跳转 Holodex 并自动添加；不包含聊天、频道名修复或收藏功能。
 // @match        https://youtube.com/*
 // @match        https://www.youtube.com/*
@@ -192,7 +192,7 @@
       if (!vm._isDestroyed && vm._isMounted !== false &&
           Array.isArray(state?.layout) && state.layoutContent && typeof store.commit === 'function') {
         const context = { vm, store };
-        if (vm.$options?.name === 'MultiView') return context;
+        if (vm.$options?.name === 'MultiView' || typeof vm.setMultiview === 'function') return context;
         fallback ||= context;
       }
       if (vm.$parent) queue.push(vm.$parent);
@@ -245,41 +245,30 @@
       }
       throw error;
     }
-    // Native metadata loading is optional; playback insertion is already confirmed.
-    // No custom name patch, network scraping, getter proxy or mutation wrapper.
-    if (store._actions?.['multiview/fetchVideoData']?.length) {
-      try {
-        Promise.resolve(store.dispatch('multiview/fetchVideoData')).catch(error => {
-          console.info('[HMA] 已添加；原生元数据加载失败，可手动刷新名称。', error);
-        });
-      } catch (error) { console.info('[HMA] 原生元数据暂不可用', error); }
-    }
+    // Native setMultiview also requests metadata; no second fetch or custom patch.
     return 'added';
   }
 
   function autoArrange(store) {
     const state = store.state.multiview;
-    if (!store._mutations?.['multiview/setLayout']?.length) throw new Error('自动布局接口不可用');
-    const occupied = state.layout.filter(cell => !!state.layoutContent[cell.i]);
-    if (!occupied.length) return;
-    // Holodex uses a 24-by-24 coordinate space. Fit every occupied cell into it.
-    // Keep each existing reactive object and its key, so players/chats stay mounted.
-    const wide = (page.innerWidth || 390) > (page.innerHeight || 844);
-    const columns = wide ? Math.ceil(Math.sqrt(occupied.length)) : (occupied.length <= 3 ? 1 : 2);
-    const rows = Math.ceil(occupied.length / columns);
-    occupied.forEach((cell, index) => {
-      const row = Math.floor(index / columns);
-      const rowCount = Math.min(columns, occupied.length - row * columns);
-      const col = index % columns;
-      const x = Math.floor(24 * col / rowCount);
-      const y = Math.floor(24 * row / rows);
-      cell.x = x;
-      cell.y = y;
-      cell.w = Math.floor(24 * (col + 1) / rowCount) - x;
-      cell.h = Math.floor(24 * (row + 1) / rows) - y;
-    });
-    // Drop only unused placeholders; preserve all video/chat/custom content.
-    store.commit('multiview/setLayout', pageValue(occupied));
+    const count = state.layout.filter(cell => state.layoutContent[cell.i]?.type === 'video').length;
+    if (!count) return;
+    const context = findContext();
+    const vm = context?.store === store ? context.vm : null;
+    if (!vm || typeof vm.setMultiview !== 'function') throw new Error('E_LAYOUT：未找到 Holodex 原生布局接口');
+    // Prefer the user's configured automatic defaults, including on a phone.
+    // Mobile/desktop built-in presets are fallbacks, never our own equal grid.
+    let configured = [];
+    try { configured = vm.decodedAutoLayout || []; } catch {}
+    const groups = [configured, vm.decodedMobilePresets || [], vm.decodedDesktopPresets || []];
+    let preset;
+    for (const presets of groups) {
+      preset = presets.find(p => p.videoCellCount === count) || presets.find(p => p.videoCellCount >= count);
+      if (preset) break;
+    }
+    if (!preset) throw new Error('E_LAYOUT：默认布局没有足够的视频位置，请在 Holodex 设置中补充布局');
+    // Native merging reuses existing video keys and remaps chat tabs correctly.
+    vm.setMultiview(pageValue({ ...JSON.parse(JSON.stringify(preset)), mergeContent: true, hintAdd: false }));
   }
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -288,6 +277,101 @@
 
   function pageAgent(channel) {
     // This function and the layout helpers run inside the website realm.
+    const pendingPlay = new Map();
+    let visiblePlaying = new Set();
+    let returnPlaying = new Set();
+    let playTimer;
+
+    function videoCells() {
+      const result = [];
+      const seen = new Set();
+      const queue = [];
+      for (const element of page.document.querySelectorAll('#app, .multiview, .multiview .cell-content')) {
+        const el = element.wrappedJSObject || element;
+        if (el.__vue__) queue.push(el.__vue__.wrappedJSObject || el.__vue__);
+      }
+      while (queue.length && seen.size < 5000) {
+        const vm = queue.shift();
+        if (!vm || seen.has(vm)) continue;
+        seen.add(vm);
+        if (!vm._isDestroyed && vm.$options?.name === 'VideoCell') { result.push(vm); continue; }
+        if (vm.$children) queue.push(...vm.$children);
+      }
+      return result;
+    }
+
+    function samplePlaying() {
+      const ids = new Set();
+      for (const cell of videoCells()) {
+        try {
+          const state = cell.ytPlayer?.getPlayerState();
+          if (state === 1 || state === 3) ids.add(cell.cellContent?.video?.id || cell.video?.id);
+        } catch {}
+      }
+      return ids;
+    }
+
+    function attemptPlayback(gesture = false) {
+      if (document.hidden || !pendingPlay.size) return;
+      const cells = videoCells();
+      for (const [id, request] of pendingPlay) {
+        const cell = cells.find(vm => (vm.cellContent?.video?.id || vm.video?.id) === id);
+        try {
+          const player = cell?.ytPlayer;
+          const state = player?.getPlayerState();
+          if (state === 1 || state === 3) { pendingPlay.delete(id); continue; }
+          if (player?.playVideo) {
+            // First keep native audio settings. If blocked, only a newly added
+            // video may fall back to muted playback; resumed videos keep theirs.
+            if (!gesture && request.allowMute && Date.now() - request.started > 1800) {
+              cell.muted = true;
+              player.mute?.();
+            }
+            player.playVideo();
+          }
+        } catch (error) { console.info('[HMA] 播放器尚未就绪', error); }
+      }
+    }
+
+    function schedulePlayback(ids, allowMute) {
+      for (const id of ids) {
+        if (/^[A-Za-z0-9_-]{11}$/.test(id || '')) pendingPlay.set(id, { started: Date.now(), allowMute });
+      }
+      clearInterval(playTimer);
+      let tries = 0;
+      attemptPlayback();
+      playTimer = setInterval(() => {
+        if (document.hidden) return;
+        attemptPlayback();
+        if (!pendingPlay.size || ++tries >= 16) {
+          clearInterval(playTimer);
+          if (pendingPlay.size) document.dispatchEvent(new CustomEvent(channel + '-playback', {
+            detail: '浏览器尚未允许自动播放，点一下此页面即可再次尝试；也可直接点播放器播放。'
+          }));
+        }
+      }, 500);
+    }
+
+    // Retry within a genuine page gesture, without intercepting that gesture.
+    document.addEventListener('pointerdown', () => attemptPlayback(true), { passive: true });
+    document.addEventListener('touchend', () => attemptPlayback(true), { passive: true });
+    setInterval(() => {
+      if (!document.hidden) {
+        visiblePlaying = samplePlaying();
+        for (const id of visiblePlaying) pendingPlay.delete(id);
+      }
+    }, 800);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        returnPlaying = new Set([...visiblePlaying, ...samplePlaying()]);
+        clearInterval(playTimer);
+      } else {
+        schedulePlayback(returnPlaying, false);
+        returnPlaying.clear();
+      }
+    });
+    window.addEventListener('pagehide', () => { returnPlaying = samplePlaying(); });
+    window.addEventListener('pageshow', () => { if (returnPlaying.size) schedulePlayback(returnPlaying, false); });
     document.addEventListener(channel + '-request', async event => {
       let data;
       try { data = JSON.parse(event.detail); } catch { return; }
@@ -306,7 +390,11 @@
         if (!context) throw new Error('E_VUE：未找到可用分屏，请保持 Holodex 页面在前台');
         await new Promise(resolve => setTimeout(resolve, 350));
         if (!document.querySelector('.multiview') || context.vm._isDestroyed) throw new Error('分屏页面已切换');
-        reply({ result: appendVideo(context.store, data.videoId) });
+        const playingBefore = samplePlaying();
+        const result = appendVideo(context.store, data.videoId);
+        schedulePlayback(playingBefore, false);
+        schedulePlayback([data.videoId], true);
+        reply({ result });
       } catch (error) { reply({ error: error.message }); }
     });
     document.dispatchEvent(new CustomEvent(channel + '-ready'));
@@ -314,6 +402,7 @@
 
   async function installBridge() {
     if (bridgeInstalled) return;
+    document.addEventListener(rpcChannel + '-playback', event => showNotice(String(event.detail), 7000), { once: true });
     // GM storage stays in the userscript sandbox; only a small layout agent enters MAIN.
     // String event payloads avoid cross-compartment object access on Firefox/ScriptCat.
     const ready = new Promise(resolve => {
@@ -331,14 +420,18 @@
     (document.head || document.documentElement).appendChild(script);
     script.remove();
     await ready;
+    if (!bridgeInstalled && findContext()) {
+      // If inline scripts are blocked but unsafeWindow exposes Vue, keep the same
+      // playback and layout agent through that access path instead of dropping playback.
+      pageAgent(rpcChannel);
+      bridgeInstalled = true;
+    }
   }
 
   async function addViaPage(request) {
     await installBridge();
     if (!bridgeInstalled) {
       // Some managers expose a usable unsafeWindow even when inline injection is blocked.
-      const context = findContext();
-      if (context) return appendVideo(context.store, request.videoId);
       throw new Error('E_BRIDGE：页面桥接被阻止，请确认脚本猫允许页面注入');
     }
     return new Promise((resolve, reject) => {
@@ -400,7 +493,7 @@
           incoming.delete(request.requestId);
           failedRequest = null;
           btn.textContent = result === 'already' ? '此视频已存在' : '已加入多视图';
-          showNotice('视频 ' + request.videoId + (result === 'already' ? ' 已在此布局中，没有重复添加。' : ' 已加入此分屏。若未播放，请点击播放器。'));
+          showNotice('视频 ' + request.videoId + (result === 'already' ? ' 已在此布局中，已尝试恢复播放。' : ' 已按 Holodex 默认布局加入，正在尝试自动播放；受限时会尝试静音播放。'));
           hideTimer = setTimeout(() => { showReceiverButton(true); notice?.remove(); }, 7000);
         } catch (error) {
           await write(PREFIX + request.requestId, { ...request, status: 'error', error: error.message });
@@ -413,7 +506,7 @@
             await write(PREFIX + request.requestId, { ...request, status: 'pending' });
             drain();
           };
-          showNotice('Quick Add 0.2.2：' + request.videoId + ' 添加失败：' + error.message, 15000);
+          showNotice('Quick Add 0.2.3：' + request.videoId + ' 添加失败：' + error.message, 15000);
           break;
         }
       }
@@ -431,7 +524,7 @@
     btn.onclick = async () => {
       try {
         if (!active) await claimReceiver();
-        showNotice('Quick Add 0.2.2：正在检查待添加视频…');
+        showNotice('Quick Add 0.2.3：正在检查待添加视频…');
         await drain();
       } catch (error) { showNotice('接收启动失败：' + error.message); }
     };
@@ -463,10 +556,10 @@
     const target = await read(TARGET_KEY, null);
     if (targetSession && (!target || target.id === targetSession)) {
       await claimReceiver();
-      showNotice('Quick Add 0.2.2：此页正在接收，切回即可处理队列。');
+      showNotice('Quick Add 0.2.3：此页正在接收，切回即可处理队列。');
     } else {
       showReceiverButton(false);
-      showNotice('Quick Add 0.2.2：点击“使用此分屏接收”，把已排队的视频加入当前布局。');
+      showNotice('Quick Add 0.2.3：点击“使用此分屏接收”，把已排队的视频加入当前布局。');
     }
     try { GM_addValueChangeListener(TARGET_KEY, () => drain()); } catch {}
     try {
@@ -520,7 +613,7 @@
     const initialize = () => initReceiver().catch(error => {
       receiverStarted = false;
       showReceiverButton(false);
-      showNotice('Quick Add 0.2.2 初始化失败：' + error.message, 15000);
+      showNotice('Quick Add 0.2.3 初始化失败：' + error.message, 15000);
     });
     initialize();
     setInterval(initialize, 1500);
