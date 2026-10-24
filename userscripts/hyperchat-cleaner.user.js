@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube / Holodex HyperChat Cleaner
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      2.4.1
+// @version      2.4.2
 // @description  Pure chat, font size, paid messages, compact Holodex multiview, native compose toggle.
 // @match        https://www.youtube.com/*
 // @match        https://youtube.com/*
@@ -75,6 +75,15 @@ html.hcc-mv .multiview .mv-cell>.cell-content:has(>.d-flex.flex-row .tabbed-chat
 #hcc-aa .panel[hidden]{display:none!important}
 #hcc-aa .line{display:flex;gap:8px;align-items:center;margin:12px 0}
 #hcc-aa input[type=range]{flex:1;min-width:0}
+/* Portrait-only toolbar cleanup. Direct children match Holodex's MultiviewToolbar.vue:
+   green--text = Add frame; third button from end = Share link,
+   followed by the three-dot menu and collapse-toolbar button. */
+@media (orientation: portrait) and (max-width: 900px) {
+  .multiview .mv-toolbar .mv-toolbar-btn.justify-end > button.v-btn.green--text,
+  .multiview .mv-toolbar .mv-toolbar-btn.justify-end > button.v-btn:nth-last-of-type(3) {
+    display: none !important;
+  }
+}
 `);
 function broadcast(type,value){document.querySelectorAll('iframe[src]').forEach(f=>{try{let o=new URL(f.src,location.href).origin;if(originAllowed(o))f.contentWindow?.postMessage({tag,type,value},o)}catch{}})}
 function changeFont(v,save=true){font=Math.max(12,Math.min(40,Number(v)||20));sync();if(save)set(KEY.font,font);broadcast('font',font);if(aaBox)aaBox.querySelector('.val').textContent=font+'px'}
