@@ -146,7 +146,9 @@
       sourcePending = { requestId, videoId: id };
       makeButton().classList.remove('hma-idle');
       makeButton().textContent = '已排队：' + id;
-      showNotice('视频 ' + id + ' 已保存到队列。请切回 Holodex；若没有“接收中”按钮，点击“使用此分屏接收”。');
+      showNotice(PC_MODE
+        ? '视频 ' + id + ' 已发送到接收队列。PC 后台分屏会尝试自动添加；若未生效，请激活 Holodex 接收页。'
+        : '视频 ' + id + ' 已保存到队列。请切回 Holodex；若没有“接收中”按钮，点击“使用此分屏接收”。');
       if (createdNew) {
         const url = new URL('https://holodex.net/multiview/');
         url.searchParams.set('hma_session', target.id);
@@ -170,7 +172,9 @@
         if (result?.status === 'error') throw new Error(result.error);
         await delay(700);
       }
-      showNotice('视频 ' + id + ' 仍在等待，请切回原 Holodex 页。若接收页已关闭，可点击“新建接收页”。');
+      showNotice(PC_MODE
+        ? '视频 ' + id + ' 仍未收到确认。请检查 Holodex 接收标签页；接收页关闭时可新建接收页。'
+        : '视频 ' + id + ' 仍在等待，请切回原 Holodex 页。若接收页已关闭，可点击“新建接收页”。');
       makeButton().textContent = '新建接收页';
       makeButton().onclick = () => startSend(true);
     } catch (error) {
@@ -492,7 +496,7 @@
   }
 
   async function drain() {
-    if (draining || !targetSession || document.hidden) return;
+    if (draining || !targetSession || (!PC_MODE && document.hidden)) return;
     draining = true;
     try {
       const target = await read(TARGET_KEY, null);
