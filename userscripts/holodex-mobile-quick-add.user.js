@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Mobile Quick Add（精简手机版）
 // @namespace    holodex-mobile-quick-add
-// @version      0.2.3
-// @description  当前 YouTube 视频一键跳转 Holodex 并自动添加；不包含聊天、频道名修复或收藏功能。
+// @version      0.3.0
+// @description  Android/PC 通用版：YouTube 一键加入 Holodex 多视图，PC 悬停按钮与快捷键，手机保持触控体验。
 // @match        https://youtube.com/*
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -37,7 +37,7 @@
   // Await the real async API before navigating or announcing a queued request.
   const write = (key, value) => {
     if (typeof GM !== 'undefined' && typeof GM.setValue === 'function') return GM.setValue(key, value);
-    throw new Error('E_STORAGE：需要脚本猫 GM.setValue 权限，请重新安装当前版本并确认授权');
+    throw new Error('E_STORAGE：脚本管理器需支持异步 GM.setValue；请检查 ScriptCat/Tampermonkey 授权并更新版本');
   };
   let sourcePending = null, targetSession = null, draining = false;
   const receiverToken = uid();
@@ -47,8 +47,10 @@
   let hideTimer;
   let noticeTimer, buttonTimer;
   const IS_HD = /^(www\.)?holodex\.net$/.test(location.hostname);
+  // Input capability, not screen width: mobile browsers using "desktop site" remain touch mode.
+  const PC_MODE = !!window.matchMedia?.('(hover: hover) and (pointer: fine)').matches;
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  let button, notice, busy = false;
+  let button, notice, busy = false, desktopCssAdded = false;
 
   function videoIdFromURL(input) {
     try {
@@ -64,12 +66,33 @@
     } catch { return null; }
   }
 
+  function installDesktopStyles() {
+    if (!PC_MODE || IS_HD || desktopCssAdded) return;
+    const style = document.createElement('style');
+    style.id = 'hma-desktop-styles';
+    style.textContent = [
+      '#hma-quick-add-button.hma-desktop{right:18px!important;bottom:96px!important;min-height:40px!important;width:46px;max-width:46px!important;overflow:hidden;white-space:nowrap;box-sizing:border-box;opacity:.4!important;transition:width .16s,max-width .16s,opacity .16s;box-shadow:0 2px 8px #0005!important}',
+      '#hma-quick-add-button.hma-desktop.hma-idle:hover,#hma-quick-add-button.hma-desktop.hma-idle:focus-visible{width:172px;max-width:172px!important;opacity:1!important}',
+      '#hma-quick-add-button.hma-desktop.hma-idle::after{content:" 添加到多视图";display:none;font:600 12px system-ui,sans-serif}',
+      '#hma-quick-add-button.hma-desktop.hma-idle:hover::after,#hma-quick-add-button.hma-desktop.hma-idle:focus-visible::after{display:inline}',
+      '#hma-quick-add-button.hma-desktop:not(.hma-idle){opacity:.92!important;width:auto!important;max-width:320px!important}',
+      '#hma-quick-add-notice.hma-desktop-notice{left:auto!important;right:18px!important;bottom:146px!important;width:min(360px,calc(100vw - 28px))!important;box-sizing:border-box;box-shadow:0 6px 18px #0006}',
+      '@media(prefers-reduced-motion:reduce){#hma-quick-add-button.hma-desktop{transition:none!important}}'
+    ].join('\n');
+    (document.head || document.documentElement).appendChild(style);
+    desktopCssAdded = true;
+  }
+
   function makeButton() {
     if (button?.isConnected) return button;
     button = document.createElement('button');
     button.id = 'hma-quick-add-button';
     button.type = 'button';
     button.style.cssText = 'position:fixed;right:8px;bottom:calc(80px + env(safe-area-inset-bottom,0px));z-index:2147483000;min-height:44px;max-width:calc(100vw - 16px);padding:8px 10px;border:1px solid #ffffff44;border-radius:22px;background:#234b83;color:#fff;opacity:.7;font:600 13px/1.4 system-ui,sans-serif;box-shadow:0 2px 6px #0003;cursor:pointer;touch-action:manipulation';
+    if (PC_MODE && !IS_HD) {
+      installDesktopStyles();
+      button.classList.add('hma-desktop');
+    }
     document.body.appendChild(button);
     revealButton();
     return button;
@@ -79,6 +102,9 @@
     if (!button?.isConnected) return;
     button.style.visibility = 'visible';
     clearTimeout(buttonTimer);
+    // Desktop: small semi-transparent, always available; hover reveals label.
+    if (PC_MODE && !IS_HD) return;
+    // Mobile: retain the proven 4.5-second auto-hide and touch-to-reveal behavior.
     buttonTimer = setTimeout(() => { if (button?.isConnected) button.style.visibility = 'hidden'; }, 4500);
   }
 
@@ -91,6 +117,7 @@
       document.body.appendChild(notice);
     }
     notice.textContent = text;
+    if (PC_MODE && !IS_HD) notice.classList.add('hma-desktop-notice');
     clearTimeout(noticeTimer);
     noticeTimer = setTimeout(() => notice?.remove(), duration);
   }
@@ -117,6 +144,7 @@
       await write(PREFIX + requestId, request);
       await write(WAKE_KEY, request);
       sourcePending = { requestId, videoId: id };
+      makeButton().classList.remove('hma-idle');
       makeButton().textContent = '已排队：' + id;
       showNotice('视频 ' + id + ' 已保存到队列。请切回 Holodex；若没有“接收中”按钮，点击“使用此分屏接收”。');
       if (createdNew) {
@@ -126,9 +154,10 @@
         else location.assign(url.href);
       } else {
         if (blank) { try { blank.close(); } catch {} blank = null; }
-        if (sourceReceiver && !sourceReceiver.closed) {
+        if (!PC_MODE && sourceReceiver && !sourceReceiver.closed) {
           try { sourceReceiver.focus(); } catch { /* Android may require switching tabs manually. */ }
         }
+        // PC: keep the YouTube tab focused when sending to an existing receiver.
       }
       const until = Date.now() + 45000;
       while (Date.now() < until) {
@@ -148,7 +177,10 @@
       if (blank) { try { blank.close(); } catch {} }
       showNotice('发送 ' + id + ' 失败：' + error.message);
       sourcePending = null;
-    } finally { busy = false; }
+    } finally {
+      busy = false;
+      if (PC_MODE) refreshYouTubeButton();
+    }
   }
 
   let sourceBlank = null, sourceReceiver = null;
@@ -260,7 +292,12 @@
     // Mobile/desktop built-in presets are fallbacks, never our own equal grid.
     let configured = [];
     try { configured = vm.decodedAutoLayout || []; } catch {}
-    const groups = [configured, vm.decodedMobilePresets || [], vm.decodedDesktopPresets || []];
+    // When the user has no matching default, use the platform's own built-in presets.
+    const mobile = !!vm.$store?.state?.isMobile;
+    const groups = [configured,
+      ...(mobile
+        ? [vm.decodedMobilePresets || [], vm.decodedDesktopPresets || []]
+        : [vm.decodedDesktopPresets || [], vm.decodedMobilePresets || []])];
     let preset;
     for (const presets of groups) {
       preset = presets.find(p => p.videoCellCount === count) || presets.find(p => p.videoCellCount >= count);
@@ -484,6 +521,7 @@
         if (active?.id !== targetSession || (active.owner && active.owner !== receiverToken)) break;
         clearTimeout(hideTimer);
         const btn = makeButton();
+        btn.classList.remove('hma-idle');
         btn.textContent = '正在添加 ' + request.videoId;
         btn.disabled = true;
         showNotice('接收视频 ' + request.videoId + '，正在追加到此分屏…');
@@ -591,14 +629,42 @@
     if (!busy && sourcePending && sourcePending.videoId !== id) sourcePending = null;
     const btn = makeButton();
     if (busy || sourcePending) return;
+    btn.classList.add('hma-idle');
     btn.textContent = '＋H';
     btn.setAttribute('aria-label', '将当前视频加入 Holodex 多视图');
-    btn.onclick = () => startSend(false);
+    btn.title = PC_MODE
+      ? '点击：添加到现有分屏；Shift＋点击：新建接收分屏；Alt＋Shift＋H：快速添加'
+      : '将当前视频加入 Holodex';
+    btn.onclick = event => startSend(PC_MODE && !!event?.shiftKey);
   }
+
+  function isTypingIn(target) {
+    const el = target?.nodeType === 1 ? target : target?.parentElement;
+    return !!el?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]');
+  }
+
+  function handleDesktopHotkeys(event) {
+    if (!PC_MODE || event.defaultPrevented || event.repeat || event.isComposing ||
+        event.ctrlKey || event.metaKey || !event.altKey || !event.shiftKey ||
+        isTypingIn(event.target)) return;
+    if (!IS_HD && (event.code === 'KeyH' || event.code === 'KeyN')) {
+      if (!videoIdFromURL(location.href)) return;
+      event.preventDefault();
+      startSend(event.code === 'KeyN');
+    } else if (IS_HD && event.code === 'KeyR' &&
+        /^\/multiview(?:\/|$)/.test(location.pathname)) {
+      event.preventDefault();
+      claimReceiver().then(drain).catch(error => showNotice('接收失败：' + error.message));
+    }
+  }
+
+  if (PC_MODE) document.addEventListener('keydown', handleDesktopHotkeys, true);
 
   if (IS_HD) {
     try {
-      GM_registerMenuCommand('使用当前分屏接收 / 检查队列', async () => {
+      GM_registerMenuCommand(PC_MODE
+        ? '使用当前分屏接收 / 检查队列（Alt+Shift+R）'
+        : '使用当前分屏接收 / 检查队列', async () => {
         try {
           await claimReceiver();
           if (failedRequest) {
@@ -618,7 +684,12 @@
     initialize();
     setInterval(initialize, 1500);
   } else {
-    try { GM_registerMenuCommand('将当前视频加入 Holodex', () => startSend(false)); } catch {}
+    try {
+      GM_registerMenuCommand(PC_MODE
+        ? '将当前视频加入 Holodex（Alt+Shift+H）'
+        : '将当前视频加入 Holodex', () => startSend(false));
+      if (PC_MODE) GM_registerMenuCommand('新建接收分屏并添加（Alt+Shift+N）', () => startSend(true));
+    } catch {}
     refreshYouTubeButton();
     document.addEventListener('pointerdown', () => revealButton(), { passive: true });
     document.addEventListener('yt-navigate-finish', refreshYouTubeButton);
