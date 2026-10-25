@@ -1,12 +1,12 @@
 # Holodex HyperChat Cleaner
 
-面向 **YouTube、Holodex Watch / Multiview** 的轻量级用户脚本，包含聊天清理、频道资料修复和手机端一键添加视频。
+面向 **YouTube、Holodex Watch / Multiview** 的轻量级用户脚本，包含聊天清理、频道资料修复，以及 PC / Android 通用的一键添加视频。
 
 ## 安装
 
 1. [HyperChat Cleaner](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/hyperchat-cleaner.user.js)
 2. [Channel Name Fix](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/channel-name-fix.user.js)
-3. [Holodex Mobile Quick Add](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-mobile-quick-add.user.js)
+3. [Holodex Quick Add（PC + Android）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-mobile-quick-add.user.js)
 
 三个脚本可独立安装。Quick Add 不要求安装另外两个脚本；要使用聊天清理或频道名修复时再分别安装。更新时覆盖同名脚本并刷新相关页面，不要同时启用多份旧版。
 
@@ -34,17 +34,15 @@
 
 ## 使用说明
 
-### 手机版一键添加视频
+### Quick Add 通用版 v0.3.0（PC / Android）
 
-1. 在支持脚本管理器的浏览器中打开 YouTube 视频网页，点击短暂显示的 **＋H**，或使用脚本菜单「将当前视频加入 Holodex」。
-2. 首次添加会打开 Holodex 接收页；后续从其他 YouTube 标签页添加的视频也会排队进入这个分屏。
-3. 切回 Holodex 处理队列。已有页面可通过脚本菜单「使用当前分屏接收 / 检查队列」指定为接收页。
+1. **PC**：在 YouTube 视频网页右下角点击半透明 **＋H**；鼠标悬停显示文字。也可使用 `Alt+Shift+H` 快速添加，`Alt+Shift+N` 新建接收分屏，或 **Shift＋点击** ＋H。
+2. **Android**：保留触摸显示 ＋H、闲置 4.5 秒隐藏的原有操作，不需要重新安装第二个脚本。
+3. **Holodex 接收页**：优先通过已指定的分屏接收视频。PC 模式允许后台接收，不强制切走当前 YouTube 标签页；手机仍建议切回 Holodex 处理队列。PC 接收页还可按 `Alt+Shift+R` 接管当前分屏。
 
-**Quick Add v0.2.3** 优先使用 Holodex 中已保存的默认自动布局，通过原生布局合并方法调整视频与聊天区域。新增视频会尝试自动播放；切回时尝试恢复此前正在播放的视频。手机限制有声自动播放时，新视频会尝试静音播放，必要时点一下页面或播放器。
+优先使用 Holodex 中保存的**默认自动布局**；没有合适预设时 PC 优先桌面布局、手机优先移动布局。新增后继续使用 Holodex 原生方法合并，并尝试自动播放；浏览器仍可能限制后台、有声自动播放。
 
-YouTube 的 ＋H 入口闲置约 4.5 秒后隐藏，触碰页面后短暂显示；Holodex 接收成功后不保留常驻按钮。普通状态提示约 6 秒后消失，脚本菜单始终可用。
-
-完整安装步骤、默认布局选择、接收页切换和排错见 [手机版 Quick Add 使用说明](docs/mobile-quick-add.md)。
+详细步骤与排错：[PC 快捷操作使用说明](docs/desktop-quick-add.md) · [Android 使用说明](docs/mobile-quick-add.md)。
 
 ### 聊天清理和频道名称
 
@@ -72,10 +70,13 @@ userscripts/
   holodex-mobile-quick-add.user.js
 docs/
   mobile-quick-add.md
+  desktop-quick-add.md
 README.md
 ```
 
 ## 版本记录
+
+- **2026-10-25 — Quick Add v0.3.0**：同一安装脚本支持 PC / Android；PC 增加悬停展开入口、快捷键、Shift＋点击新建接收页、后台接收以及优先桌面布局后备；保留手机原有触摸及自动隐藏行为。仅模拟测试和静态检查通过，PC 端尚需实机回归。
 
 - **2026-10-24 — Cleaner v2.4.2**：针对手机竖屏压缩 Holodex 多视图顶部工具栏，仅隐藏新增空白区域与分享布局两个低频图标，保留横屏布局和其他按钮。
 
