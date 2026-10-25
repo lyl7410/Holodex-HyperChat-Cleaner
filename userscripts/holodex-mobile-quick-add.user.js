@@ -548,7 +548,7 @@
             await write(PREFIX + request.requestId, { ...request, status: 'pending' });
             drain();
           };
-          showNotice('Quick Add 0.2.3：' + request.videoId + ' 添加失败：' + error.message, 15000);
+          showNotice('Quick Add 0.3.0：' + request.videoId + ' 添加失败：' + error.message, 15000);
           break;
         }
       }
@@ -566,7 +566,7 @@
     btn.onclick = async () => {
       try {
         if (!active) await claimReceiver();
-        showNotice('Quick Add 0.2.3：正在检查待添加视频…');
+        showNotice('Quick Add 0.3.0：正在检查待添加视频…');
         await drain();
       } catch (error) { showNotice('接收启动失败：' + error.message); }
     };
@@ -598,10 +598,10 @@
     const target = await read(TARGET_KEY, null);
     if (targetSession && (!target || target.id === targetSession)) {
       await claimReceiver();
-      showNotice('Quick Add 0.2.3：此页正在接收，切回即可处理队列。');
+      showNotice('Quick Add 0.3.0：此页正在接收，切回即可处理队列。');
     } else {
       showReceiverButton(false);
-      showNotice('Quick Add 0.2.3：点击“使用此分屏接收”，把已排队的视频加入当前布局。');
+      showNotice('Quick Add 0.3.0：点击“使用此分屏接收”，把已排队的视频加入当前布局。');
     }
     try { GM_addValueChangeListener(TARGET_KEY, () => drain()); } catch {}
     try {
@@ -683,7 +683,7 @@
     const initialize = () => initReceiver().catch(error => {
       receiverStarted = false;
       showReceiverButton(false);
-      showNotice('Quick Add 0.2.3 初始化失败：' + error.message, 15000);
+      showNotice('Quick Add 0.3.0 初始化失败：' + error.message, 15000);
     });
     initialize();
     setInterval(initialize, 1500);
