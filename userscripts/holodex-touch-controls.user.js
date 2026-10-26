@@ -942,34 +942,58 @@
   async function setAutoEnabled(enabled){
     // This command sets the requested state. It never toggles blindly.
     await Promise.resolve(setAutoValue(AUTO_ENABLED_KEY,!!enabled));
+    if(settings?.isConnected){
+      settings.querySelector('[data-control="autoEnabled"]').checked=!!enabled;
+      const indicator=settings.querySelector('[data-field="autoState"]');
+      if(indicator)indicator.textContent=enabled?
+        '当前已开启：进入／刷新多视图会自动尝试播放':
+        '当前已关闭：刷新后不会自动尝试播放';
+    }
     if(!isMulti()||!installed)return {enabled:!!enabled,ready:false};
     const data=await syncAutoSettings();
     if(data?.enabled!==!!enabled)
       throw new Error('播放器返回的自动播放状态与设置不一致');
     return data;
   }
-  function diagnoseAutoPlay(){
+  function diagnoseAutoPlay(resynced=false){
     if(!isMulti())return alert('请先进入 Holodex 多视图。');
-    if(!installed)return alert('播放器页面桥接尚未就绪。请确认脚本启用并完全刷新多视图页面。');
+    if(!installed)return alert('播放器页面桥接尚未就绪。请确认脚本启用并完整刷新多视图页面。');
     rpc('autoDiagnose',{},4200).then(data=>{
+      const saved=autoplaySettings();
+      if(saved.enabled!==data.enabled&&!resynced){
+        // A delayed GM write or page bridge startup may leave the in-page
+        // playback engine out of sync. Repair once without changing the
+        // user's explicit preference.
+        syncAutoSettings()
+          .then(()=>diagnoseAutoPlay(true))
+          .catch(error=>alert('自动播放配置尚未同步：'+error.message));
+        return;
+      }
       const rows=data.rows||[];
-      const prefix='智能自动播放 v'+(data.version||'0.5.1')+
+      const prefix='智能自动播放 v'+(data.version||'0.5.2')+
         '\n状态：'+(data.enabled?'已启用':'已关闭')+
         '｜识别：'+(data.detected||0)+' 路'+
         '\n声音策略：'+(data.muteFallback?'失败后允许静音':'保留原有音量（静音回退关闭）');
-      if(!rows.length){
-        alert(prefix+'\n\n没有找到有效的 YouTube 视频格子。'+
-          '\n请确认播放器格子加载完成，以及脚本可以访问 Holodex 的 Vue 播放器对象。');
-        return;
-      }
       const lines=rows.slice(0,16).map((row,i)=>
         (i+1)+'. '+row.title.slice(0,30)+
         '\n   '+row.description+'｜'+row.issue+
         '｜尝试 '+row.tries+' 次');
-      alert(prefix+'\n\n'+lines.join('\n')+
-        (rows.length>16?'\n……另有 '+(rows.length-16)+' 路':'')+
-        '\n\n浏览器阻止有声自动播放时，可在多视图页面点一下后重试；'+
-        '或者在自动播放设置中选择“失败后静音启动”。');
+      const entries=rows.length?lines.join('\n')+
+        (rows.length>16?'\n……另有 '+(rows.length-16)+' 路':''):
+        '没有找到有效的 YouTube 视频格子；请等待布局加载，确认不是 Twitch／聊天格子。';
+      const report=prefix+'\n\n'+entries;
+      if(!data.enabled){
+        if(confirm(report+
+          '\n\n当前智能自动播放已关闭，因此不会自动启动。'+
+          '\n\n点击「确定」立即开启并尝试播放；点击「取消」保持关闭。')){
+          setAutoEnabled(true)
+            .then(()=>diagnoseAutoPlay(true))
+            .catch(error=>alert('启用失败：'+error.message));
+        }
+        return;
+      }
+      alert(report+'\n\n如果显示浏览器阻止有声自动播放，请在多视图页面点一下再重试，'+
+        '或在设置中主动开启“多次失败后静音启动”。');
     }).catch(error=>alert('播放诊断未完成：'+error.message));
   }
   function manualAutoPlay(){
@@ -1378,6 +1402,7 @@
       '<div class="setting-summary">长按识别前滑动超过 12px 会取消；右侧纵向滑动继续调节音量。</div></div>',
       '<div class="setting" style="padding-top:12px;border-top:1px solid #ffffff26">',
       '<label>智能自动播放 · 适用于 PC 和安卓</label>',
+      '<div class="setting-summary" data-field="autoState">当前状态读取中…</div>',
       '<label class="hmtc-toggle"><input type="checkbox" data-control="autoEnabled">',
       '<span>进入/刷新多视图时启动未播放的视频</span></label>',
       '<label class="hmtc-toggle"><input type="checkbox" data-control="autoReturn">',
@@ -1422,6 +1447,11 @@
     ];
     for(const [name,key] of autoInputs){
       settings.querySelector('[data-control="'+name+'"]').addEventListener('change',e=>{
+        const status=settings.querySelector('[data-field="autoState"]');
+        if(name==='autoEnabled'&&status)
+          status.textContent=e.target.checked?
+            '当前已开启：进入／刷新多视图会自动尝试播放':
+            '当前已关闭：刷新后不会自动尝试播放';
         Promise.resolve(setAutoValue(key,!!e.target.checked))
           .then(()=>syncAutoSettings())
           .catch(error=>console.warn('[HMTC] 自动播放设置',error));
@@ -1443,6 +1473,9 @@
     settings.querySelector('[data-control="statsMode"]').value=getStatsMode();
     const config=autoplaySettings();
     settings.querySelector('[data-control="autoEnabled"]').checked=config.enabled;
+    settings.querySelector('[data-field="autoState"]').textContent=config.enabled?
+      '当前已开启：进入／刷新多视图会自动尝试播放':
+      '当前已关闭：刷新后不会自动尝试播放';
     settings.querySelector('[data-control="autoReturn"]').checked=config.onReturn;
     settings.querySelector('[data-control="autoRespectPause"]').checked=config.respectPause;
     settings.querySelector('[data-control="autoMute"]').value=config.muteFallback?'mute':'keep';
