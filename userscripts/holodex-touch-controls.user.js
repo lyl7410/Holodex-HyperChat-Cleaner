@@ -2852,8 +2852,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.5.6 说明',()=>
-      alert('v0.5.6：修复浏览器拦截时静音回退发送顺序：先直接给 YouTube 静音，稍后播放，避免同一时刻发出播放请求而被判有声自动播放。诊断可一键允许静音回退，不改变正在播放视频的音量；安卓触控与统计不变。'));
+    GM_registerMenuCommand('Touch Controls v0.6.2 说明',()=>
+      alert('v0.6.2：Holodex 与 YouTube 均使用单排五档固定倍速：1×、1.25×、1.5×、1.75×、2×。YouTube 手机面板移除不可读取的画质下拉框，改为寻找当前播放器的原生设置按钮；找不到时提示用户在视频内打开齿轮或启用浏览器桌面版。保留原有音量手势、统计及 Holodex 自动播放。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
