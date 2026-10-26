@@ -1,66 +1,69 @@
-# Holodex Touch Controls — 手机触摸音量与播放统计
+# Holodex Touch Controls — 无常驻图标的触控音量与播放统计
 
-独立油猴脚本，当前 **v0.2.0（原生统计实验版）**。只在 **Holodex Multiview 的 YouTube 视频格子**上显示触控控制，不作用于普通 YouTube 网站、聊天格子和 Twitch 播放器。
+当前版本：**v0.3.0**。独立油猴脚本，面向 **Holodex Multiview 中的 YouTube 小播放器**，不会在画面上放置常驻图标，也不会插入透明触控覆盖层。
 
-**[直接安装 / 更新](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [返回项目首页](../README.md)
+[安装 / 更新 v0.3.0](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js) · [项目 README](../README.md)
 
-## 安装
+## 安装和升级
 
-1. 在手机浏览器的脚本猫（ScriptCat）、Tampermonkey 等油猴脚本管理器中打开上面的 Raw 链接安装。
-2. 授权脚本同时在 `holodex.net`、`www.youtube.com/embed/*` 和 `www.youtube-nocookie.com/embed/*` 上运行，允许**第三方 iframe 中执行脚本**、`unsafeWindow`、样式注入及脚本存储。YouTube 普通观看网页不会添加按钮。
-3. 打开或刷新 `https://holodex.net/multiview/`，载入 YouTube 播放视频格子。
-4. 需要临时关闭功能时，使用脚本管理器菜单「暂停 Holodex Touch Controls」。
+1. 在安卓浏览器的脚本管理器（如 ScriptCat）中更新同名脚本，**不要同时运行 v0.2.0 旧副本**。
+2. 允许脚本在 `holodex.net`、`www.youtube.com/embed/*` 和 `www.youtube-nocookie.com/embed/*` 的**第三方 iframe** 内执行；这是无覆盖层手势和 YouTube 原生统计能够工作的必要条件。
+3. **重新加载整个 Holodex Multiview 页面**，让已经创建的 YouTube iframe 也载入 v0.3.0。
+4. 在油猴菜单「暂停 Holodex Touch Controls」可以暂时停用；重新启用后刷新页面。
 
-该脚本独立于 Quick Add / Cleaner / Channel Name Fix，不需要一起安装。**不会修改这些现有脚本**。
+Quick Add、Cleaner、Channel Name Fix 均无需改动。本脚本不处理 Twitch 和聊天格子，也不会在普通 YouTube 观看页显示功能按钮。
 
-## 视频画面内的手势
+## 操作方式
 
-| 操作 | 结果 |
+| 操作位置与手势 | 效果 |
 | --- | --- |
-| 在 YouTube 视频画面 **右侧 34%、中间 62% 高度**的区域，向上滑动 | 增加该视频音量（0–100%） |
-| 在同一区域向下滑动 | 减少该视频音量 |
-| 轻点该区域的 🔊 图标 | 打开大滑块、静音、±10 和播放统计面板 |
-| 统计面板点击静音 | 切换该路视频静音 |
-| 点击面板 × 或按 Escape | 收起面板 |
+| YouTube **画面右侧约 26%、中间 60% 高度区域**向上滑 | 当前视频音量增加 |
+| 同一区域向下滑 | 当前视频音量减少 |
+| **画面左侧约 26%、中间 60% 高度区域**轻点 | 打开当前视频的精简播放统计与音量控制面板 |
+| 中间区域点击或右侧轻点 | 由 YouTube 处理原生播放操作 |
+| 弹出面板内的滑块、±10、静音 | 独立调节当前这一路视频音量 |
+| 统计面板右上角「×」 | 关闭统计面板 |
 
-右侧手势区只覆盖视频的中段，避免挡住底部进度条、设置、全屏控件以及上方其他操作。手势在**半透明的覆盖层**上完成，因为触摸事件不会从跨域 YouTube iframe 自动传到 Holodex 外层。滑动不需按住按钮，手指在这块区域内直接滑动即可。
+**正常观看时视频完全没有新增的常驻控制图标。** 音量滑动时才显示约 0.75 秒的百分比提示；左侧轻点时才弹出统计面板。
 
-音量调用 Holodex 已有的 `VideoCell.setVolume()`、`setMuted()`，不是假装改变 Android 系统媒体音量。已按视频格子 ID + YouTube Video ID 双重校验，布局切换后不会盲目操作旧格子。
+手势在 **YouTube iframe 内部监听触摸**，不再从 Holodex 顶层覆盖视频。这意味着：
 
-## 统计面板
+- 只有移动距离达到约 **18px**、且明显是纵向移动，才识别右侧音量滑动；右侧轻点和横向滑动不接管。
+- 向左／向右滑、双指缩放、播放器顶部或底部的控制操作尽量不拦截。
+- 左侧短按（550ms 内、位移小于约 13px）打开统计；左侧滑动不会触发面板。
+- 某些 YouTube 版本可能在脚本收到事件之前消费触摸事件，因此 **不能保证所有安卓浏览器都支持无覆盖层手势**。
 
-### YouTube 自己的连接速度（重点）
+## 精简统计面板
 
-**v0.2.0 已移除 `navigator.connection.downlink` 的设备网速估算。**
+默认仅展示四类关键指标：
 
-- 面板通过 **Holodex 页面 → YouTube 嵌入 iframe** 的受限 `postMessage` 通信，让同一份脚本在 YouTube iframe 内读取播放器自己的 `getStatsForNerds()`。
-- 主要显示 `bandwidth_kbps`（YouTube Connection Speed，转换成 Mbps）、`buffer_health_seconds`、当前/推荐分辨率、编解码器、丢帧、直播延迟（如播放器提供）。
-- 「Connection Speed」仍是 **YouTube 对当前播放连接的带宽估计**，并非瞬时原始网络下载流量；比系统网络速度更适合判断这一路 YouTube 播放的连接情况。
-- 通过 `getStatsForNerds()` 读取失败时，再尝试播放器调试文字和已存在的原生详细统计 DOM；没有可靠字段就显示 **—**，不再回退为设备速度。
-- 面板附带「**切换 YouTube 原版统计**」按钮：若内部 `showVideoInfo()` / `hideVideoInfo()` 可用，会在**该视频的小型 iframe 内**切换原版详细统计，可能因播放器尺寸而难以阅读。
-- 此接口属于 YouTube **未公开的内部接口**，不受官方稳定性保证。手机浏览器、YouTube 版本或嵌入 iframe 限制可能导致不可用；不会以数据抓包或下载文件的方式强行测速。
+| 项目 | 来源与说明 |
+| --- | --- |
+| **Connection Speed（Mbps）** | YouTube 原生 `getStatsForNerds()` 的 `bandwidth_kbps`，换算成 Mbps；仅代表其对当前播放连接的带宽估计 |
+| **Buffer Health（秒）** | YouTube 内部原生缓冲健康度字段，可用时显示 |
+| **播放时间** | Holodex 所用 YouTube IFrame API 的当前播放位置和时长；直播标记为直播 |
+| **当前／推荐分辨率** | YouTube 原生详细统计的分辨率信息，内部接口有值时显示 |
 
-### 播放器状态
+另外保留「播放状态」、音量滑块、静音、±10 按钮，以及可选的「切换 YouTube 原版统计」。
 
-- 播放中 / 暂停 / 缓冲 / 未就绪。
-- 当前播放位置、倍速。
-- 录播视频的已缓冲比例（YouTube `getVideoLoadedFraction`）。直播时标为不可用，避免误导。
+**已经取消设备网速估算**。不会用 `navigator.connection.downlink` 冒充当前 YouTube 视频的 Connection Speed。如果 YouTube 内部接口不可用则显示「—」或说明文字，不能把缺失值解释成 0 Mbps。打开面板期间约每 **2.4 秒**更新一次，关闭后停止更新。
 
-YouTube **官方** IFrame API 未公开这些统计；本版使用 YouTube 嵌入文档中的**内部** Stats for nerds 实现，因此显示值仅在播放器提供可靠字段时出现。
+## 如果左侧轻点没反应
 
-## 兼容性与注意
+这是 iframe 内手势方案的主要兼容性限制，可以依次检查：
 
-- 使用粗指针或支持触摸的浏览器时才显示手势区域；无触摸输入的纯 PC 浏览器默认不会添加手势覆盖层。
-- 安卓系统及某些移动浏览器可能限制网页嵌入播放器的音量调节：脚本可向 Holodex 播放器发送音量数值，但设备上的实际响度可能依赖系统音量。先尝试 0 / 30 / 70 / 100% 确认。
-- 打开统计面板时才按约 2.4 秒更新状态，默认只每约 1.7 秒扫描当前布局。仅对当前选中的一路视频发送统计读取请求，不会对全部视频批量抓取。
-- 若网速显示「YouTube iframe 未响应」：检查脚本管理器是否允许在跨域 YouTube 嵌入 iframe 中注入脚本；更新脚本后**刷新 Holodex 页面，确保旧 iframe 也被重新载入**。
-- 若显示「嵌入播放器未提供原生详细统计」：脚本已收到 iframe 回应，但这个视频/版本没有开放可读的内部数据；不能把系统网速当作替代值。
-- 若原版统计弹窗打不开，但自定义 Connection Speed 有数值，可继续使用自定义面板；两个内部功能的可用性不保证一致。
-- 若右侧触控区未显示：确认是 Holodex 的多视图 YouTube 视频（不是 Twitch、聊天框或其他页面）；刷新并检查脚本权限、视频播放器加载和页面注入。
-- 如果手势影响你点击视频右侧内容，可在脚本管理器菜单中直接暂停，不影响其他脚本。
-- 这里通过 Holodex Vue `VideoCell` 访问播放器。Holodex 内部结构升级可能导致不可用，需要后续适配。
-- **已完成静态语法与模拟测试**：原音量功能、YouTube iframe 来源校验、视频 ID 保护、Connection Speed、缓冲健康度、DOM 后备解析、原版统计切换模拟均通过。真实安卓浏览器中的跨域 iframe 注入、YouTube 内部方法兼容性和实际声音变化仍需实机验证。
+1. 确认脚本管理器**允许在 YouTube 第三方 iframe 内运行**。仅授权 `holodex.net` 并不足够。
+2. 更新脚本后关闭旧分屏标签或刷新整个 Holodex 页面，重新进入多视图。
+3. 点击视频左侧中部**没有原生按钮的位置**，避免点击原生播放、广告或设置等交互控件。
+4. 打开脚本管理器菜单，选择 **「选择视频查看统计（备用入口）」**。此入口不依赖左侧手势；如果有多个视频，可用序号选择。
+5. 如果备用入口也不能读取连接速度，请查看面板上的「YouTube iframe 未响应」或「原生详细统计不可用」，分别代表 iframe 脚本权限/消息通信问题和 YouTube 内部字段不可用。
 
-## 后续可选增强
+在无法监听 iframe 触摸事件的浏览器上，v0.3.0 **不会自动恢复原先影响观看的常驻覆盖图标**；可以用脚本菜单打开统计，或通过 Holodex 原有媒体控制面板调音量。
 
-在实机确认核心可用后，可增加手势灵敏度设置、手势区域大小开关、统计数据趋势、实时健康度提醒、触控快捷切换视频质量、时间/倍速面板。应继续尊重播放器的内部接口兼容性，不再使用系统网速冒充 YouTube 连接速度。
+## 技术实现与验证范围
+
+- 原生触摸捕获在 YouTube iframe 文档进行，握手仅接受来自 Holodex 域名的请求；子帧以 `postMessage` 通知父页面。
+- 父页面按**iframe 的 WindowProxy、来源和当前视频 ID**查找对应 Holodex 格子，调用现有的 `VideoCell.setVolume()`；刷新页面或换视频时不操作旧格子。
+- 触摸取消或切换格子时，手势状态会清除或过期。
+- **已完成 JS 语法与模拟测试**：iframe 握手、左右轻点/滑动区分、控件忽略、取消手势、两个相同视频 ID 格子隔离、来源校验及原生统计解析。
+- **尚未完成安卓浏览器实机回归**：在具体 YouTube iframe 版本中能否稳定收到触摸事件、浏览器是否支持每路嵌入视频音量调节，需要安装后确认。
