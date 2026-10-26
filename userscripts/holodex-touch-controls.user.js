@@ -220,6 +220,9 @@
       'background:#12766c!important;border-color:#78ead5!important;color:white!important}',
       '#hmtc-yt-panel .row input{height:36px;accent-color:#66dad1;touch-action:pan-x}',
       '#hmtc-yt-panel .row .quality{flex:1;min-width:0;font-size:12px;color:#9ee3df}',
+      '#hmtc-yt-panel .hmtc-yt-quality-tip{font-size:11px;line-height:1.5;',
+      'margin:6px 0;color:#b8d5df;padding:8px 10px;border:1px solid #ffffff22;',
+      'border-radius:10px;background:#ffffff0a}',
       '#hmtc-yt-panel .actions{display:flex;gap:6px;margin:10px 0}',
       '#hmtc-yt-panel .actions button{flex:1}',
       '#hmtc-yt-panel .hint{font-size:11px;color:#bdd0db;margin-top:10px}',
@@ -275,6 +278,93 @@
       }catch{}
       text('buffer',Number.isFinite(buffer)?buffer.toFixed(1)+' s':'—');
     }
+    // Mobile YouTube builds a different control tree from desktop
+    // .ytp-settings-button; some variants put the gear outside #movie_player.
+    // Only click a control spatially overlapping the current video, never the
+    // site's account/settings button. No deprecated quality APIs.
+    async function openYoutubeNativeQuality(){
+      const d=page.document,player=p();
+      if(!player)throw Error('当前视频播放器未就绪');
+      const selector=[
+        '.ytp-settings-button','.ytm-player-settings-button',
+        'button[aria-label="Settings"]','button[aria-label="设置"]',
+        'button[aria-label*="Player settings"]',
+        'button[aria-label*="播放设置"]',
+        'button[aria-label*="画质"]','button[aria-label*="Quality"]',
+        '[role="button"][aria-label*="Settings"]',
+        '[role="button"][aria-label*="设置"]'
+      ].join(',');
+      const bounds=player.getBoundingClientRect();
+      const isVisible=el=>{
+        const r=el?.getBoundingClientRect?.();
+        if(!r||r.width<=0||r.height<=0)return false;
+        const css=page.getComputedStyle?.(el);
+        if(css?.visibility==='hidden'||css?.display==='none')return false;
+        // The gear should overlap (or be immediately adjacent to) the
+        // playing video, never a site-wide account preference control.
+        const midX=r.left+r.width/2,midY=r.top+r.height/2;
+        return midX>=bounds.left-45&&midX<=bounds.right+45&&
+          midY>=bounds.top-45&&midY<=bounds.bottom+45;
+      };
+      const findGear=()=>{
+        const scopes=[player,player.parentElement,
+          player.closest?.('ytm-player'),
+          player.closest?.('#player-container'),
+          player.closest?.('#player'),
+          d.querySelector?.('ytm-player'),
+          d.querySelector?.('#player-container')].filter(Boolean);
+        const visited=new Set();
+        for(const scope of scopes){
+          if(visited.has(scope))continue;visited.add(scope);
+          for(const el of scope.querySelectorAll?.(selector)||[]){
+            if(isVisible(el))return el;
+          }
+        }
+        return null;
+      };
+      let gear=findGear();
+      if(!gear){
+        // Do not synthesize a tap (which may pause playback). Desktop-style
+        // controls can appear on a harmless mousemove over the player.
+        try{
+          const Mouse=page.MouseEvent||MouseEvent;
+          player.dispatchEvent(new Mouse('mousemove',{bubbles:true}));
+        }catch{}
+        await new Promise(resolve=>setTimeout(resolve,160));
+        gear=findGear();
+      }
+      if(!gear)throw Error('未发现当前视频的播放器设置按钮');
+      document.documentElement.classList.add('hmtc-yt-quality-mode');
+      close();
+      try{
+        gear.click();
+        await new Promise(resolve=>setTimeout(resolve,160));
+        // Desktop YouTube offers a Quality submenu. Mobile layouts may use
+        // a bottom sheet outside the player, whose item names are localized.
+        const itemSelector=[
+          '.ytp-settings-menu .ytp-menuitem',
+          'ytm-bottom-sheet-renderer [role="button"]',
+          'ytm-bottom-sheet-renderer button',
+          'ytm-menu-item','[role="dialog"] [role="menuitem"]',
+          '.bottom-sheet-container [role="button"]'
+        ].join(',');
+        const qualityTitle=/(?:^|[\s·:])(?:quality|画质|畫質|清晰度|品質|解像度)(?:\b|[\s·:])/i;
+        for(const el of d.querySelectorAll(itemSelector)){
+          const raw=String(el.getAttribute?.('aria-label')||el.textContent||'')
+            .replace(/\s+/g,' ').trim();
+          if(raw.length>75||!qualityTitle.test(raw)||!isVisible(el))continue;
+          el.click();
+          break;
+        }
+        setTimeout(()=>document.documentElement.classList.remove(
+          'hmtc-yt-quality-mode'),15000);
+        return {opened:true,message:'已点击 YouTube 原生设置，请在菜单中选择画质'};
+      }catch(error){
+        document.documentElement.classList.remove('hmtc-yt-quality-mode');
+        throw error;
+      }
+    }
+
     function close(){
       if(sheet)sheet.hidden=true;
       if(backdrop)backdrop.hidden=true;
@@ -302,18 +392,18 @@
         '<button type="button" data-action="ratePreset" data-rate="1.5">1.5×</button>',
         '<button type="button" data-action="ratePreset" data-rate="1.75">1.75×</button>',
         '<button type="button" data-action="ratePreset" data-rate="2">2×</button></div>',
-        '<div class="row"><label>画质</label><span class="quality" data-id="quality">—</span>',
-        '<button data-action="quality">原生菜单 ↗</button></div>',
-        '<div class="row"><label>选择</label>',
-        '<select data-id="qualityList" aria-label="原生可用清晰度">',
-        '<option value="">读取中…</option></select>',
-        '<button data-action="applyQuality">应用</button></div>',
+        '<div class="row"><label>当前画质</label>',
+        '<span class="quality" data-id="quality">—</span>',
+        '<button type="button" data-action="quality">打开画质设置</button></div>',
+        '<div class="hmtc-yt-quality-tip" data-id="qualityTip">',
+        '使用 YouTube 原生画质设置；若当前手机版不提供齿轮，请切换浏览器「桌面版网站」。',
+        '</div>',
         '<div class="row"><button data-action="mute" data-id="mute">🔊</button>',
         '<input type="range" data-id="slider" min="0" max="100" step="1">',
         '<strong data-id="vol">—</strong></div>',
         '<div class="actions"><button data-action="minus">−10</button>',
         '<button data-action="plus">＋10</button><button data-action="full">100%</button></div>',
-        '<div class="hint" data-id="hint">画质通过 YouTube 原生菜单选择；倍速以实际生效值为准。</div>',
+        '<div class="hint" data-id="hint">当前画质显示实际视频帧大小；不使用已经失效的画质 API。</div>',
         '<details class="hmtc-yt-preferences"><summary>⚙ 手势设置</summary>',
         '<div class="row"><label>统计</label><select data-id="mode">',
         '<option value="tap">左侧轻点打开</option>',
@@ -351,25 +441,18 @@
         if(action==='close'){close();return;}
         try{
           if(action==='quality'){
-            const result=await controls.openQualityMenu();
-            const current=p();
-            if(current){
-              document.documentElement.classList.add('hmtc-yt-quality-mode');
-              // Portal edges are in the top document, not descendants of the
-              // player. Leave native YouTube menus touchable for 20 seconds.
-              setTimeout(()=>document.documentElement.classList.remove(
-                'hmtc-yt-quality-mode'),20000);
+            try{
+              const result=await openYoutubeNativeQuality();
+              console.info('[Holodex Touch Controls]',result.message);
+            }catch(error){
+              // Do not leave a phantom dropdown with an enabled Apply button.
+              // The browser itself can expose Quality in its normal player UI.
+              if(sheet.hidden){sheet.hidden=false;backdrop.hidden=false;}
+              text('qualityTip',
+                '未找到当前手机版播放器的可操作画质齿轮。请轻点视频显示原生控件 → '+
+                '齿轮「设置」→「画质」→「高级」；若没有齿轮，在浏览器菜单开启「桌面版网站」。');
+              text('hint','当前无法由脚本直接打开画质：'+error.message);
             }
-            close();console.info('[HMTC]',result.message);return;
-          }
-          if(action==='applyQuality'){
-            const select=sheet.querySelector('[data-id="qualityList"]');
-            if(!select?.value){text('hint','没有检测到可用清晰度，请使用原生画质菜单');return;}
-            const applied=await controls.setQuality(select.value);
-            text('hint',applied.selectedInNativeMenu?
-              '已在 YouTube 原生菜单选择 '+applied.requested+'，实际画质可能稍后更新。':
-              'YouTube 没有确认画质选择');
-            setTimeout(refreshSheet,800);
             return;
           }
           if(action==='mute')toggleMute();
@@ -394,38 +477,9 @@
         if(e.key==='Escape'&&sheet&&!sheet.hidden)close();
       });
     }
-    async function loadWatchQuality(){
-      const select=sheet?.querySelector('[data-id="qualityList"]');
-      if(!select||sheet.hidden)return;
-      select.disabled=true;
-      try{
-        const result=await controls.qualityOptions();
-        if(sheet.hidden)return;
-        select.replaceChildren();
-        if(result.choices?.length){
-          for(const quality of result.choices){
-            const option=document.createElement('option');
-            option.value=quality;option.textContent=quality;
-            select.appendChild(option);
-          }
-          select.disabled=false;
-        }else{
-          const option=document.createElement('option');
-          option.value='';option.textContent='请使用原生菜单';
-          select.appendChild(option);
-        }
-      }catch(error){
-        if(sheet.hidden)return;
-        select.replaceChildren();
-        const option=document.createElement('option');option.value='';
-        option.textContent='画质选项不可读取';
-        select.appendChild(option);
-      }
-    }
     function open(){
       if(!supported()||!p())return;
       makePanel();sheet.hidden=false;backdrop.hidden=false;refreshSheet();
-      loadWatchQuality();
     }
     function toastVolume(n){
       if(!toast?.isConnected){toast=document.createElement('div');
