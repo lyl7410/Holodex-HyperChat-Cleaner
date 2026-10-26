@@ -71,10 +71,14 @@
       const viewportFrames = String(s.viewport || s.frames || '').slice(0,100);
       const dropped = getNumber(s.dropped_frames, s.droppedFrames,
         metric(/(\d+)\s+dropped\s+of\s+\d+/i));
+      // Interpret only fields whose units are explicit. Do not infer latency
+      // from an ambiguous generic "latency" or DVR seekable window.
+      const latencyMs=getNumber(s.live_latency_ms,s.liveLatencyMs);
       const liveLatencySeconds = getNumber(
         s.live_latency_seconds, s.liveLatencySeconds,
-        metric(/(?:Live Latency|直播延迟|直播延遲)\s*[:：]?\s*([\d,.]+)\s*s/i)
-      );
+        s.live_latency_sec, s.latency_to_live_seconds,
+        metric(/(?:Live Latency|Latency to Live Edge|直播延迟|直播延遲)\s*[:：]?\s*([\d,.]+)\s*(?:s|sec|秒)?/i)
+      ) ?? (latencyMs!=null ? latencyMs/1000 : null);
       return {
         bandwidthKbps: bandwidthKbps!=null&&bandwidthKbps>0?bandwidthKbps:null,
         bufferSeconds:bufferSeconds!=null&&bufferSeconds>=0?bufferSeconds:null,
@@ -131,7 +135,7 @@
           data.resolution=video.videoWidth+'×'+video.videoHeight+'（实际帧）';
       }
       const meaningful=data.bandwidthKbps!=null||data.bufferSeconds!=null||
-        !!data.resolution||!!data.codecs;
+        data.liveLatencySeconds!=null||!!data.resolution||!!data.codecs;
       return {available:meaningful,source,
         reason:meaningful?'':'嵌入播放器未提供原生详细统计',...data};
     }
