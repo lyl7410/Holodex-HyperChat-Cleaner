@@ -203,8 +203,8 @@
 
   GM_addStyle(`
   /* v0.3.1: two narrow INVISIBLE edge hit areas, avoiding Android iframe touch capture. */
-  .hmtc-edge{position:absolute;z-index:45;top:22%;height:56%;width:21%;
-    min-width:25px;max-width:62px;background:transparent;opacity:1;
+  .hmtc-edge{position:absolute;z-index:45;top:22%;height:56%;width:18%;
+    min-width:23px;max-width:56px;background:transparent;opacity:1;
     box-sizing:border-box;-webkit-user-select:none;user-select:none;
     -webkit-tap-highlight-color:transparent;overscroll-behavior:contain}
   .hmtc-edge--left{left:0;touch-action:pan-y;cursor:pointer}
@@ -529,7 +529,7 @@
             const target=rowMap.get(zone.dataset.key);
             if(!target)return;
             const t=event.touches[0];
-            drag={id:t.identifier,startY:t.clientY,startX:t.clientX,
+            drag={id:t.identifier,key:zone.dataset.key,startY:t.clientY,startX:t.clientX,
               base:target.volume,value:target.volume,
               range:Math.max(95,frame.getBoundingClientRect().height*.65),
               moved:false,lastSent:0};
@@ -539,7 +539,10 @@
             zone._drag=drag;
           },{passive:false});
           zone.addEventListener('touchmove',event=>{
-            if(!drag||event.touches.length!==1)return;
+            if(!drag)return;
+            if(event.touches.length!==1||drag.key!==zone.dataset.key){
+              drag=null;zone._drag=null;return;
+            }
             const t=[...event.touches].find(x=>x.identifier===drag.id);
             if(!t)return;
             if(event.cancelable)event.preventDefault();
@@ -559,7 +562,7 @@
           },{passive:false});
           zone.addEventListener('touchend',event=>{
             const g=drag;drag=null;zone._drag=null;
-            if(!g)return;
+            if(!g||g.key!==zone.dataset.key)return;
             const t=changedTouch(event,g.id);
             if(event.cancelable)event.preventDefault();
             event.stopPropagation();
