@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量与播放统计）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.3.1
-// @description  安卓兼容版：Holodex 视频左右窄边透明触控区，右侧上下滑动音量、左侧轻点统计，无常驻图标。
+// @version      0.4.0
+// @description  Holodex 双倍宽边缘音量手势、灵敏度配置、可选长按统计、精简直播信息；无常驻图标。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -177,9 +177,11 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.3.1', KEY='hmtc_enabled_v1';
+  const VERSION='0.4.0', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
+  const SENS_KEY='hmtc_volume_sensitivity_v1';
+  const STATS_MODE_KEY='hmtc_stats_trigger_v1';
   const get=(key,def)=>GM_getValue(key,def);
   const set=(key,value)=>GM_setValue(key,value);
   if(!get(KEY,true)){
@@ -192,6 +194,16 @@
   const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
   const token='hmtc-'+(crypto.randomUUID?.()||String(Date.now())+Math.random());
   const clamp=n=>Math.max(0,Math.min(100,Math.round(Number(n)||0)));
+  const getSensitivity=()=>{
+    const n=Number(get(SENS_KEY,1));
+    return Number.isFinite(n)?Math.round(Math.max(.4,Math.min(2.5,n))*10)/10:1;
+  };
+  const getStatsMode=()=>{
+    const m=get(STATS_MODE_KEY,'tap');
+    return ['tap','hold','both'].includes(m)?m:'tap';
+  };
+  const allowsTap=()=>['tap','both'].includes(getStatsMode());
+  const allowsHold=()=>['hold','both'].includes(getStatsMode());
   const rowMap=new Map(), pending=new Map();
   const nativePending=new Map(), NATIVE_TAG='hmtc-youtube-stats-v1';
   // v0.3.1 draws no icon, but transparent edge hit areas live on Holodex itself.
@@ -202,42 +214,88 @@
   let hintTimer=null,statsInterval=null;
 
   GM_addStyle(`
-  /* v0.3.1: two narrow INVISIBLE edge hit areas, avoiding Android iframe touch capture. */
-  .hmtc-edge{position:absolute;z-index:45;top:22%;height:56%;width:18%;
-    min-width:23px;max-width:56px;background:transparent;opacity:1;
+  /* Invisible zones occupy twice the v0.3.1 width, and are 78% tall. */
+  .hmtc-edge{position:absolute;z-index:45;top:11%;height:78%;width:36%;
+    min-width:46px;max-width:112px;background:transparent;
     box-sizing:border-box;-webkit-user-select:none;user-select:none;
     -webkit-tap-highlight-color:transparent;overscroll-behavior:contain}
   .hmtc-edge--left{left:0;touch-action:pan-y;cursor:pointer}
   .hmtc-edge--right{right:0;touch-action:none;cursor:ns-resize}
-  html.hmtc-debug .hmtc-edge--left{background:#35a7ff22;outline:1px dashed #36b7ff}
-  html.hmtc-debug .hmtc-edge--right{background:#4ddfa522;outline:1px dashed #51d7a1}
-  /* Temporary volume toast is the ONLY visible on-video UI when debug is off. */
+  html.hmtc-debug .hmtc-edge--left{background:#37aaff33;outline:1px dashed #73c9ff}
+  html.hmtc-debug .hmtc-edge--right{background:#48d9ac33;outline:1px dashed #70e7be}
   #hmtc-volume-toast{position:fixed;z-index:2147482999;pointer-events:none;
-    padding:6px 12px;border-radius:10px;background:#101725d9;color:#fff;
-    font:700 16px/1.3 system-ui;box-shadow:0 2px 12px #0008;min-width:54px;
-    text-align:center;transform:translate(-50%,-50%)}
+    display:flex;flex-direction:column;gap:8px;min-width:110px;
+    padding:12px 14px;border-radius:14px;color:#f7fbff;text-align:center;
+    background:linear-gradient(145deg,rgba(21,35,50,.94),rgba(24,27,41,.94));
+    border:1px solid #a6e4f742;box-shadow:0 8px 24px #0009;
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    font:700 22px/1.1 system-ui,sans-serif;transform:translate(-50%,-50%)}
   #hmtc-volume-toast[hidden]{display:none!important}
-  #hmtc-sheet{position:fixed;z-index:2147483000;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));max-width:460px;max-height:74vh;overflow:auto;margin:0 auto;background:#1a1e28f7;border:1px solid #ffffff54;border-radius:17px;padding:15px;color:#fff;box-shadow:0 8px 32px #000b;font:14px/1.45 system-ui,sans-serif;touch-action:pan-y;overscroll-behavior:contain;box-sizing:border-box}
-  #hmtc-sheet[hidden]{display:none!important}
-  #hmtc-sheet *{box-sizing:border-box}
-  #hmtc-sheet button{min-height:43px;min-width:44px;border:1px solid #ffffff33;border-radius:10px;padding:6px 10px;background:#343b4e;color:white;cursor:pointer;font:600 14px system-ui}
-  #hmtc-sheet button:active{background:#57657d}
-  #hmtc-sheet .head{display:flex;align-items:center;gap:8px}
-  #hmtc-sheet .title{font-weight:700;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  #hmtc-sheet .volume{display:flex;gap:8px;align-items:center;margin:12px 0}
-  #hmtc-sheet .volume input{flex:1;width:100%;min-width:0;height:38px;accent-color:#48d1ce;touch-action:pan-x}
-  #hmtc-sheet .value{min-width:46px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
-  #hmtc-sheet .actions{display:flex;gap:6px}
+  #hmtc-volume-toast .hmtc-toast-label{font:600 11px/1.2 system-ui,sans-serif;color:#b9d2dd;letter-spacing:.1em}
+  #hmtc-volume-toast .hmtc-toast-track{height:5px;background:#ffffff24;border-radius:100px;overflow:hidden}
+  #hmtc-volume-toast .hmtc-toast-fill{height:100%;width:0;background:linear-gradient(90deg,#50d6d0,#7ebdff);border-radius:100px;transition:width 70ms linear}
+  #hmtc-sheet,#hmtc-settings{
+    position:fixed;z-index:2147483000;left:10px;right:10px;
+    bottom:calc(10px + env(safe-area-inset-bottom,0px));
+    max-width:460px;max-height:min(82vh,670px);overflow:auto;margin:0 auto;
+    background:linear-gradient(155deg,rgba(27,37,51,.985),rgba(16,20,31,.99));
+    color:#f1f6ff;border:1px solid #93bad13d;border-radius:22px;
+    box-shadow:0 20px 60px #000c,0 0 0 1px #ffffff09;
+    padding:18px;box-sizing:border-box;
+    font:14px/1.45 system-ui,-apple-system,sans-serif;
+    touch-action:pan-y;overscroll-behavior:contain;
+    -webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px)}
+  #hmtc-sheet[hidden],#hmtc-settings[hidden]{display:none!important}
+  #hmtc-sheet *,#hmtc-settings *{box-sizing:border-box}
+  #hmtc-sheet button,#hmtc-settings button{
+    min-height:42px;min-width:42px;border:1px solid #ffffff25;
+    border-radius:11px;background:#354155;color:#eff8ff;padding:8px 12px;
+    cursor:pointer;touch-action:manipulation;font:600 13px system-ui}
+  #hmtc-sheet button:active,#hmtc-settings button:active{background:#51627e}
+  #hmtc-sheet .head,#hmtc-settings .head{display:flex;align-items:center;gap:10px}
+  #hmtc-sheet .title,#hmtc-settings .title{
+    font-weight:730;flex:1;min-width:0;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;font-size:16px}
+  #hmtc-sheet .eyebrow{color:#91cbd9;font:700 11px system-ui;letter-spacing:.09em;margin-bottom:3px}
+  #hmtc-sheet .net{
+    padding:17px 16px 15px;background:linear-gradient(135deg,#17454b,#193450 86%);
+    border-radius:17px;border:1px solid #7fe4e038;margin-top:14px;
+    box-shadow:inset 0 1px 0 #ffffff13}
+  #hmtc-sheet .speed{font-size:clamp(30px,8vw,39px);line-height:1.16;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-.02em;margin:5px 0}
+  #hmtc-sheet .unit{font-size:14px;font-weight:600;color:#b2e9e7;margin-left:5px}
+  #hmtc-sheet .sub{font-size:11px;color:#b7d1db;line-height:1.5;overflow-wrap:anywhere}
+  #hmtc-sheet .grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:11px}
+  #hmtc-sheet .metric{padding:13px 12px;border-radius:14px;
+    background:rgba(255,255,255,.065);border:1px solid #ffffff16;min-width:0}
+  #hmtc-sheet .metric label{display:block;font-size:11px;color:#b8c7d7;margin-bottom:5px}
+  #hmtc-sheet .metric strong{font-size:16px;font-weight:700;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+  #hmtc-sheet .volume{display:flex;gap:9px;align-items:center;margin:14px 0 11px}
+  #hmtc-sheet .volume input{flex:1;width:100%;min-width:0;height:40px;accent-color:#61d7d1;touch-action:pan-x}
+  #hmtc-sheet .value{min-width:50px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+  #hmtc-sheet .actions{display:flex;gap:7px;margin-top:9px}
   #hmtc-sheet .actions button{flex:1}
-  #hmtc-sheet .net{padding:10px 12px;background:#233d45;border-radius:12px;margin-top:12px}
-  #hmtc-sheet .speed{font-size:27px;font-weight:700;font-variant-numeric:tabular-nums}
-  #hmtc-sheet .sub{color:#c5d0d7;font-size:11px}
-  #hmtc-sheet .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
-  #hmtc-sheet .grid>div{padding:8px;border-radius:8px;background:#ffffff13;min-width:0}
-  #hmtc-sheet .grid label{font-size:11px;color:#aeb8c9;display:block}
-  #hmtc-sheet .grid strong{font-size:13px;overflow-wrap:anywhere}
-  #hmtc-sheet .note{font-size:11px;color:#bcc3d0;margin-top:10px;line-height:1.5}
-  @media(orientation:landscape){#hmtc-sheet{left:auto;right:9px;bottom:8px;margin:0;max-width:min(380px,65vw);max-height:calc(100vh - 16px);padding:11px}#hmtc-sheet .grid{gap:5px;margin-top:7px}#hmtc-sheet .volume{margin:7px 0}}
+  #hmtc-sheet .note{font-size:11px;color:#adbdc9;line-height:1.5;margin-top:12px}
+  #hmtc-sheet .footer{display:flex;gap:8px;margin-top:13px}
+  #hmtc-sheet .footer button{flex:1;background:#26354c}
+  #hmtc-sheet .footer button[data-action="settings"]{flex:0 0 auto}
+  #hmtc-settings .setting{margin-top:18px}
+  #hmtc-settings label{display:block;font-size:13px;font-weight:650;color:#d9e5ed;margin-bottom:9px}
+  #hmtc-settings .setting-summary{font-size:11px;color:#aabbc9;margin-top:6px}
+  #hmtc-settings input[type=range]{width:100%;accent-color:#61d7d1;height:36px;touch-action:pan-x}
+  #hmtc-settings select{width:100%;border:1px solid #ffffff3a;border-radius:11px;
+    min-height:46px;background:#29384b;color:#fff;font:600 14px system-ui;padding:8px}
+  #hmtc-settings .presets{display:flex;gap:6px}
+  #hmtc-settings .presets button{flex:1}
+  #hmtc-settings .setting b{color:#84e4df}
+  @media(orientation:landscape){
+    #hmtc-sheet,#hmtc-settings{left:auto;right:9px;bottom:8px;margin:0;
+      max-width:min(390px,68vw);max-height:calc(100vh - 16px);padding:13px;border-radius:16px}
+    #hmtc-sheet .net{margin-top:8px;padding:12px}
+    #hmtc-sheet .grid{gap:6px;margin-top:7px}
+    #hmtc-sheet .metric{padding:8px 10px}
+    #hmtc-sheet .volume{margin:7px 0}
+  }
+
   `);
 
   // This function is serialized into the real Holodex page world.
@@ -460,15 +518,19 @@
     if(!volumeToast?.isConnected){
       volumeToast=document.createElement('div');
       volumeToast.id='hmtc-volume-toast';
+      volumeToast.innerHTML='<span class="hmtc-toast-label">音量 VOL</span>'+
+        '<strong class="hmtc-toast-number">—</strong>'+
+        '<div class="hmtc-toast-track"><div class="hmtc-toast-fill"></div></div>';
       document.body.appendChild(volumeToast);
     }
     const rect=frame.getBoundingClientRect();
-    volumeToast.style.left=Math.max(32,Math.min(innerWidth-32,rect.right-35))+'px';
-    volumeToast.style.top=Math.max(20,Math.min(innerHeight-20,rect.top+rect.height*.5))+'px';
-    volumeToast.textContent=value+'%';
+    volumeToast.style.left=Math.max(62,Math.min(innerWidth-62,rect.left+rect.width*.66))+'px';
+    volumeToast.style.top=Math.max(53,Math.min(innerHeight-53,rect.top+rect.height*.48))+'px';
+    volumeToast.querySelector('.hmtc-toast-number').textContent=value+'%';
+    volumeToast.querySelector('.hmtc-toast-fill').style.width=value+'%';
     volumeToast.hidden=false;
     clearTimeout(toastTimer);
-    toastTimer=setTimeout(()=>{if(volumeToast)volumeToast.hidden=true;},750);
+    toastTimer=setTimeout(()=>{if(volumeToast)volumeToast.hidden=true;},1050);
   }
   function changedTouch(event,identifier){
     return [...(event.changedTouches||[])].find(t=>t.identifier===identifier)||null;
