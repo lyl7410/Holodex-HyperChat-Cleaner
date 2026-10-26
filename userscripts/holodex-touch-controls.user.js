@@ -277,7 +277,11 @@
         '<select data-id="rate" aria-label="播放速度"><option value="1">1×</option></select>',
         '<button data-action="rateUp">＋</button></div>',
         '<div class="row"><label>画质</label><span class="quality" data-id="quality">—</span>',
-        '<button data-action="quality">原生画质 ↗</button></div>',
+        '<button data-action="quality">原生菜单 ↗</button></div>',
+        '<div class="row"><label>选择</label>',
+        '<select data-id="qualityList" aria-label="原生可用清晰度">',
+        '<option value="">读取中…</option></select>',
+        '<button data-action="applyQuality">应用</button></div>',
         '<div class="row"><button data-action="mute" data-id="mute">🔊</button>',
         '<input type="range" data-id="slider" min="0" max="100" step="1">',
         '<strong data-id="vol">—</strong></div>',
@@ -299,6 +303,9 @@
         }catch(error){text('hint','倍速设置失败：'+error.message);}
       });
       sheet.addEventListener('click',async e=>{
+        if(e.target.closest('.metric')||e.target.closest('.head strong')){
+          close();return;
+        }
         const action=e.target.closest('button[data-action]')?.dataset.action;
         if(!action)return;
         if(action==='close'){close();return;}
@@ -306,6 +313,16 @@
           if(action==='quality'){
             const result=await controls.openQualityMenu();
             close();console.info('[HMTC]',result.message);return;
+          }
+          if(action==='applyQuality'){
+            const select=sheet.querySelector('[data-id="qualityList"]');
+            if(!select?.value){text('hint','没有检测到可用清晰度，请使用原生画质菜单');return;}
+            const applied=await controls.setQuality(select.value);
+            text('hint',applied.selectedInNativeMenu?
+              '已在 YouTube 原生菜单选择 '+applied.requested+'，实际画质可能稍后更新。':
+              'YouTube 没有确认画质选择');
+            setTimeout(refreshSheet,800);
+            return;
           }
           if(action==='mute')toggleMute();
           if(action==='minus')volume(vol()-10);
@@ -327,9 +344,38 @@
         if(e.key==='Escape'&&sheet&&!sheet.hidden)close();
       });
     }
+    async function loadWatchQuality(){
+      const select=sheet?.querySelector('[data-id="qualityList"]');
+      if(!select||sheet.hidden)return;
+      select.disabled=true;
+      try{
+        const result=await controls.qualityOptions();
+        if(sheet.hidden)return;
+        select.replaceChildren();
+        if(result.choices?.length){
+          for(const quality of result.choices){
+            const option=document.createElement('option');
+            option.value=quality;option.textContent=quality;
+            select.appendChild(option);
+          }
+          select.disabled=false;
+        }else{
+          const option=document.createElement('option');
+          option.value='';option.textContent='请使用原生菜单';
+          select.appendChild(option);
+        }
+      }catch(error){
+        if(sheet.hidden)return;
+        select.replaceChildren();
+        const option=document.createElement('option');option.value='';
+        option.textContent='画质选项不可读取';
+        select.appendChild(option);
+      }
+    }
     function open(){
       if(!supported()||!p())return;
       makePanel();sheet.hidden=false;backdrop.hidden=false;refreshSheet();
+      loadWatchQuality();
     }
     function toastVolume(n){
       if(!toast?.isConnected){toast=document.createElement('div');
