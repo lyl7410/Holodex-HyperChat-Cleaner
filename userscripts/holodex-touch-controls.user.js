@@ -163,11 +163,19 @@
     function toggleNative(){
       const p=player();
       if(!p)throw new Error('播放器尚未就绪');
-      if(monitor.active&&monitor.forced){
-        // The native diagnostics keep updating in either visual mode.
-        monitor.manual=!monitor.manual;
-        silent(!monitor.manual);
-        return {visible:monitor.manual};
+      if(monitor.active){
+        if(monitor.forced){
+          // Keep collecting while switching between hidden and visible native UI.
+          monitor.manual=!monitor.manual;
+          silent(!monitor.manual);
+          return {visible:monitor.manual};
+        }
+        // Original panel was already visible before Holodex monitoring began.
+        // Convert it to silent collection when the user hides it in the custom UI.
+        monitor.forced=true;
+        monitor.manual=false;
+        silent(true);
+        return {visible:false};
       }
       const was=isNativeVisible(p);
       if(was===true&&typeof p.hideVideoInfo==='function'){
@@ -364,7 +372,10 @@
   #hmtc-sheet .title,#hmtc-settings .title{
     font-weight:730;flex:1;min-width:0;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis;font-size:16px}
-  #hmtc-sheet .eyebrow{color:#91cbd9;font:700 11px system-ui;letter-spacing:.09em;margin-bottom:3px}
+  #hmtc-sheet .eyebrow{color:#91cbd9;font:700 11px system-ui;letter-spacing:.09em;
+    margin-bottom:5px;cursor:pointer;min-height:23px;display:flex;align-items:center;justify-content:center}
+  #hmtc-sheet .head{min-height:43px;cursor:pointer}
+  #hmtc-sheet .head button{cursor:pointer}
   #hmtc-sheet .net{
     padding:17px 16px 15px;background:linear-gradient(135deg,#17454b,#193450 86%);
     border-radius:17px;border:1px solid #7fe4e038;margin-top:14px;
@@ -834,8 +845,9 @@
     sheet.setAttribute('role','dialog');
     sheet.setAttribute('aria-label','YouTube 当前视频控制和详细统计');
     sheet.innerHTML=[
-      '<div class="eyebrow">HOLODEX · LIVE MONITOR</div>',
-      '<div class="head"><div class="title" data-field="title">YouTube</div>',
+      '<div class="eyebrow" data-action="dismissHeader" title="轻点收起">HOLODEX · LIVE MONITOR　⌄ 轻点收起</div>',
+      '<div class="head" data-action="dismissHeader" title="轻点标题收起">',
+      '<div class="title" data-field="title">YouTube</div>',
       '<button type="button" data-action="close" aria-label="关闭">✕</button></div>',
       '<div class="net"><div class="sub">YouTube 当前视频 · Connection Speed</div>',
       '<div><span class="speed" data-field="speed">—</span><span class="unit">Mbps</span></div>',
@@ -867,7 +879,10 @@
     });
     sheet.addEventListener('click',async e=>{
       const btn=e.target.closest('button[data-action]');
-      if(!btn)return;
+      if(!btn){
+        if(e.target.closest('[data-action="dismissHeader"]'))closeSheet();
+        return;
+      }
       const action=btn.dataset.action;
       if(action==='close'){closeSheet();return;}
       if(action==='settings'){openSettings();return;}
@@ -897,6 +912,17 @@
       if(settings?.hidden===false)closeSettings();
       else if(!sheet.hidden)closeSheet();
     });
+    // Tapping exposed space ABOVE the sheet dismisses it, without requiring
+    // the tiny X in the upper-right. Never swallow slider/button interactions.
+    document.addEventListener('pointerdown',event=>{
+      if(settings?.hidden===false){
+        if(!settings.contains(event.target))closeSettings();
+        return;
+      }
+      if(!sheet.hidden && !sheet.contains(event.target) &&
+         event.clientY < sheet.getBoundingClientRect().top)
+        closeSheet();
+    },true);
   }
   let settings=null;
   function makeSettings(){
@@ -953,6 +979,48 @@
   }
   function closeSettings(){if(settings)settings.hidden=true;}
 
+  // Track only the currently selected iframe. If the modal changes videos or
+  // closes, stop the private diagnostics and restore the original YouTube state.
+  let nativeCollector=null;
+  function collectorKey(row,target){
+    return row.layoutId+':'+row.videoId+':'+row.index;
+  }
+  function stopNativeCollector(){
+    const previous=nativeCollector;
+    nativeCollector=null;
+    if(!previous)return;
+    nativeRequest(previous.row,'monitorStop',1100).catch(()=>{
+      // Cross-origin frame navigated/closed; its old context no longer exists.
+    });
+  }
+  function ensureNativeCollector(row){
+    const target=nativeFrame(row);
+    if(!target)return Promise.resolve(false);
+    const key=collectorKey(row,target);
+    if(nativeCollector &&
+       (nativeCollector.key!==key || nativeCollector.win!==target.frame.contentWindow))
+      stopNativeCollector();
+    if(!nativeCollector){
+      nativeCollector={key,win:target.frame.contentWindow,
+        row:{index:row.index,layoutId:row.layoutId,videoId:row.videoId},
+        enabled:false,pending:null,retryAfter:0};
+    }
+    const state=nativeCollector;
+    if(state.enabled)return Promise.resolve(true);
+    if(state.pending)return state.pending;
+    if(Date.now()<state.retryAfter)return Promise.resolve(false);
+    state.pending=nativeRequest(state.row,'monitorStart',1500).then(result=>{
+      if(nativeCollector!==state)return false;
+      state.enabled=!!result?.enabled;
+      if(!state.enabled)state.retryAfter=Date.now()+6500;
+      return state.enabled;
+    }).catch(()=>{
+      if(nativeCollector===state)state.retryAfter=Date.now()+6500;
+      return false;
+    }).finally(()=>{state.pending=null;});
+    return state.pending;
+  }
+
   function renderYouTubeStats(data,reason) {
     if(!data?.available){
       field('speed','—');
@@ -996,8 +1064,11 @@
     }).catch(error=>{
       if(stillActive())field('position','暂时无法读取');
     });
-    const native=nativeRequest(row,'stats',1900).then(v=>{
-      if(stillActive())renderYouTubeStats(v);
+    const native=ensureNativeCollector(row).then(()=>{
+      if(!stillActive())return;
+      return nativeRequest(row,'stats',1750);
+    }).then(v=>{
+      if(v&&stillActive())renderYouTubeStats(v);
     }).catch(error=>{
       if(stillActive())renderYouTubeStats(null,error.message||'YouTube iframe 未响应');
     });
@@ -1006,6 +1077,8 @@
   }
   function openSheet(row){
     makeSheet();
+    if(active&&(active.layoutId!==row.layoutId||active.videoId!==row.videoId))
+      stopNativeCollector();
     active={layoutId:row.layoutId,videoId:row.videoId};
     sheet.hidden=false;
     field('title',row.title||row.videoId);
@@ -1013,12 +1086,13 @@
     renderYouTubeStats(null,'正在读取 YouTube 嵌入播放器…');
     field('position','读取中…');
     stats();
-    clearInterval(statsInterval);statsInterval=setInterval(stats,2400);
+    clearInterval(statsInterval);statsInterval=setInterval(stats,1800);
   }
   function closeSheet(){
     active=null;
     if(sheet)sheet.hidden=true;
     clearInterval(statsInterval);statsInterval=null;
+    stopNativeCollector();
   }
   async function refresh(){
     if(!installed||listing||!isMulti()||!coarse||document.hidden)return;
