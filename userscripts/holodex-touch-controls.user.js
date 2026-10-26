@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.5.0
-// @description  Holodex 多视图智能自动播放未播放视频（PC/安卓），保留音量手势、原生播放统计及手动暂停保护。
+// @version      0.5.1
+// @description  智能自动播放修复：刷新启动、误判暂停防护、自动播放拦截诊断；保留 PC/安卓播放控制与统计。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -301,7 +301,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.5.0', KEY='hmtc_enabled_v1';
+  const VERSION='0.5.1', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -518,9 +518,12 @@
     // existing YouTube IFrame API without crossing an iframe touch boundary.
     // Configure it from the userscript; do not start any video until configured.
     const autoCfg={enabled:false,onReturn:true,respectPause:true,muteFallback:false};
-    const AUTO_MANUAL_KEY='hmtc_autoplay_manual_pause_v1';
+    // v2 deliberately ignores v0.5.0's stored false-positive pause markers.
+    const AUTO_MANUAL_KEY='hmtc_autoplay_manual_pause_v2';
     const AUTO_MANUAL_AGE=12*60*60*1000;
     const attempts=new Map(),manualPauses=new Map(),wasPlayingHidden=new Set();
+    const activeCallbacks=new Map();
+    let blockedListenerSerial=0;
     const knownAutoCells=new Set();
     let lastForegroundRetry=0;
     try {
@@ -563,6 +566,30 @@
         return Number.isFinite(state)?state:null;
       }catch{return null;}
     }
+    // YouTube's documented onAutoplayBlocked event may identify policy denial.
+    // The IFrame API requires a globally named callback string, not a function.
+    function subscribeAutoplayBlocked(key,player,track){
+      if(typeof player?.addEventListener!=='function')return;
+      const callback='__hmtcBlocked_'+(++blockedListenerSerial);
+      try{
+        win[callback]=()=>{
+          if(attempts.get(key)!==track)return;
+          track.blockedAt=Date.now();
+          track.lastFailure='浏览器拒绝了自动播放';
+        };
+        player.addEventListener('onAutoplayBlocked',callback);
+        activeCallbacks.set(key,{player,callback});
+      }catch{
+        try{delete win[callback];}catch{}
+      }
+    }
+    function removeAutoplayListener(key){
+      const entry=activeCallbacks.get(key);
+      if(!entry)return;
+      activeCallbacks.delete(key);
+      try{entry.player.removeEventListener?.('onAutoplayBlocked',entry.callback);}catch{}
+      try{delete win[entry.callback];}catch{}
+    }
     function nextRetryCampaign(){
       for(const [key,track] of attempts){
         if(track.tries>=4&&track.campaigns<2&&
@@ -594,25 +621,35 @@
         if(state===null){result.waiting++;continue;}
         let track=attempts.get(key);
         if(!track||track.player!==player){
+          if(track)removeAutoplayListener(key);
           track={player,lastState:null,lastTry:0,tries:0,gestureTries:0,
-            returned:false,suppressed:false,everPlaying:false,campaigns:0};
+            returned:false,suppressed:false,everPlaying:false,campaigns:0,
+            playingSince:0,blockedAt:0,lastFailure:''};
           attempts.set(key,track);
+          subscribeAutoplayBlocked(key,player,track);
         }
         // 1 = playing, 3 = buffering. Neither should ever be restarted.
         if(state===1||state===3){
           result.playing++;
-          if(state===1)track.everPlaying=true;
+          if(state===1){
+            if(!track.playingSince)track.playingSince=now;
+            track.everPlaying=true;track.blockedAt=0;track.lastFailure='';
+          }
           track.lastState=state;track.tries=0;track.gestureTries=0;
           track.returned=false;track.suppressed=false;
           unmarkManual(key);
           continue;
         }
         if(state===0){track.lastState=state;result.ended++;continue;}
-        // Observe a foreground transition from playback to pause. Since the
-        // IFrame API does not attribute pauses to a user, treat any visible
-        // playing->paused transition as intentionally paused (conservative).
+        // Do not persist autoplay denial as a user pause. YouTube may report
+        // PLAYING fleetingly, then pause because the browser blocks sound.
+        // Only a sufficiently established playback followed by pause can be
+        // reasonably classified as intentional without event attribution.
         if(state===2&&(track.lastState===1||
-             (track.lastState===3&&track.everPlaying))&&!track.returned){
+             (track.lastState===3&&track.everPlaying))&&!track.returned&&
+           track.playingSince>0&&now-track.playingSince>=6500&&
+           (!track.lastTry||now-track.lastTry>=7000)&&
+           (!track.blockedAt||now-track.blockedAt>=12000)){
           markManual(key);
         }
         track.lastState=state;
@@ -645,24 +682,66 @@
           }
           player.playVideo();
           track.lastTry=now;track.tries++;
-          // Some providers update state synchronously. Capture it now so a
-          // quick user pause before the next scan is not overwritten.
+          // playVideo() returning does not mean playback was authorized.
+          // The next state sample and onAutoplayBlocked decide success.
+          track.lastFailure='';
           const after=getPlaybackState(player);
-          if(after===1){track.lastState=after;track.everPlaying=true;}
-          else if(after===3)track.lastState=after;
+          if(after===1){
+            track.lastState=after;
+            track.everPlaying=true;
+            if(!track.playingSince)track.playingSince=now;
+          }else if(after===3)track.lastState=after;
           result.attempted++;
-        }catch{
+        }catch(error){
           track.lastTry=now;track.tries++;
+          track.lastFailure=String(error?.message||'播放器拒绝播放').slice(0,100);
           result.blocked++;
         }
       }
       // Do not reuse an old attempt record if Holodex removed/replaced its cell.
       for(const key of attempts.keys()){
-        if(!current.has(key)){attempts.delete(key);unmarkManual(key);}
+        if(!current.has(key)){
+          removeAutoplayListener(key);
+          attempts.delete(key);unmarkManual(key);
+        }
       }
       lastAutoSummary=result;
       return result;
     }
+    function autoDiagnostics(){
+      const rows=[];
+      for(const {key,vm} of autoplayCells()){
+        const state=getPlaybackState(vm.ytPlayer);
+        const track=attempts.get(key);
+        const protectedPause=autoCfg.respectPause&&manualPauses.has(key);
+        const reasons={
+          '-1':'尚未开始','0':'已结束','1':'播放中',
+          '2':'已暂停','3':'缓冲中','5':'已加载待播放'
+        };
+        let issue=state===null?'等待播放器初始化':
+          state===1?'正在播放':state===3?'正在缓冲':
+          state===0?'播放已结束（不自动重播）':
+          protectedPause?'受保护的手动暂停':
+          track?.lastFailure||(
+            track?.tries>=4&&track?.gestureTries>=2?'自动尝试已用尽':
+            track?.tries>=4?'普通自动尝试已用尽，可在页面点一下':
+            state===2||state===5||state===-1?'等待下一次自动尝试':
+            '播放器状态待确认');
+        if(track?.blockedAt&&Date.now()-track.blockedAt<60000)
+          issue='浏览器已阻止自动播放（可能需要手势或静音）';
+        rows.push({
+          key,title:String(vm.video?.title||vm.video?.id||key).slice(0,48),
+          state,description:reasons[String(state)]||'未知状态',
+          issue,tries:track?.tries||0,campaigns:track?.campaigns||0,
+          muted:!!vm.muted,playerReady:!!vm.ytPlayer
+        });
+      }
+      return {version:'0.5.1',enabled:autoCfg.enabled,
+        onReturn:autoCfg.onReturn,respectPause:autoCfg.respectPause,
+        muteFallback:autoCfg.muteFallback,hidden:!!doc.hidden,
+        detected:rows.length,rows,manualPaused:manualPauses.size};
+    }
+
     function autoConfigure(msg){
       const wasEnabled=autoCfg.enabled;
       for(const name of ['enabled','onReturn','respectPause','muteFallback'])
@@ -739,6 +818,8 @@
           return reply({ok:true,data:{
             ...autoCfg,summary:lastAutoSummary,manualPaused:manualPauses.size
           }});
+        if(msg.action==='autoDiagnose')
+          return reply({ok:true,data:autoDiagnostics()});
         if(typeof msg.layoutId!=='string'||!valid(msg.videoId))
           return reply({ok:false,error:'没有对应的视频 ID'});
         const vm=locate(msg.layoutId,msg.videoId);
