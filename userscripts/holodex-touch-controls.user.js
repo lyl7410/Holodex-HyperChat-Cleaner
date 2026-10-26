@@ -576,12 +576,13 @@
         let track=attempts.get(key);
         if(!track||track.player!==player){
           track={player,lastState:null,lastTry:0,tries:0,gestureTries:0,
-            returned:false,suppressed:false};
+            returned:false,suppressed:false,everPlaying:false};
           attempts.set(key,track);
         }
         // 1 = playing, 3 = buffering. Neither should ever be restarted.
         if(state===1||state===3){
           result.playing++;
+          if(state===1)track.everPlaying=true;
           track.lastState=state;track.tries=0;track.gestureTries=0;
           track.returned=false;track.suppressed=false;
           unmarkManual(key);
@@ -591,8 +592,8 @@
         // Observe a foreground transition from playback to pause. Since the
         // IFrame API does not attribute pauses to a user, treat any visible
         // playing->paused transition as intentionally paused (conservative).
-        if(state===2&&(track.lastState===1||track.lastState===3)&&
-           !track.returned){
+        if(state===2&&(track.lastState===1||
+             (track.lastState===3&&track.everPlaying))&&!track.returned){
           markManual(key);
         }
         track.lastState=state;
@@ -628,7 +629,8 @@
           // Some providers update state synchronously. Capture it now so a
           // quick user pause before the next scan is not overwritten.
           const after=getPlaybackState(player);
-          if(after===1||after===3)track.lastState=after;
+          if(after===1){track.lastState=after;track.everPlaying=true;}
+          else if(after===3)track.lastState=after;
           result.attempted++;
         }catch{
           track.lastTry=now;track.tries++;
