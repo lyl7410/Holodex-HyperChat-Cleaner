@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.5.3
-// @description  Holodex 自动播放跨刷新状态持久化：Holodex 本地同步备份＋脚本管理器存储双保险；安卓手势及统计保留。
+// @version      0.5.4
+// @description  Holodex 智能自动播放：针对 Tampermonkey 强化跨刷新持久化校验、启动状态恢复和逐路诊断；保留音量手势与统计。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -12,6 +12,8 @@
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM.getValue
+// @grant        GM.setValue
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
 // @updateURL    https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js
@@ -301,7 +303,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.5.3', KEY='hmtc_enabled_v1';
+  const VERSION='0.5.4', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -332,102 +334,227 @@
   };
   const allowsTap=()=>['tap','both'].includes(getStatsMode());
   const allowsHold=()=>['hold','both'].includes(getStatsMode());
-  // ScriptCat's GM_setValue may be queued in its extension context. A quick
-  // reload can discard an uncommitted write. The v0.5.2 in-memory Map only
-  // covered the current document, causing "enabled" to revert after refresh.
-  //
-  // Persist EXPLICIT user preferences synchronously on the Holodex origin
-  // before mirroring to GM storage. A page reload restores those selections
-  // even if GM's background write is still pending. No preference is created
-  // here unless a user actually changes a setting.
+  // Tampermonkey has both synchronous GM_getValue/GM_setValue and modern
+  // promise-based GM.getValue/GM.setValue. Keep a canonical manager-owned
+  // record; verify writes, and hydrate from the modern API BEFORE enabling
+  // the in-page autoplay engine. localStorage is just a fallback.
   const AUTO_BACKUP_KEY='hmtc.touch-controls.autoplay-preferences.v1';
+  const AUTO_RECORD_KEY='hmtc.autoplay.settings.canonical.v2';
   const AUTO_KEYS=[AUTO_ENABLED_KEY,AUTO_RETURN_KEY,AUTO_PAUSE_KEY,AUTO_MUTE_KEY];
   const autoLocalValues=new Map();
+  let prefRevision=0,prefInteractionEpoch=0,prefUpdatedAt=0;
   let autoStorageAvailable=true,autoLastWriteError='';
+  let preferenceSource='默认/原有 GM 设置';
+  let autoGmRecordValid=false,autoGmSyncVerified=false,autoGmAsyncVerified=false;
+  let autoHydrationComplete=false;
+
   function readAutoBackup(){
     try{
-      const text=window.localStorage.getItem(AUTO_BACKUP_KEY);
-      if(!text)return {};
-      const obj=JSON.parse(text);
-      if(obj?.schema!==1||!obj.values||typeof obj.values!=='object')return {};
+      const raw=window.localStorage.getItem(AUTO_BACKUP_KEY);
+      if(!raw)return {};
+      const record=JSON.parse(raw);
+      if(record?.schema!==1||!record.values||typeof record.values!=='object')
+        return {};
       const clean={};
       for(const key of AUTO_KEYS)
-        if(typeof obj.values[key]==='boolean')clean[key]=obj.values[key];
+        if(typeof record.values[key]==='boolean')clean[key]=record.values[key];
+      autoStorageAvailable=true;
       return clean;
     }catch(error){
       autoStorageAvailable=false;
-      autoLastWriteError=String(error?.message||error).slice(0,100);
+      autoLastWriteError=String(error?.message||error).slice(0,120);
       return {};
     }
   }
-  const initialAutoBackup=readAutoBackup();
+  const previousBackup=readAutoBackup();
   for(const key of AUTO_KEYS)
-    if(typeof initialAutoBackup[key]==='boolean')
-      autoLocalValues.set(key,initialAutoBackup[key]);
+    if(typeof previousBackup[key]==='boolean')autoLocalValues.set(key,previousBackup[key]);
+  if(AUTO_KEYS.some(key=>typeof previousBackup[key]==='boolean'))
+    preferenceSource='Holodex 本地备份（旧版）';
   function saveAutoBackup(){
-    const values=readAutoBackup();
-    for(const key of AUTO_KEYS)
-      if(autoLocalValues.has(key))values[key]=autoLocalValues.get(key);
     try{
+      const values=readAutoBackup();
+      for(const key of AUTO_KEYS)
+        if(autoLocalValues.has(key))values[key]=autoLocalValues.get(key);
       window.localStorage.setItem(AUTO_BACKUP_KEY,
         JSON.stringify({schema:1,updatedAt:Date.now(),values}));
       autoStorageAvailable=true;
-      autoLastWriteError='';
       return true;
     }catch(error){
       autoStorageAvailable=false;
-      autoLastWriteError=String(error?.message||error).slice(0,100);
+      autoLastWriteError=String(error?.message||error).slice(0,120);
       return false;
     }
   }
-  const autoValue=(key,fallback)=>autoLocalValues.has(key)?
-    autoLocalValues.get(key):get(key,fallback);
-  async function mirrorAutoToGM(key,value){
-    // Prefer ScriptCat's awaitable modern API; fall back to classic GM_setValue.
-    if(typeof GM!=='undefined'&&GM&&typeof GM.setValue==='function'){
-      await GM.setValue(key,value);
-    }else{
-      await Promise.resolve(set(key,value));
-    }
-  }
-  function setAutoValue(key,value){
-    if(!AUTO_KEYS.includes(key)||typeof value!=='boolean')
-      return Promise.reject(new TypeError('不支持的自动播放设置'));
-    autoLocalValues.set(key,value);
-    saveAutoBackup(); // Synchronous persistent commit first.
-    // The page realm sees the new value immediately; GM mirrors it for
-    // compatibility with existing versions and cross-origin script storage.
-    return mirrorAutoToGM(key,value);
-  }
+  const autoValue=(key,def)=>autoLocalValues.has(key)?
+    autoLocalValues.get(key):get(key,def);
   const autoplaySettings=()=>({
     enabled:!!autoValue(AUTO_ENABLED_KEY,true),
     onReturn:!!autoValue(AUTO_RETURN_KEY,true),
     respectPause:!!autoValue(AUTO_PAUSE_KEY,true),
     muteFallback:!!autoValue(AUTO_MUTE_KEY,false)
   });
-  function autoPreferenceSource(){
-    const backed=readAutoBackup();
+  function validateAutoRecord(record){
+    if(!record||typeof record!=='object'||record.schema!==2||
+       !record.values||typeof record.values!=='object')return null;
+    const result={};
+    for(const key of AUTO_KEYS){
+      if(typeof record.values[key]!=='boolean')return null;
+      result[key]=record.values[key];
+    }
     return {
-      enabledBacked:typeof backed[AUTO_ENABLED_KEY]==='boolean',
-      backupAvailable:autoStorageAvailable,
-      gmEnabled:get(AUTO_ENABLED_KEY,null),
-      savedEnabled:autoplaySettings().enabled,
-      backupError:autoLastWriteError
+      schema:2,revision:Number.isInteger(record.revision)?record.revision:0,
+      updatedAt:Number.isFinite(record.updatedAt)?record.updatedAt:0,
+      values:result
     };
   }
-  // Keep open Holodex tabs in sync when the persistent preference is changed.
+  function acceptAutoRecord(record,source){
+    const valid=validateAutoRecord(record);
+    if(!valid)return false;
+    if(prefRevision>0&&valid.revision<prefRevision)return false;
+    for(const key of AUTO_KEYS)autoLocalValues.set(key,valid.values[key]);
+    prefRevision=Math.max(prefRevision,valid.revision);
+    prefUpdatedAt=valid.updatedAt;
+    preferenceSource=source;
+    autoGmRecordValid=true;
+    return true;
+  }
+  function getAutoRecordSync(){
+    try{return validateAutoRecord(get(AUTO_RECORD_KEY,null));}
+    catch(error){autoLastWriteError=String(error?.message||error);return null;}
+  }
+  const syncRecord=getAutoRecordSync();
+  if(syncRecord)acceptAutoRecord(syncRecord,'Tampermonkey GM 主记录（同步）');
+  function buildAutoRecord(){
+    return {
+      schema:2,revision:++prefRevision,updatedAt:Date.now(),
+      values:{
+        [AUTO_ENABLED_KEY]:autoplaySettings().enabled,
+        [AUTO_RETURN_KEY]:autoplaySettings().onReturn,
+        [AUTO_PAUSE_KEY]:autoplaySettings().respectPause,
+        [AUTO_MUTE_KEY]:autoplaySettings().muteFallback
+      }
+    };
+  }
+  function verifyRecordMatches(candidate,desired){
+    const valid=validateAutoRecord(candidate);
+    return !!valid&&valid.revision===desired.revision &&
+      AUTO_KEYS.every(k=>valid.values[k]===desired.values[k]);
+  }
+  // This promise resolves even on storage failure; error details are available
+  // via diagnostics. Interactions begun before it resolves take precedence.
+  const autoPrefsReady=(async()=>{
+    const before=prefInteractionEpoch;
+    try{
+      if(typeof GM!=='undefined'&&typeof GM?.getValue==='function'){
+        const modern=await GM.getValue(AUTO_RECORD_KEY,null);
+        if(before!==prefInteractionEpoch)return;
+        const parsed=validateAutoRecord(modern);
+        if(parsed&&(!autoGmRecordValid||parsed.revision>=prefRevision))
+          acceptAutoRecord(parsed,'Tampermonkey GM 主记录（异步）');
+        if(!autoGmRecordValid){
+          // For existing users without the canonical record, probe the modern
+          // API's legacy values; prefer a previously saved origin backup.
+          for(const key of AUTO_KEYS){
+            const raw=await GM.getValue(key,null);
+            if(before!==prefInteractionEpoch)return;
+            if(typeof raw==='boolean'&&!autoLocalValues.has(key))
+              autoLocalValues.set(key,raw);
+          }
+          if(!AUTO_KEYS.some(k=>typeof previousBackup[k]==='boolean'))
+            preferenceSource='Tampermonkey GM 历史设置';
+        }
+      }
+    }catch(error){
+      autoLastWriteError='读取 GM 存储失败：'+String(error?.message||error).slice(0,110);
+    }finally{
+      autoHydrationComplete=true;
+    }
+  })();
+  function setAutoValue(key,value){
+    if(!AUTO_KEYS.includes(key)||typeof value!=='boolean')
+      return Promise.reject(new TypeError('不支持的自动播放设置'));
+    prefInteractionEpoch++;
+    autoLocalValues.set(key,value);
+    const backupOk=saveAutoBackup();
+    const record=buildAutoRecord();
+    let legacyOk=false,canonicalSyncOk=false;
+    const failures=[];
+    // Always use the explicitly granted Tampermonkey synchronous API first.
+    try{
+      set(key,value);
+      legacyOk=get(key,null)===value;
+      if(!legacyOk)failures.push('GM 旧键读回不一致');
+    }catch(error){failures.push('GM 旧键写入失败：'+String(error?.message||error));}
+    try{
+      set(AUTO_RECORD_KEY,record);
+      canonicalSyncOk=verifyRecordMatches(get(AUTO_RECORD_KEY,null),record);
+      if(!canonicalSyncOk)failures.push('GM 主记录同步读回不一致');
+    }catch(error){failures.push('GM 主记录写入失败：'+String(error?.message||error));}
+    autoGmSyncVerified=canonicalSyncOk;
+    if(canonicalSyncOk){
+      autoGmRecordValid=true;
+      preferenceSource='Tampermonkey GM 主记录（同步已校验）';
+    }else if(legacyOk)preferenceSource='Tampermonkey GM 旧键（已校验）';
+    else if(backupOk)preferenceSource='Holodex 本地备份';
+    const mirror=(async()=>{
+      let verifiedAsync=false;
+      try{
+        if(typeof GM!=='undefined'&&typeof GM?.setValue==='function'&&
+           typeof GM?.getValue==='function'){
+          await GM.setValue(AUTO_RECORD_KEY,record);
+          const readBack=await GM.getValue(AUTO_RECORD_KEY,null);
+          verifiedAsync=verifyRecordMatches(readBack,record);
+          if(!verifiedAsync)failures.push('GM 主记录异步读回不一致');
+        }
+      }catch(error){
+        failures.push('GM 异步保存/校验失败：'+String(error?.message||error));
+      }
+      // Newer clicks win: an older save finishing last must not change local
+      // runtime state or the preference source reported by diagnostics.
+      if(record.revision===prefRevision){
+        autoGmAsyncVerified=verifiedAsync;
+        if(verifiedAsync){
+          autoGmRecordValid=true;
+          preferenceSource='Tampermonkey GM 主记录（异步已校验）';
+        }
+        autoLastWriteError=failures.join('；').slice(0,350);
+      }
+      if(!canonicalSyncOk&&!legacyOk&&!backupOk&&!verifiedAsync)
+        throw new Error('没有任何一种存储方式能够确认设置已保存：'+failures.join('；'));
+      return {canonicalSyncOk,legacyOk,backupOk,verifiedAsync};
+    })();
+    return mirror;
+  }
+  function autoPreferenceSource(){
+    const backup=readAutoBackup();
+    const record=getAutoRecordSync();
+    const gmLegacy=get(AUTO_ENABLED_KEY,null);
+    return {
+      source:preferenceSource,
+      enabledBacked:typeof backup[AUTO_ENABLED_KEY]==='boolean',
+      backupAvailable:autoStorageAvailable,
+      canonicalValid:!!record,
+      syncVerified:autoGmSyncVerified,
+      asyncVerified:autoGmAsyncVerified,
+      hydrationComplete:autoHydrationComplete,
+      gmEnabled:typeof gmLegacy==='boolean'?gmLegacy:null,
+      gmRecordEnabled:record?.values[AUTO_ENABLED_KEY]??null,
+      savedEnabled:autoplaySettings().enabled,
+      revision:prefRevision,backupError:autoLastWriteError
+    };
+  }
   window.addEventListener('storage',event=>{
     if(event.key!==AUTO_BACKUP_KEY||!event.newValue)return;
+    if(autoGmRecordValid)return; // Manager storage is authoritative.
     const latest=readAutoBackup();
     let changed=false;
     for(const key of AUTO_KEYS){
-      if(typeof latest[key]==='boolean'&&
-         autoLocalValues.get(key)!==latest[key]){
+      if(typeof latest[key]==='boolean'&&autoLocalValues.get(key)!==latest[key]){
         autoLocalValues.set(key,latest[key]);changed=true;
       }
     }
-    if(changed&&typeof syncAutoSettings==='function')
-      syncAutoSettings().catch(()=>{});
+    if(changed)autoPrefsReady.then(()=>syncAutoSettings().catch(()=>{}));
   });
   const rowMap=new Map(), pending=new Map();
   const nativePending=new Map(), NATIVE_TAG='hmtc-youtube-stats-v1';
@@ -864,7 +991,7 @@
           muted:!!vm.muted,playerReady:!!vm.ytPlayer
         });
       }
-      return {version:'0.5.3',enabled:autoCfg.enabled,
+      return {version:'0.5.4',enabled:autoCfg.enabled,
         onReturn:autoCfg.onReturn,respectPause:autoCfg.respectPause,
         muteFallback:autoCfg.muteFallback,hidden:!!doc.hidden,
         detected:rows.length,rows,manualPaused:manualPauses.size};
@@ -1069,7 +1196,7 @@
       const outOfSync=typeof pref.gmEnabled==='boolean'&&
         pref.gmEnabled!==pref.savedEnabled?
         '（脚本管理器镜像值与本地设置暂不一致）':'';
-      const prefix='智能自动播放 v'+(data.version||'0.5.3')+
+      const prefix='智能自动播放 v'+(data.version||'0.5.4')+
         '\n状态：'+(data.enabled?'已启用':'已关闭')+
         '｜识别：'+(data.detected||0)+' 路'+
         '\n设置来源：'+source+outOfSync+
@@ -1788,8 +1915,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.5.3 说明',()=>
-      alert('v0.5.3：修复开启自动播放后刷新又变为关闭的问题。明确选择会在 Holodex 本地同步备份，同时保存到脚本管理器；刷新后恢复最后一次明确设置。仍须符合浏览器有声自动播放政策。正在播放的视频不受影响，安卓触控与统计保留。'));
+    GM_registerMenuCommand('Touch Controls v0.5.4 说明',()=>
+      alert('v0.5.4：针对 Tampermonkey 使用主设置记录及同步/异步双重读写校验。开启后刷新先恢复主记录，再自动尝试播放；诊断显示设置来源及存储验证状态。浏览器仍可能禁止无交互有声播放，其他触控及统计功能保留。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
