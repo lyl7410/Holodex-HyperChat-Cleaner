@@ -171,6 +171,7 @@
       'box-sizing:border-box!important;-webkit-tap-highlight-color:transparent!important}',
       '.hmtc-yt-left{left:0!important;touch-action:pan-y!important}',
       '.hmtc-yt-right{right:0!important;touch-action:none!important}',
+      '.html5-video-player.hmtc-yt-quality-menu .hmtc-yt-edge{pointer-events:none!important}',
       'html.hmtc-yt-debug .hmtc-yt-left{background:#328bff33!important;outline:1px dashed #82c5ff}',
       'html.hmtc-yt-debug .hmtc-yt-right{background:#40cfa533!important;outline:1px dashed #82f5da}',
       '#hmtc-yt-backdrop{position:fixed;inset:0;z-index:2147482990;background:transparent}',
@@ -340,6 +341,13 @@
         try{
           if(action==='quality'){
             const result=await controls.openQualityMenu();
+            const current=p();
+            if(current){
+              current.classList.add('hmtc-yt-quality-menu');
+              // The YouTube options are touchable after the sheet closes.
+              // Restore volume/tap shortcuts after a short selection window.
+              setTimeout(()=>current.classList.remove('hmtc-yt-quality-menu'),20000);
+            }
             close();console.info('[HMTC]',result.message);return;
           }
           if(action==='applyQuality'){
