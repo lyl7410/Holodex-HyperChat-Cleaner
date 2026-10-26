@@ -625,6 +625,10 @@
           }
           player.playVideo();
           track.lastTry=now;track.tries++;
+          // Some providers update state synchronously. Capture it now so a
+          // quick user pause before the next scan is not overwritten.
+          const after=getPlaybackState(player);
+          if(after===1||after===3)track.lastState=after;
           result.attempted++;
         }catch{
           track.lastTry=now;track.tries++;
