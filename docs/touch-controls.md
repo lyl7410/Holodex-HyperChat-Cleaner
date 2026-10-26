@@ -1,15 +1,56 @@
-# Holodex Touch Controls — v0.4.2 扩大统计面板快捷关闭范围
+# Holodex Touch Controls — v0.5.0 智能自动播放与触摸控制
 
-针对 **Holodex Multiview 内的 YouTube 小播放器** 的独立油猴脚本。在 v0.4.1 原生 Connection Speed 持续采集修复基础上，进一步扩大面板内部的轻点关闭区域：播放时间、分辨率，以及它们上方的全部统计数据都可以轻点收起。
+针对 **Holodex Multiview 内的 YouTube 小播放器** 的独立油猴脚本。在 v0.4.2 的触摸音量及播放统计基础上，新增 **PC／安卓通用的 Holodex Multiview 智能自动播放**：识别新视频、刷新、进入和切回标签页，有限次尝试播放未启动的视频，并尽量保留手动暂停状态。
 
-**[安装 / 更新 v0.4.2](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装 / 更新 v0.5.0](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
-1. 使用安卓浏览器 ScriptCat / Tampermonkey 更新原有 **Holodex Touch Controls** 脚本，**不要同时启用两个版本**。
-2. 刷新整个 `holodex.net/multiview` 页面。功能只覆盖 Holodex 中的 YouTube 视频格子，不针对普通 YouTube 观看网页和 Twitch / 聊天格子。
+1. 在 PC 或安卓浏览器的 ScriptCat / Tampermonkey 中更新原有 **Holodex Touch Controls** 脚本，**不要同时启用两个版本**。
+2. 刷新整个 `holodex.net/multiview` 页面。**自动播放支持 PC 与安卓**；左右音量手势和视频统计面板继续只在触摸设备上启用。功能只处理 Holodex 的 YouTube 视频格子，不针对普通 YouTube 观看网页、Twitch 或聊天格子。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## 新增：v0.5.0 智能自动播放（PC / Android）
+
+自动播放模块集成在这个**独立 Touch Controls 脚本**中，不需要修改 Quick Add、HyperChat Cleaner 或 Channel Name Fix。该功能在电脑鼠标环境也正常运行，不要求有触摸屏。
+
+### 自动播放触发时机
+
+| 情况 | 策略 |
+| --- | --- |
+| 首次打开 Holodex 多视图 | 等待播放器就绪，尝试启动未开始或暂停但未被保护的视频 |
+| 刷新页面或再次进入多视图 | 重连 Holodex 播放器后检查，每个视频的播放尝试次数有限 |
+| Quick Add 或 Holodex 本身新增视频格子 | 周期性识别新格子并只尝试播放新加入及其他符合条件的视频 |
+| 切回后台标签页 | 默认检查并恢复后台被中断的视频；可以关闭此行为 |
+| 已在播放（state=1）或缓冲中（state=3） | **完全跳过，不调用 playVideo、不重置播放进度或音量** |
+| 已经结束的录播（state=0） | 跳过，避免反复从头重播 |
+| 用户主动暂停 | 如果在前台观察到从播放/缓冲变为暂停，则按该**视频格子**记录保护，自动扫描不重新播放 |
+
+**手动暂停保护的范围与限制：**YouTube IFrame API 不会可靠告知“暂停是用户触发还是浏览器触发”，脚本只能用播放状态变化进行保守识别。它按布局格子 ID＋视频 ID 识别，每个 Holodex 标签页使用 `sessionStorage` 保存检测到的暂停，刷新同一标签页后继续尊重，记录限时 12 小时；重新开标签、改变布局 ID 或未观察到快速暂停时不保证保持这一状态。视频由用户重新启动后会清除该保护；手动菜单「立即尝试播放未播放的视频」会按你的明确指令临时跳过暂停保护。
+
+### 自动播放设置（油猴菜单或设置面板）
+
+从油猴菜单选择 **「智能自动播放设置（PC／安卓）」**，安卓也可在统计面板的「⚙ 设置」找到配置。默认值：
+
+| 选项 | 默认 | 作用 |
+| --- | --- | --- |
+| 智能自动播放 | **开启** | 扫描未启动或非手动暂停的视频 |
+| 切回标签时检查 | **开启** | 恢复后台被中断的播放 |
+| 尊重手动暂停 | **开启** | 跳过已检测到的用户暂停 |
+| 声音策略 | **保持原有音量与静音** | 不自动解除静音或改变其他视频的音量 |
+| 受阻后静音启动 | **关闭（可选）** | 仅启用时在多次失败后尝试将该路静音再播放 |
+
+设置即时保存并同步到 Holodex 的页面内播放器。菜单另有 **「开启／关闭智能自动播放」** 和 **「立即尝试播放未播放的视频」**。
+
+### 浏览器自动播放限制与重试
+
+- 通过 Holodex `VideoCell.ytPlayer.playVideo()` 发送播放请求，不模拟点击屏幕或刷新整个视频。
+- **每路视频最多 4 次普通自动播放尝试**，采用逐渐延长的等待；全部失败后停止连续重试。真正的页面手势最多允许额外 2 次受控尝试；不会对每一路无限调用 `playVideo()`。
+- 对尚未初始化的播放器等待后续扫描；对已播放的视频完全跳过。页面处于后台时不会主动播放，等标签返回再处理。
+- 浏览器可能禁止无用户交互的有声播放；启用可选静音回退能提高部分播放器成功率，但**不保证全部浏览器有效**。保持声音设置是脚本默认策略。
+- Quick Add v0.3.0 本身仍有**独立的新增视频静音回退机制**；因此如果同时安装 Quick Add，其自动添加新视频时的静音行为可能来自 Quick Add，不代表 Touch Controls 的默认声音设置失效。此次没有改动 Quick Add。
+- 如果停用整个 Touch Controls 脚本，自动播放也随之停用；可以仅关闭「智能自动播放」而保留手机音量手势。
 
 ## 放大后的左右触控区
 
@@ -95,4 +136,4 @@ Connection Speed 与 Live Latency 并不是 YouTube 官方公开的稳定 IFrame
 
 已完成 JavaScript 语法检查及独立模拟测试：左右轻点/滑动、双倍区域、不误触、长按 600ms 与移动取消、三种统计触发模式、灵敏度倍率、多指取消、旧视频保护、YouTube 原生速率/缓冲/直播延迟解析及来源校验。
 
-**v0.4.2 尚未在你的安卓手机上完成实机回归**。已用模拟播放器验证动态带宽值变化、隐藏式采集的启停与原版统计恢复、标题/画面外部区域快速关闭；不同 Android 浏览器可能限制嵌入播放器音量软件调节，所有跨域原生数据也仍有兼容性限制。
+**v0.5.0 的自动播放还没有在你的 PC／安卓浏览器上完成实机回归**。已用模拟播放器验证动态带宽值变化、隐藏式采集的启停与原版统计恢复、标题/画面外部区域快速关闭；不同 Android 浏览器可能限制嵌入播放器音量软件调节，所有跨域原生数据也仍有兼容性限制。
