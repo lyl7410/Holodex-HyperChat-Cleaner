@@ -182,12 +182,12 @@
       else if(typeof player?.mute==='function')player.mute();else if(v)v.muted=true;
     }
     GM_addStyle([
-      '.hmtc-yt-edge{position:absolute!important;z-index:2150!important;top:11%!important;',
-      'height:78%!important;width:36%!important;max-width:112px!important;background:transparent!important;',
+      '.hmtc-yt-edge{position:fixed!important;z-index:2147481600!important;',
+      'background:transparent!important;pointer-events:auto!important;',
       'box-sizing:border-box!important;-webkit-tap-highlight-color:transparent!important}',
       '.hmtc-yt-left{left:0!important;touch-action:pan-y!important}',
       '.hmtc-yt-right{right:0!important;touch-action:none!important}',
-      '.html5-video-player.hmtc-yt-quality-menu .hmtc-yt-edge{pointer-events:none!important}',
+      'html.hmtc-yt-quality-mode .hmtc-yt-edge{pointer-events:none!important}',
       'html.hmtc-yt-debug .hmtc-yt-left{background:#328bff33!important;outline:1px dashed #82c5ff}',
       'html.hmtc-yt-debug .hmtc-yt-right{background:#40cfa533!important;outline:1px dashed #82f5da}',
       '#hmtc-yt-backdrop{position:fixed;inset:0;z-index:2147482990;background:transparent}',
@@ -359,10 +359,11 @@
             const result=await controls.openQualityMenu();
             const current=p();
             if(current){
-              current.classList.add('hmtc-yt-quality-menu');
-              // The YouTube options are touchable after the sheet closes.
-              // Restore volume/tap shortcuts after a short selection window.
-              setTimeout(()=>current.classList.remove('hmtc-yt-quality-menu'),20000);
+              document.documentElement.classList.add('hmtc-yt-quality-mode');
+              // Portal edges are in the top document, not descendants of the
+              // player. Leave native YouTube menus touchable for 20 seconds.
+              setTimeout(()=>document.documentElement.classList.remove(
+                'hmtc-yt-quality-mode'),20000);
             }
             close();console.info('[HMTC]',result.message);return;
           }
@@ -445,7 +446,10 @@
       el.className='hmtc-yt-edge hmtc-yt-'+side;
       el.setAttribute('aria-label',side==='left'?
         '轻点打开 YouTube 控制面板':'上下滑动调音量');
-      player.appendChild(el);
+      // Do not attach inside .html5-video-player: playing videos may add
+      // higher-z-index overlays and replace its DOM, hiding our touch zones.
+      // Keep zones in a top-level portal, positioned over the player bounds.
+      (document.fullscreenElement||document.body).appendChild(el);
       let gesture=null,lastTap=0;
       const reset=()=>{if(gesture?.timer)clearTimeout(gesture.timer);gesture=null;};
       el.addEventListener('touchstart',e=>{
@@ -494,17 +498,45 @@
       });
       return el;
     }
+    // Fixed-position edge portals survive YouTube's play/pause overlays,
+    // dynamic control rebuilding and SPA video changes. Reposition rather
+    // than relying on child stacking order inside #movie_player.
+    function placeEdge(el,rect,side){
+      if(!el)return;
+      const winWidth=innerWidth||document.documentElement.clientWidth;
+      const winHeight=innerHeight||document.documentElement.clientHeight;
+      const intersects=rect&&rect.width>=80&&rect.height>=65&&
+        rect.right>0&&rect.bottom>0&&rect.left<winWidth&&rect.top<winHeight;
+      el.style.display=intersects?'block':'none';
+      if(!intersects)return;
+      const w=Math.min(112,Math.max(20,rect.width*.36));
+      const h=rect.height*.78;
+      const leftPos=side==='left'?rect.left:rect.right-w;
+      const x=Math.max(0,Math.min(winWidth,leftPos));
+      const y=Math.max(0,Math.min(winHeight,rect.top+rect.height*.11));
+      el.style.left=x+'px';
+      el.style.top=y+'px';
+      el.style.width=Math.max(0,Math.min(w,winWidth-x))+'px';
+      el.style.height=Math.max(0,Math.min(h,winHeight-y))+'px';
+    }
     function refresh(){
       if(!document.body)return;
       const player=supported()?p():null;
       if(!player||!coarse||!setting(enabledKey,true)){
         left?.remove();right?.remove();left=right=root=null;
         if(!player)close();
-      }else if(root!==player||!left?.isConnected||!right?.isConnected){
-        left?.remove();right?.remove();root=player;
-        if(getComputedStyle(player).position==='static')
-          player.style.position='relative';
-        left=edge(player,'left');right=edge(player,'right');
+      }else{
+        const layer=document.fullscreenElement||document.body;
+        if(root!==player||!left?.isConnected||!right?.isConnected||
+           left.parentNode!==layer||right.parentNode!==layer){
+          left?.remove();right?.remove();root=player;
+          left=edge(player,'left');right=edge(player,'right');
+        }
+        // Fixed portals are above YouTube's dynamically added controls but
+        // still below our stats sheet. Native settings menus opt out.
+        const rect=player.getBoundingClientRect();
+        placeEdge(left,rect,'left');
+        placeEdge(right,rect,'right');
       }
       if(sheet&&!sheet.hidden){if(!player)close();else refreshSheet();}
     }
@@ -519,7 +551,14 @@
     GM_registerMenuCommand('YouTube：显示／隐藏手势区（调试）',()=>{
       document.documentElement.classList.toggle('hmtc-yt-debug');
     });
-    setInterval(refresh,1250);refresh();
+    setInterval(refresh,600);
+    // Keep the transparent overlay aligned while the player scrolls,
+    // resizes, enters fullscreen or switches between Shorts.
+    document.addEventListener('scroll',refresh,{passive:true,capture:true});
+    window.addEventListener('resize',refresh,{passive:true});
+    document.addEventListener('fullscreenchange',refresh);
+    window.addEventListener('orientationchange',refresh,{passive:true});
+    refresh();
   }
 
   // Run a minimal, read-only stats bridge inside YouTube's actual embedded iframe.
