@@ -1,6 +1,6 @@
 # Holodex HyperChat Cleaner
 
-面向 **YouTube、Holodex Watch / Multiview** 的轻量级用户脚本，包含聊天清理、频道资料修复、PC / Android 一键添加视频，以及 **Holodex 多视图手机手势音量与播放统计**。
+面向 **YouTube、Holodex Watch / Multiview** 的轻量级用户脚本，包含聊天清理、频道资料修复、PC / Android 一键添加视频，以及 **Holodex 多视图 PC／安卓智能自动播放、手机手势音量与播放统计**。
 
 ## 安装
 
