@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量与播放统计）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.1.0
-// @description  Holodex 多视图 YouTube 视频右侧上下滑动调音量，轻点查看网速估算与播放状态。
+// @version      0.2.0
+// @description  Holodex 多视图触摸音量与 YouTube 原生 Stats for nerds 连接速度统计（实验性）。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
+// @match        https://www.youtube.com/embed/*
+// @match        https://youtube.com/embed/*
+// @match        https://www.youtube-nocookie.com/embed/*
 // @run-at       document-idle
-// @noframes
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -18,8 +20,129 @@
 
 (function HolodexTouchControls() {
   'use strict';
-  if(window.top!==window.self) return;
-  const VERSION='0.1.0', KEY='hmtc_enabled_v1';
+  // Run a minimal, read-only stats bridge inside YouTube's actual embedded iframe.
+  // The Holodex UI remains in the top page. No extra downloads or network tests.
+  function youtubeFrameBridge(videoId) {
+    const TAG = 'hmtc-youtube-stats-v1';
+    const origins = new Set(['https://holodex.net','https://www.holodex.net']);
+    const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const player = () => page.document.getElementById('movie_player');
+    const number = value => {
+      if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+      if (typeof value !== 'string') return null;
+      const match = value.replace(/,/g,'').match(/-?\d+(?:\.\d+)?/);
+      return match ? Number(match[0]) : null;
+    };
+    function parse(raw) {
+      const s = raw && typeof raw === 'object' ? raw : {};
+      const text = typeof raw === 'string' ? raw : '';
+      const panel = document.querySelector('.html5-video-info-panel-content');
+      const body = (text + '\n' + (panel?.textContent || '')).slice(0,12000);
+      const metric = (pattern) => {
+        const m = body.match(pattern);
+        return m ? number(m[1]) : null;
+      };
+      const getNumber = (...values) => {
+        for (const val of values) {
+          if (val == null) continue;
+          const n = number(val);
+          if (n != null && Number.isFinite(n)) return n;
+        }
+        return null;
+      };
+      const bandwidthKbps = getNumber(
+        s.bandwidth_kbps, s.bandwidthKbps, s.connection_speed_kbps,
+        s.connectionSpeedKbps,
+        metric(/(?:Connection Speed|连接速度|連線速度)\s*[:：]?\s*([\d,.]+)\s*Kbps/i)
+      );
+      const bufferSeconds = getNumber(
+        s.buffer_health_seconds, s.bufferHealthSeconds,
+        metric(/(?:Buffer Health|缓冲健康度|緩衝健康度)\s*[:：]?\s*([\d,.]+)\s*s/i)
+      );
+      const sourceResolution = s.resolution || s.current_resolution || '';
+      const resolution = typeof sourceResolution === 'string'
+        ? sourceResolution.slice(0,90)
+        : '';
+      const sourceCodecs = s.codecs || '';
+      const codecs = typeof sourceCodecs === 'string' ? sourceCodecs.slice(0,120) : '';
+      const viewportFrames = String(s.viewport || s.frames || '').slice(0,100);
+      const dropped = getNumber(s.dropped_frames, s.droppedFrames,
+        metric(/(\d+)\s+dropped\s+of\s+\d+/i));
+      const liveLatencySeconds = getNumber(
+        s.live_latency_seconds, s.liveLatencySeconds,
+        metric(/(?:Live Latency|直播延迟|直播延遲)\s*[:：]?\s*([\d,.]+)\s*s/i)
+      );
+      return {
+        bandwidthKbps: bandwidthKbps!=null&&bandwidthKbps>0?bandwidthKbps:null,
+        bufferSeconds:bufferSeconds!=null&&bufferSeconds>=0?bufferSeconds:null,
+        resolution,codecs,
+        viewportFrames,dropped,
+        liveLatencySeconds:liveLatencySeconds!=null&&liveLatencySeconds>=0?liveLatencySeconds:null
+      };
+    }
+    function readStats() {
+      const p=player();
+      if(!p)return {available:false, reason:'YouTube 播放器尚未就绪'};
+      let actualId=null;
+      try{actualId=p.getVideoData?.()?.video_id||null;}catch{}
+      if(actualId&&actualId!==videoId)
+        return {available:false,reason:'播放视频已切换'};
+      let raw=null,source='none';
+      if(typeof p.getStatsForNerds==='function') {
+        try{raw=p.getStatsForNerds();source='getStatsForNerds';}catch{}
+        if(!raw)try{raw=p.getStatsForNerds(0);source='getStatsForNerds(0)';}catch{}
+      }
+      if(!raw&&typeof p.getDebugText==='function'){
+        try{raw=p.getDebugText();source='getDebugText';}catch{}
+      }
+      const data=parse(raw);
+      const meaningful=data.bandwidthKbps!=null||data.bufferSeconds!=null||
+        !!data.resolution||!!data.codecs;
+      return {available:meaningful,source,
+        reason:meaningful?'':'嵌入播放器未提供原生详细统计',...data};
+    }
+    window.addEventListener('message',event=>{
+      if(event.source!==window.parent || !origins.has(event.origin))return;
+      const message=event.data;
+      if(!message||message.tag!==TAG||message.videoId!==videoId||
+         !Number.isSafeInteger(message.seq)||message.seq<=0)return;
+      const respond=result=>{
+        window.parent.postMessage(
+          {tag:TAG,seq:message.seq,videoId,action:message.action,...result},
+          event.origin
+        );
+      };
+      if(message.action==='stats') {
+        respond({ok:true,data:readStats()});
+        return;
+      }
+      if(message.action==='nativeToggle') {
+        const p=player();
+        if(!p)return respond({ok:false,error:'播放器尚未就绪'});
+        try{
+          const visible=typeof p.isVideoInfoVisible==='function'?
+            !!p.isVideoInfoVisible():null;
+          if(visible===true && typeof p.hideVideoInfo==='function') {
+            p.hideVideoInfo();return respond({ok:true,data:{visible:false}});
+          }
+          if(typeof p.showVideoInfo==='function') {
+            p.showVideoInfo();return respond({ok:true,data:{visible:true}});
+          }
+          return respond({ok:false,error:'此嵌入播放器不支持切换原版统计面板'});
+        }catch(err){return respond({ok:false,error:String(err?.message||err).slice(0,120)});}
+      }
+      respond({ok:false,error:'不支持的指令'});
+    });
+  }
+
+  const embed = location.pathname.match(/^\/embed\/([\w-]{11})(?:\/|$)/);
+  if(embed && /^(?:www\.)?youtube(?:-nocookie)?\.com$/.test(location.hostname)) {
+    if(window.top!==window.self)youtubeFrameBridge(embed[1]);
+    return;
+  }
+  if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
+
+  const VERSION='0.2.0', KEY='hmtc_enabled_v1';
   const get=(key,def)=>GM_getValue(key,def);
   const set=(key,value)=>GM_setValue(key,value);
   if(!get(KEY,true)){
