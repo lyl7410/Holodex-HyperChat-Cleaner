@@ -680,11 +680,11 @@
             if(typeof vm.setMuted==='function')vm.setMuted(true);
             else player.mute?.();
           }
+          track.lastFailure='';
           player.playVideo();
           track.lastTry=now;track.tries++;
           // playVideo() returning does not mean playback was authorized.
           // The next state sample and onAutoplayBlocked decide success.
-          track.lastFailure='';
           const after=getPlaybackState(player);
           if(after===1){
             track.lastState=after;
@@ -888,6 +888,30 @@
   function syncAutoSettings(){
     if(!installed||!isMulti())return Promise.resolve(null);
     return rpc('autoConfig',autoplaySettings(),3200);
+  }
+  function diagnoseAutoPlay(){
+    if(!isMulti())return alert('请先进入 Holodex 多视图。');
+    if(!installed)return alert('播放器页面桥接尚未就绪。请确认脚本启用并完全刷新多视图页面。');
+    rpc('autoDiagnose',{},4200).then(data=>{
+      const rows=data.rows||[];
+      const prefix='智能自动播放 v'+(data.version||'0.5.1')+
+        '\n状态：'+(data.enabled?'已启用':'已关闭')+
+        '｜识别：'+(data.detected||0)+' 路'+
+        '\n声音策略：'+(data.muteFallback?'失败后允许静音':'保留原有音量（静音回退关闭）');
+      if(!rows.length){
+        alert(prefix+'\n\n没有找到有效的 YouTube 视频格子。'+
+          '\n请确认播放器格子加载完成，以及脚本可以访问 Holodex 的 Vue 播放器对象。');
+        return;
+      }
+      const lines=rows.slice(0,16).map((row,i)=>
+        (i+1)+'. '+row.title.slice(0,30)+
+        '\n   '+row.description+'｜'+row.issue+
+        '｜尝试 '+row.tries+' 次');
+      alert(prefix+'\n\n'+lines.join('\n')+
+        (rows.length>16?'\n……另有 '+(rows.length-16)+' 路':'')+
+        '\n\n浏览器阻止有声自动播放时，可在多视图页面点一下后重试；'+
+        '或者在自动播放设置中选择“失败后静音启动”。');
+    }).catch(error=>alert('播放诊断未完成：'+error.message));
   }
   function manualAutoPlay(){
     if(!isMulti())return alert('请先进入 Holodex 多视图页面。');
@@ -1310,6 +1334,7 @@
       '</select>',
       '<div class="setting-summary">自动播放仅有限次重试，不会持续点击视频或修改正在播放的音量。</div>',
       '<button type="button" data-action="autoNow" style="width:100%;margin-top:12px">立即尝试播放未播放视频</button>',
+      '<button type="button" data-action="autoDiagnose" style="width:100%;margin-top:7px">查看每路自动播放状态与失败原因</button>',
       '</div>',
       '<div class="setting-summary" style="margin-top:16px">',
       '安卓触控区域左右各宽 36%，最大 112px，纵向覆盖 11%–89%。',
@@ -1347,6 +1372,7 @@
       syncAutoSettings().catch(error=>console.warn('[HMTC] 自动播放静音设置',error));
     });
     settings.querySelector('[data-action="autoNow"]').addEventListener('click',manualAutoPlay);
+    settings.querySelector('[data-action="autoDiagnose"]').addEventListener('click',diagnoseAutoPlay);
     return settings;
   }
   function openSettings(){
@@ -1526,6 +1552,7 @@
     // remains gated to coarse pointers and is never inserted on a mouse PC.
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
+    GM_registerMenuCommand('诊断多视图自动播放状态',diagnoseAutoPlay);
     GM_registerMenuCommand('开启／关闭智能自动播放',()=>{
       const next=!get(AUTO_ENABLED_KEY,true);
       set(AUTO_ENABLED_KEY,next);
@@ -1562,8 +1589,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.5.0 说明',()=>
-      alert('自动播放支持 PC/安卓：进入、刷新、添加视频或切回多视图时，尝试启动未播放的视频；不重启正在播放的视频，默认尊重观察到的手动暂停、保留声音。浏览器可能禁止有声自动播放。安卓额外提供透明边缘音量手势和统计。'));
+    GM_registerMenuCommand('Touch Controls v0.5.1 说明',()=>
+      alert('v0.5.1：进入／刷新多视图时自动尝试播放；防止浏览器的自动播放拒绝被误记为手动暂停。油猴菜单新增「诊断多视图自动播放状态」，可查看每路视频是否被浏览器拦截、播放器未加载或被暂停保护。默认保持声音，不强制静音；安卓仍保留音量手势和统计。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
