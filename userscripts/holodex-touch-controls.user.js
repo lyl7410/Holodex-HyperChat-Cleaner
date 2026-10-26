@@ -107,6 +107,7 @@
     const origins = new Set(['https://holodex.net','https://www.holodex.net']);
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const player = () => page.document.getElementById('movie_player');
+    const controls=youtubePlaybackTools(page.document,player);
     const number = value => {
       if (typeof value === 'number') return Number.isFinite(value) ? value : null;
       if (typeof value !== 'string') return null;
@@ -368,6 +369,19 @@
       if(message.action==='nativeToggle') {
         try{respond({ok:true,data:toggleNative()});}
         catch(err){respond({ok:false,error:String(err?.message||err).slice(0,120)});}
+        return;
+      }
+      if(['playbackInfo','playbackRate','qualityMenu'].includes(message.action)){
+        try{
+          if(!player())throw Error('YouTube 播放器尚未就绪');
+          let info;
+          if(message.action==='playbackInfo')info=controls.snapshot();
+          if(message.action==='playbackRate')info=controls.setRate(message.rate);
+          if(message.action==='qualityMenu')info=controls.openQualityMenu();
+          respond({ok:true,data:info});
+        }catch(error){
+          respond({ok:false,error:String(error?.message||error).slice(0,150)});
+        }
         return;
       }
       respond({ok:false,error:'不支持的指令'});
@@ -1279,6 +1293,29 @@
           return reply({ok:true,data:{volume:Number(vm.volume)||0,muted:!!vm.muted}});
         }
         if(msg.action==='stats')return reply({ok:true,data:await snapshot(vm)});
+        if(msg.action==='playback'){
+          const p=vm.ytPlayer;
+          if(!p)throw Error('播放器尚未就绪');
+          let rate=1,options=[];
+          try{rate=Number(p.getPlaybackRate?.())||1;}catch{}
+          try{options=p.getAvailablePlaybackRates?.()||[];}catch{}
+          options=options.filter(x=>Number.isFinite(Number(x))&&Number(x)>0)
+            .map(Number);
+          return reply({ok:true,data:{rate,rates:options.length?options:[1],
+            ready:true}});
+        }
+        if(msg.action==='setPlaybackRate'){
+          const p=vm.ytPlayer,r=Number(msg.rate);
+          if(!p||typeof p.setPlaybackRate!=='function')
+            throw Error('此视频播放器不支持变速');
+          const supported=p.getAvailablePlaybackRates?.()||[1];
+          if(!Number.isFinite(r)||!supported.some(x=>Math.abs(Number(x)-r)<.001))
+            throw Error('当前视频不支持所选倍速');
+          p.setPlaybackRate(r);
+          const applied=Number(p.getPlaybackRate?.());
+          return reply({ok:true,data:{rate:Number.isFinite(applied)?applied:r,
+            requested:r,confirmed:Math.abs(applied-r)<.001}});
+        }
         return reply({ok:false,error:'操作不支持'});
       }catch(error){return reply({ok:false,error:String(error?.message||error).slice(0,140)});}
     });
@@ -1539,8 +1576,9 @@
     }
     return null;
   }
-  function nativeRequest(row,action,timeout=1800) {
-    if(!['stats','nativeToggle','monitorStart','monitorStop'].includes(action))
+  function nativeRequest(row,action,timeout=1800,extra={}) {
+    if(!['stats','nativeToggle','monitorStart','monitorStop',
+          'playbackInfo','playbackRate','qualityMenu'].includes(action))
       return Promise.reject(new Error('不支持的 YouTube 指令'));
     const target=nativeFrame(row);
     if(!target)return Promise.reject(new Error('未找到当前视频的 YouTube 嵌入播放器'));
@@ -1553,7 +1591,7 @@
       nativePending.set(seq,{...target,videoId:row.videoId,action,timer,resolve,reject});
       try{
         target.frame.contentWindow.postMessage(
-          {tag:NATIVE_TAG,seq,videoId:row.videoId,action},
+          {tag:NATIVE_TAG,seq,videoId:row.videoId,action,...extra},
           target.origin
         );
       }catch(error){
