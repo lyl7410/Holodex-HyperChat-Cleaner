@@ -7,9 +7,9 @@
 1. [HyperChat Cleaner](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/hyperchat-cleaner.user.js)
 2. [Channel Name Fix](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/channel-name-fix.user.js)
 3. [Holodex Quick Add（PC + Android）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-mobile-quick-add.user.js)
-4. [Holodex Touch Controls（手机手势音量与播放统计）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)
+4. [Holodex Touch Controls（PC／安卓自动播放＋手机手势音量与统计）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)
 
-四个脚本可独立安装。Quick Add 不要求安装另外三个脚本；Touch Controls 独立处理手机触控音量和统计，其他功能按需安装。更新时覆盖同名脚本并刷新相关页面，不要同时启用多份旧版。
+四个脚本可独立安装。Quick Add 不要求安装另外三个脚本；Touch Controls 独立提供 PC／安卓智能自动播放，并在手机提供触控音量和统计，其他功能按需安装。更新时覆盖同名脚本并刷新相关页面，不要同时启用多份旧版。
 
 ## 功能
 
@@ -35,11 +35,11 @@
 
 ## 使用说明
 
-### Holodex Touch Controls v0.5.1（PC／Android 智能自动播放与安卓触摸控制）
+### Holodex Touch Controls v0.5.2（PC／Android 智能自动播放与安卓触摸控制）
 
 - **智能自动播放 v0.5.0（PC／安卓）**：首次进入、刷新、Quick Add / Holodex 添加视频、切回多视图时，识别并尝试启动未播放的视频。**播放中与缓冲中的视频绝不重启**，已结束录像不自动重播。
 - **刷新后误暂停修复 v0.5.1**：首次初始化 `-1` 状态先等待约 3.2 秒，媒体进入 `5`（已加载待播放）后立即尝试；YouTube 自动播放受浏览器拦截而迅速暂停时，不再轻易误记为用户手动暂停。旧版可疑缓存不继承，仍保留稳定播放后手动暂停的会话保护。
-- **可配置播放策略与诊断**：自动播放默认开启、切回检查开启、尊重稳定播放后的手动暂停、保持既有音量和静音。浏览器限制播放时重试有上限，可选多次失败后静音回退。新增逐路「诊断多视图自动播放状态」菜单，识别初始化中、浏览器拦截、手动暂停保护等原因；支持手动「立即尝试播放未播放的视频」。
+- **自动播放开关与诊断 v0.5.2**：如果诊断显示「状态：已关闭」，就不会自动播放，即使曾有旧的浏览器拦截记录。新版区分显式开启与关闭命令，诊断可在确认后直接启用；设置页面显示当前开关状态，修复 ScriptCat 异步写入导致的同步旧值风险。默认尊重手动暂停、保留音量；有限重试、可选失败后静音。
 - **保护已在播放的视频**：脚本发起自动播放时避免触发 Holodex 原生首次播放 `muteOthers()` 导致其他直播被静音；播放成功后维持已有音量状态。
 - **安卓触摸控制不变**：两侧 36% 宽／78% 高的透明触摸区、灵敏度 0.4×–2.5×、可选左右长按 600ms、临时音量提示、原生 Connection Speed / 缓冲健康度 / 直播延迟 / 时间 / 分辨率面板。统计上半部及面板外区域可点按收起。
 - **数据及权限**：基础自动播放、音量手势和播放时间不依赖在 YouTube 第三方 iframe 内注入脚本；原生连接速度、缓冲及延迟则需要 iframe 内脚本权限及非公开播放器字段。独立 Quick Add 仍可能按其自身策略将新增视频静音。
@@ -88,6 +88,8 @@ README.md
 ```
 
 ## 版本记录
+
+- **2026-10-27 — Touch Controls v0.5.2**：根据用户的两张实际诊断截图确认自动播放处于「已关闭」状态；修正关闭时仍显示旧浏览器拦截和等待自动尝试的误导信息。将启停菜单分开，诊断支持确认后一键启用及状态不同步自修复，设置面板显示当前状态，修复部分脚本管理器异步写入后读到旧值的风险。模拟检查通过，真机刷新播放待验证。
 
 - **2026-10-27 — Touch Controls v0.5.1**：针对刷新多视图仍不自动播放的反馈，修复 YouTube `-1` 初始化阶段过早耗尽重试、浏览器自动播放被拒后误识别成手动暂停；重置旧版可疑暂停会话键。加入官方 `onAutoplayBlocked` 回调的逐路诊断、保留默认声音的失败提示，并避免自动播放触发 Holodex 首次播放静音其他格子的逻辑。模拟测试通过，PC／安卓实机尚待确认。
 
