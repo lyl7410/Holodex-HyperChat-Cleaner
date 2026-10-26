@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量与播放统计）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.4.0
-// @description  Holodex 双倍宽边缘音量手势、灵敏度配置、可选长按统计、精简直播信息；无常驻图标。
+// @version      0.4.1
+// @description  Holodex 手机手势音量、原生连接速度持续刷新、轻点标题快速关闭统计；无常驻图标。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -33,10 +33,12 @@
       const match = value.replace(/,/g,'').match(/-?\d+(?:\.\d+)?/);
       return match ? Number(match[0]) : null;
     };
-    function parse(raw) {
+    // Never prefer a stale, previously-opened Stats for nerds DOM snapshot
+    // over the YouTube player's current internal API values.
+    function parse(raw, includePanel=false) {
       const s = raw && typeof raw === 'object' ? raw : {};
       const text = typeof raw === 'string' ? raw : '';
-      const panel = document.querySelector('.html5-video-info-panel-content');
+      const panel = includePanel ? document.querySelector('.html5-video-info-panel-content') : null;
       const body = (text + '\n' + (panel?.textContent || '')).slice(0,12000);
       const metric = (pattern) => {
         const m = body.match(pattern);
@@ -87,6 +89,96 @@
         liveLatencySeconds:liveLatencySeconds!=null&&liveLatencySeconds>=0?liveLatencySeconds:null
       };
     }
+    // YouTube sometimes computes its bandwidth diagnostics only while its own
+    // Stats for nerds overlay is logically enabled. Keep those diagnostics on
+    // only while the custom Holodex panel is open, but make the original overlay
+    // transparent (not display:none) so YouTube can still refresh its DOM.
+    const monitor = { active:false, forced:false, manual:false, initiallyVisible:false };
+    const SILENT_CLASS='hmtc-native-stats-silent';
+    function ensureSilentCss(){
+      if(document.getElementById('hmtc-silent-stats-css'))return;
+      const style=document.createElement('style');
+      style.id='hmtc-silent-stats-css';
+      style.textContent='html.'+SILENT_CLASS+
+        ' .html5-video-info-panel,html.'+SILENT_CLASS+
+        ' .ytp-stats-for-nerds{opacity:0!important;pointer-events:none!important;'+
+        'transition:none!important;}';
+      (document.head||document.documentElement).appendChild(style);
+    }
+    function silent(enabled){
+      if(enabled)ensureSilentCss();
+      document.documentElement.classList.toggle(SILENT_CLASS,!!enabled);
+    }
+    function isNativeVisible(p){
+      try {
+        if(typeof p?.isVideoInfoVisible==='function')
+          return !!p.isVideoInfoVisible();
+      } catch {}
+      return null;
+    }
+    function startMonitor(){
+      const p=player();
+      if(!p)return {enabled:false,reason:'YouTube 播放器尚未就绪'};
+      if(typeof p.showVideoInfo!=='function')
+        return {enabled:false,reason:'播放器没有原生统计启动接口'};
+      const visible=isNativeVisible(p);
+      if(visible===null)
+        return {enabled:false,reason:'播放器无法确认原版统计的显示状态'};
+      if(monitor.active){
+        // The player may turn off its diagnostics after a media reload.
+        if(monitor.forced&&!monitor.manual&&!visible){
+          silent(true);
+          try{p.showVideoInfo();}catch{}
+        }
+        return {enabled:true,hidden:monitor.forced&&!monitor.manual};
+      }
+      monitor.active=true;
+      monitor.initiallyVisible=visible;
+      monitor.forced=!visible;
+      monitor.manual=false;
+      if(monitor.forced){
+        silent(true); // CSS is active BEFORE enabling the original overlay.
+        try{p.showVideoInfo();}
+        catch(error){
+          monitor.active=false;monitor.forced=false;
+          silent(false);
+          return {enabled:false,reason:String(error?.message||error).slice(0,120)};
+        }
+      }
+      return {enabled:true,hidden:monitor.forced};
+    }
+    function stopMonitor(){
+      const p=player();
+      if(monitor.active&&monitor.forced&&typeof p?.hideVideoInfo==='function'){
+        // Restore the state that existed before the Holodex panel opened.
+        try{p.hideVideoInfo();}catch{}
+      }
+      silent(false);
+      monitor.active=false;
+      monitor.forced=false;
+      monitor.manual=false;
+      monitor.initiallyVisible=false;
+      return {stopped:true};
+    }
+    function toggleNative(){
+      const p=player();
+      if(!p)throw new Error('播放器尚未就绪');
+      if(monitor.active&&monitor.forced){
+        // The native diagnostics keep updating in either visual mode.
+        monitor.manual=!monitor.manual;
+        silent(!monitor.manual);
+        return {visible:monitor.manual};
+      }
+      const was=isNativeVisible(p);
+      if(was===true&&typeof p.hideVideoInfo==='function'){
+        p.hideVideoInfo();return {visible:false};
+      }
+      if(typeof p.showVideoInfo==='function'){
+        p.showVideoInfo();return {visible:true};
+      }
+      throw new Error('此播放器不支持切换原版统计');
+    }
+
     function readStats() {
       const p=player();
       if(!p)return {available:false, reason:'YouTube 播放器尚未就绪'};
@@ -96,6 +188,7 @@
         return {available:false,reason:'播放视频已切换'};
       let source='none';
       const data=parse(null);
+      // Prefer fresh API output; previous versions wrongly read old panel DOM first.
       // Combine compatible fields instead of stopping at an API which happens
       // to return resolution but not the more important Connection Speed.
       for(const [name,args] of [
@@ -127,6 +220,18 @@
             break;
         }catch{}
       }
+      // DOM is used only as a fallback, and only while YouTube says its
+      // statistics panel is actively enabled. Hidden snapshots can be stale.
+      if(isNativeVisible(p)===true){
+        const fromPanel=parse(null,true);
+        if(data.bandwidthKbps==null && fromPanel.bandwidthKbps!=null){
+          data.bandwidthKbps=fromPanel.bandwidthKbps;
+          source='native-panel-dom';
+        }
+        if(data.bufferSeconds==null) data.bufferSeconds=fromPanel.bufferSeconds;
+        if(!data.resolution) data.resolution=fromPanel.resolution;
+        if(data.liveLatencySeconds==null)data.liveLatencySeconds=fromPanel.liveLatencySeconds;
+      }
       if(!data.resolution) {
         // HTMLVideoElement intrinsic dimensions reflect the decoded video
         // frame; label them explicitly rather than inventing optimal resolution.
@@ -137,6 +242,7 @@
       const meaningful=data.bandwidthKbps!=null||data.bufferSeconds!=null||
         data.liveLatencySeconds!=null||!!data.resolution||!!data.codecs;
       return {available:meaningful,source,
+        monitoring:monitor.active, silent:monitor.active&&monitor.forced&&!monitor.manual,
         reason:meaningful?'':'嵌入播放器未提供原生详细统计',...data};
     }
 
@@ -155,20 +261,18 @@
         respond({ok:true,data:readStats()});
         return;
       }
+      if(message.action==='monitorStart') {
+        respond({ok:true,data:startMonitor()});
+        return;
+      }
+      if(message.action==='monitorStop') {
+        respond({ok:true,data:stopMonitor()});
+        return;
+      }
       if(message.action==='nativeToggle') {
-        const p=player();
-        if(!p)return respond({ok:false,error:'播放器尚未就绪'});
-        try{
-          const visible=typeof p.isVideoInfoVisible==='function'?
-            !!p.isVideoInfoVisible():null;
-          if(visible===true && typeof p.hideVideoInfo==='function') {
-            p.hideVideoInfo();return respond({ok:true,data:{visible:false}});
-          }
-          if(typeof p.showVideoInfo==='function') {
-            p.showVideoInfo();return respond({ok:true,data:{visible:true}});
-          }
-          return respond({ok:false,error:'此嵌入播放器不支持切换原版统计面板'});
-        }catch(err){return respond({ok:false,error:String(err?.message||err).slice(0,120)});}
+        try{respond({ok:true,data:toggleNative()});}
+        catch(err){respond({ok:false,error:String(err?.message||err).slice(0,120)});}
+        return;
       }
       respond({ok:false,error:'不支持的指令'});
     });
@@ -181,7 +285,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.4.0', KEY='hmtc_enabled_v1';
+  const VERSION='0.4.1', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -460,7 +564,7 @@
     return null;
   }
   function nativeRequest(row,action,timeout=1800) {
-    if(!['stats','nativeToggle'].includes(action))
+    if(!['stats','nativeToggle','monitorStart','monitorStop'].includes(action))
       return Promise.reject(new Error('不支持的 YouTube 指令'));
     const target=nativeFrame(row);
     if(!target)return Promise.reject(new Error('未找到当前视频的 YouTube 嵌入播放器'));
