@@ -156,7 +156,9 @@
   const token='hmtc-'+(crypto.randomUUID?.()||String(Date.now())+Math.random());
   const clamp=n=>Math.max(0,Math.min(100,Math.round(Number(n)||0)));
   const rowMap=new Map(), pending=new Map();
-  let sequence=0,installed=false,installing=false,listing=false,active=null,sheet=null,statsBusy=false;
+  const nativePending=new Map(), NATIVE_TAG='hmtc-youtube-stats-v1';
+  const YT_ORIGINS=new Set(['https://www.youtube.com','https://youtube.com','https://www.youtube-nocookie.com']);
+  let sequence=0,nativeSequence=0,installed=false,installing=false,listing=false,active=null,sheet=null,statsBusy=false;
   let hintTimer=null,statsInterval=null;
 
   GM_addStyle(`
@@ -326,6 +328,64 @@
       if(!installed){installing=false;document.removeEventListener(token+':ready',ready);}
     },800);
   }
+
+  // The YouTube embed is a separate cross-origin document.
+  // Send a narrow request to that frame only; never use window.top document access.
+  function nativeFrame(row) {
+    if (!row || !/^[\w-]{11}$/.test(row.videoId||'')) return null;
+    const roots=[...document.querySelectorAll('.multiview .mv-cell > .cell-content')];
+    const root=roots[row.index];
+    if(!root)return null;
+    const slot=root.querySelector('.mv-frame');
+    if(!slot)return null;
+    const zone=slot.querySelector('.hmtc-zone');
+    if(zone && zone.dataset.key!==row.layoutId+':'+row.videoId)return null;
+    for(const frame of slot.querySelectorAll('iframe[src]')){
+      let u;
+      try{u=new URL(frame.src,location.href);}catch{continue;}
+      if(!YT_ORIGINS.has(u.origin))continue;
+      const match=u.pathname.match(/^\/embed\/([\w-]{11})(?:\/|$)/);
+      if(match?.[1]===row.videoId)return {frame,origin:u.origin};
+    }
+    return null;
+  }
+  function nativeRequest(row,action,timeout=1800) {
+    if(action!=='stats'&&action!=='nativeToggle')
+      return Promise.reject(new Error('不支持的 YouTube 指令'));
+    const target=nativeFrame(row);
+    if(!target)return Promise.reject(new Error('未找到当前视频的 YouTube 嵌入播放器'));
+    const seq=++nativeSequence;
+    return new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{
+        nativePending.delete(seq);
+        reject(new Error('YouTube iframe 未响应，可能未启用跨域 iframe 脚本注入'));
+      },timeout);
+      nativePending.set(seq,{...target,videoId:row.videoId,action,timer,resolve,reject});
+      try{
+        target.frame.contentWindow.postMessage(
+          {tag:NATIVE_TAG,seq,videoId:row.videoId,action},
+          target.origin
+        );
+      }catch(error){
+        clearTimeout(timer);
+        nativePending.delete(seq);
+        reject(error);
+      }
+    });
+  }
+  window.addEventListener('message',event=>{
+    if(!YT_ORIGINS.has(event.origin))return;
+    const response=event.data;
+    if(response?.tag!==NATIVE_TAG||!Number.isSafeInteger(response.seq))return;
+    const task=nativePending.get(response.seq);
+    if(!task||task.frame.contentWindow!==event.source||
+       task.origin!==event.origin||
+       task.videoId!==response.videoId||
+       task.action!==response.action)return;
+    clearTimeout(task.timer);
+    nativePending.delete(response.seq);
+    response.ok?task.resolve(response.data):task.reject(new Error(response.error||'YouTube 统计不可用'));
+  });
 
   function field(name,text){
     const el=sheet?.querySelector('[data-field="'+name+'"]');
