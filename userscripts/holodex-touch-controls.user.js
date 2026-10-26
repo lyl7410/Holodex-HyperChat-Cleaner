@@ -68,37 +68,59 @@
       else throw Error('YouTube 播放器尚未就绪');
       return snapshot();
     }
-    // Open the quality submenu through YouTube's *real* UI. No fake 1080p
-    // choices and no deprecated IFrame quality API; the user chooses a
-    // resolution from the native choices actually offered by this video.
-    async function openQualityMenu(){
-      const p=getPlayer();
-      const setting=p?.querySelector?.('.ytp-settings-button');
-      if(!setting||typeof setting.click!=='function')
-        throw Error('当前 YouTube 播放器未提供可操作的原生画质菜单');
-      const visible=el=>!!el&&!!el.getClientRects?.().length&&
-        pageDoc.defaultView?.getComputedStyle?.(el)?.visibility!=='hidden';
-      const menu=()=>p.querySelector('.ytp-settings-menu');
-      if(!visible(menu()))setting.click();
-      await new Promise(resolve=>setTimeout(resolve,120));
-      const pickQuality=()=>{
-        const options=[...p.querySelectorAll('.ytp-settings-menu .ytp-menuitem')];
-        const label=x=>String(x?.getAttribute('aria-label')||'')+' '+
-          String(x?.textContent||'');
-        const quality=options.find(x=>
-          /(?:quality|画质|畫質|清晰度|解像度|品質|画質設定)/i.test(label(x)));
-        if(quality&&typeof quality.click==='function'){
-          quality.click();
-          return {opened:true,submenu:true,
-            message:'已打开 YouTube 原生画质选项，请直接选择清晰度'};
-        }
-        if(visible(menu()))return {opened:true,submenu:false,
-          message:'已打开 YouTube 设置，请点「画质 / Quality」选择清晰度'};
-        throw Error('YouTube 原生设置菜单未能打开');
-      };
-      return pickQuality();
+    // YouTube's setPlaybackQuality() was removed (2019): native DOM is the
+    // ONLY attempted quality-control path. Verify the available entries;
+    // never fabricate a list of resolutions or falsely claim success.
+    const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+    const settingButton=()=>getPlayer()?.querySelector?.('.ytp-settings-button');
+    const settingMenu=()=>getPlayer()?.querySelector?.('.ytp-settings-menu');
+    const visible=el=>!!el&&!!el.getClientRects?.().length&&
+      pageDoc.defaultView?.getComputedStyle?.(el)?.visibility!=='hidden';
+    const menuLabel=el=>String(el?.querySelector?.('.ytp-menuitem-label')?.textContent||
+      el?.getAttribute?.('aria-label')||el?.textContent||'')
+      .replace(/\s+/g,' ').trim();
+    const qualityTitle=/(?:quality|画质|畫質|清晰度|解像度|品質)/i;
+    const qualityOption=/(?:auto|自动|自動|automático|automatique|\d{3,4}p\b)/i;
+    async function enterQualityMenu(){
+      const p=getPlayer(),button=settingButton();
+      if(!button||typeof button.click!=='function')
+        throw Error('当前播放器没有可用的原生画质设置');
+      if(!visible(settingMenu()))button.click();
+      await pause(140);
+      const menuItems=[...(p.querySelectorAll('.ytp-settings-menu .ytp-menuitem')||[])];
+      const item=menuItems.find(el=>qualityTitle.test(menuLabel(el)));
+      if(item){item.click();await pause(140);}
+      if(!visible(settingMenu()))throw Error('YouTube 原生设置菜单没有打开');
+      const choices=[...(p.querySelectorAll('.ytp-settings-menu .ytp-menuitem')||[])]
+        .map(el=>({name:menuLabel(el),element:el}))
+        .filter(x=>qualityOption.test(x.name)&&x.name.length<=90);
+      return {choices,submenu:!!item};
     }
-    return {snapshot,setRate,openQualityMenu,video,getPlayer};
+    function closeQualityMenu(){
+      if(visible(settingMenu()))settingButton()?.click?.();
+    }
+    async function qualityOptions(){
+      const menu=await enterQualityMenu();
+      const choices=[...new Set(menu.choices.map(x=>x.name))];
+      closeQualityMenu();
+      return {choices,native:true};
+    }
+    async function setQuality(name){
+      if(typeof name!=='string'||name.length>90)throw Error('画质选项无效');
+      const menu=await enterQualityMenu();
+      const match=menu.choices.find(x=>x.name===name);
+      if(!match){closeQualityMenu();throw Error('清晰度已经变化，请重新读取原生菜单');}
+      match.element.click();
+      return {selectedInNativeMenu:true,requested:name,
+        actualResolution:snapshot().resolution,confirmedResolution:false};
+    }
+    async function openQualityMenu(){
+      const menu=await enterQualityMenu();
+      return {opened:true,submenu:menu.submenu,
+        message:menu.submenu?'已展开真实 YouTube 画质选项，请选择清晰度':
+          '已打开 YouTube 设置，请选择画质 / Quality'};
+    }
+    return {snapshot,setRate,qualityOptions,setQuality,openQualityMenu,video,getPlayer};
   }
 
 
