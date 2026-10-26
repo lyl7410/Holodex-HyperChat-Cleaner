@@ -306,6 +306,10 @@
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
   const STATS_MODE_KEY='hmtc_stats_trigger_v1';
+  const AUTO_ENABLED_KEY='hmtc_autoplay_enabled_v1';
+  const AUTO_RETURN_KEY='hmtc_autoplay_return_v1';
+  const AUTO_PAUSE_KEY='hmtc_autoplay_respect_pause_v1';
+  const AUTO_MUTE_KEY='hmtc_autoplay_mute_fallback_v1';
   const get=(key,def)=>GM_getValue(key,def);
   const set=(key,value)=>GM_setValue(key,value);
   if(!get(KEY,true)){
@@ -328,6 +332,12 @@
   };
   const allowsTap=()=>['tap','both'].includes(getStatsMode());
   const allowsHold=()=>['hold','both'].includes(getStatsMode());
+  const autoplaySettings=()=>({
+    enabled:!!get(AUTO_ENABLED_KEY,true),
+    onReturn:!!get(AUTO_RETURN_KEY,true),
+    respectPause:!!get(AUTO_PAUSE_KEY,true),
+    muteFallback:!!get(AUTO_MUTE_KEY,false)
+  });
   const rowMap=new Map(), pending=new Map();
   const nativePending=new Map(), NATIVE_TAG='hmtc-youtube-stats-v1';
   // v0.3.1 draws no icon, but transparent edge hit areas live on Holodex itself.
@@ -421,6 +431,10 @@
   #hmtc-settings .presets{display:flex;gap:6px}
   #hmtc-settings .presets button{flex:1}
   #hmtc-settings .setting b{color:#84e4df}
+  #hmtc-settings .hmtc-toggle{display:flex;gap:10px;align-items:center;
+    padding:8px 0;margin-bottom:0;font-size:13px;font-weight:500;cursor:pointer}
+  #hmtc-settings .hmtc-toggle input{width:18px;height:18px;accent-color:#62d7d0;flex:none}
+  #hmtc-settings .hmtc-toggle span{flex:1}
   @media(orientation:landscape){
     #hmtc-sheet,#hmtc-settings{left:auto;right:9px;bottom:8px;margin:0;
       max-width:min(390px,68vw);max-height:calc(100vh - 16px);padding:13px;border-radius:16px}
@@ -738,6 +752,8 @@
       installed=true;installing=false;
       document.removeEventListener(token+':ready',ready);
       refresh();
+      syncAutoSettings().catch(error=>
+        console.warn('[Holodex Touch Controls] 自动播放设置同步失败',error));
     };
     document.addEventListener(token+':ready',ready);
     const tag=document.createElement('script');
@@ -752,6 +768,20 @@
       }catch(error){console.warn('[Holodex Touch Controls] 页面桥接失败',error);}
       if(!installed){installing=false;document.removeEventListener(token+':ready',ready);}
     },800);
+  }
+
+  function syncAutoSettings(){
+    if(!installed||!isMulti())return Promise.resolve(null);
+    return rpc('autoConfig',autoplaySettings(),3200);
+  }
+  function manualAutoPlay(){
+    if(!isMulti())return alert('请先进入 Holodex 多视图页面。');
+    if(!installed)return alert('多视图播放器尚未就绪，请刷新页面再试。');
+    rpc('autoKick',{},4200).then(result=>{
+      alert('已尝试启动 '+(result.attempted||0)+' 路；正在播放 '+
+        (result.playing||0)+' 路；等待初始化 '+(result.waiting||0)+
+        ' 路。若浏览器禁止有声自动播放，请在页面内点一下，再尝试播放。');
+    }).catch(error=>alert('播放请求未完成：'+error.message));
   }
 
   // The YouTube embed is a separate cross-origin document.
@@ -1148,8 +1178,26 @@
       '<option value="both">左侧轻点＋左右侧长按</option>',
       '</select>',
       '<div class="setting-summary">长按识别前滑动超过 12px 会取消；右侧纵向滑动继续调节音量。</div></div>',
+      '<div class="setting" style="padding-top:12px;border-top:1px solid #ffffff26">',
+      '<label>智能自动播放 · 适用于 PC 和安卓</label>',
+      '<label class="hmtc-toggle"><input type="checkbox" data-control="autoEnabled">',
+      '<span>进入/刷新多视图时启动未播放的视频</span></label>',
+      '<label class="hmtc-toggle"><input type="checkbox" data-control="autoReturn">',
+      '<span>切回标签页时检查并恢复</span></label>',
+      '<label class="hmtc-toggle"><input type="checkbox" data-control="autoRespectPause">',
+      '<span>尊重已识别的手动暂停</span></label>',
+      '<div class="setting-summary">播放中与缓冲中的视频不会重启；结束的录像不自动从头播放。',
+      '前台观察到从播放转为暂停时视作手动暂停，当前标签页刷新后仍记住。</div>',
+      '<label for="hmtc-auto-mute" style="margin-top:12px">播放被限制时的声音策略</label>',
+      '<select id="hmtc-auto-mute" data-control="autoMute">',
+      '<option value="keep">保持原有静音和音量（默认）</option>',
+      '<option value="mute">多次播放失败后才尝试静音启动</option>',
+      '</select>',
+      '<div class="setting-summary">自动播放仅有限次重试，不会持续点击视频或修改正在播放的音量。</div>',
+      '<button type="button" data-action="autoNow" style="width:100%;margin-top:12px">立即尝试播放未播放视频</button>',
+      '</div>',
       '<div class="setting-summary" style="margin-top:16px">',
-      '触控区域左右各宽 36%，最大 112px，纵向覆盖 11%–89%。',
+      '安卓触控区域左右各宽 36%，最大 112px，纵向覆盖 11%–89%。',
       '可从油猴菜单显示边界或关闭边缘手势。</div>'
     ].join('');
     document.body.appendChild(settings);
@@ -1168,6 +1216,22 @@
     settings.querySelector('[data-control="statsMode"]').addEventListener('change',e=>{
       if(['tap','hold','both'].includes(e.target.value))set(STATS_MODE_KEY,e.target.value);
     });
+    const autoInputs=[
+      ['autoEnabled',AUTO_ENABLED_KEY],
+      ['autoReturn',AUTO_RETURN_KEY],
+      ['autoRespectPause',AUTO_PAUSE_KEY]
+    ];
+    for(const [name,key] of autoInputs){
+      settings.querySelector('[data-control="'+name+'"]').addEventListener('change',e=>{
+        set(key,!!e.target.checked);
+        syncAutoSettings().catch(error=>console.warn('[HMTC] 自动播放设置',error));
+      });
+    }
+    settings.querySelector('[data-control="autoMute"]').addEventListener('change',e=>{
+      set(AUTO_MUTE_KEY,e.target.value==='mute');
+      syncAutoSettings().catch(error=>console.warn('[HMTC] 自动播放静音设置',error));
+    });
+    settings.querySelector('[data-action="autoNow"]').addEventListener('click',manualAutoPlay);
     return settings;
   }
   function openSettings(){
@@ -1175,6 +1239,11 @@
     settings.querySelector('[data-control="sensitivity"]').value=String(getSensitivity());
     settings.querySelector('[data-value="sensitivity"]').textContent=getSensitivity().toFixed(1)+'×';
     settings.querySelector('[data-control="statsMode"]').value=getStatsMode();
+    const config=autoplaySettings();
+    settings.querySelector('[data-control="autoEnabled"]').checked=config.enabled;
+    settings.querySelector('[data-control="autoReturn"]').checked=config.onReturn;
+    settings.querySelector('[data-control="autoRespectPause"]').checked=config.respectPause;
+    settings.querySelector('[data-control="autoMute"]').value=config.muteFallback?'mute':'keep';
     settings.hidden=false;
   }
   function closeSettings(){if(settings)settings.hidden=true;}
