@@ -521,6 +521,8 @@
     const AUTO_MANUAL_KEY='hmtc_autoplay_manual_pause_v1';
     const AUTO_MANUAL_AGE=12*60*60*1000;
     const attempts=new Map(),manualPauses=new Map(),wasPlayingHidden=new Set();
+    const knownAutoCells=new Set();
+    let lastForegroundRetry=0;
     try {
       const cached=JSON.parse(win.sessionStorage?.getItem(AUTO_MANUAL_KEY)||'{}');
       for(const [key,at] of Object.entries(cached)){
@@ -561,6 +563,14 @@
         return Number.isFinite(state)?state:null;
       }catch{return null;}
     }
+    function nextRetryCampaign(){
+      for(const [key,track] of attempts){
+        if(track.tries>=4&&track.campaigns<2&&!manualPauses.has(key)){
+          track.tries=0;track.gestureTries=0;track.lastTry=0;
+          track.campaigns++;
+        }
+      }
+    }
     let nextGestureCheck=0, lastAutoSummary=null;
     function autoScan(mode='tick'){
       const manualRun=mode==='force', gesture=mode==='gesture';
@@ -568,7 +578,14 @@
       if(!doc.querySelector('.multiview')||doc.hidden||
          (!autoCfg.enabled&&!manualRun))return result;
       const now=Date.now(),current=new Set();
-      for(const {key,vm} of autoplayCells()){
+      const cells=autoplayCells();
+      // Holodex / Quick Add may append multiple videos. Give old blocked
+      // videos a bounded second chance when the layout actually changes.
+      if(knownAutoCells.size&&cells.some(({key})=>!knownAutoCells.has(key)))
+        nextRetryCampaign();
+      knownAutoCells.clear();
+      for(const {key} of cells)knownAutoCells.add(key);
+      for(const {key,vm} of cells){
         current.add(key);
         const player=vm.ytPlayer;
         const state=getPlaybackState(player);
@@ -576,7 +593,7 @@
         let track=attempts.get(key);
         if(!track||track.player!==player){
           track={player,lastState:null,lastTry:0,tries:0,gestureTries:0,
-            returned:false,suppressed:false,everPlaying:false};
+            returned:false,suppressed:false,everPlaying:false,campaigns:0};
           attempts.set(key,track);
         }
         // 1 = playing, 3 = buffering. Neither should ever be restarted.
@@ -645,14 +662,23 @@
       return result;
     }
     function autoConfigure(msg){
+      const wasEnabled=autoCfg.enabled;
       for(const name of ['enabled','onReturn','respectPause','muteFallback'])
         if(typeof msg[name]==='boolean')autoCfg[name]=msg[name];
       if(!autoCfg.enabled)return {...autoCfg,ready:true};
+      if(!wasEnabled)nextRetryCampaign();
       autoScan('config');
       return {...autoCfg,ready:true};
     }
     function autoResumeFromHidden(){
       if(!autoCfg.enabled||!autoCfg.onReturn)return;
+      // Tab visibility / focus provides a new user-visible opportunity.
+      // Cap these retries so frequent focus changes cannot cause an
+      // unbounded storm of playVideo() calls.
+      if(Date.now()-lastForegroundRetry>12000){
+        lastForegroundRetry=Date.now();
+        nextRetryCampaign();
+      }
       // Browser background throttling may pause a video without user action.
       // Suppress manual-pause inference on that first foreground sample.
       for(const key of wasPlayingHidden){
