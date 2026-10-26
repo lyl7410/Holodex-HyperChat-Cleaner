@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量与播放统计）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.2.0
-// @description  Holodex 多视图触摸音量与 YouTube 原生 Stats for nerds 连接速度统计（实验性）。
+// @version      0.3.0
+// @description  Holodex YouTube 视频内无图标手势：右侧上下滑动音量、左侧轻点精简原生连接统计（实验性）。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -101,6 +101,100 @@
       return {available:meaningful,source,
         reason:meaningful?'':'嵌入播放器未提供原生详细统计',...data};
     }
+
+    // Gestures are armed by a verified Holodex parent message. No visible overlays
+    // and no changes to the embedded player's CSS or native clickable controls.
+    let gestureOrigin=null,gestureInstalled=false,touch=null,suppressClickUntil=0;
+    function setupGestures(){
+      if(gestureInstalled)return;
+      gestureInstalled=true;
+      const interactive='button,a,input,textarea,select,[role="button"],[contenteditable],.ytp-chrome-bottom,.ytp-chrome-top,.ytp-settings-menu,.ytp-popup,.ytp-panel,.ytp-ad-overlay-container,.ytp-endscreen-content,.ytp-large-play-button';
+      const inControls=target=>!!target?.closest?.(interactive);
+      function send(kind,stage,delta){
+        if(!gestureOrigin)return;
+        window.parent.postMessage({
+          tag:TAG,action:'gesture',videoId,kind,stage,
+          ...(typeof delta==='number'?{delta:Math.max(-1,Math.min(1,delta))}:{})
+        },gestureOrigin);
+      }
+      function start(event){
+        touch=null;
+        if(!gestureOrigin||event.touches?.length!==1||inControls(event.target))return;
+        const p=player();
+        if(!p)return;
+        let id;
+        try{id=p.getVideoData?.()?.video_id;}catch{}
+        if(id && id!==videoId)return;
+        const rect=p.getBoundingClientRect();
+        if(rect.width<140||rect.height<85)return;
+        const t=event.touches[0];
+        const x=(t.clientX-rect.left)/rect.width;
+        const y=(t.clientY-rect.top)/rect.height;
+        if(y<.19||y>.79)return;
+        const side=x<=.26?'left':x>=.74?'right':null;
+        if(!side)return;
+        touch={identifier:t.identifier,side,x:t.clientX,y:t.clientY,
+          rectHeight:rect.height,at:Date.now(),moving:false,cancelled:false,last:0};
+      }
+      function changed(event) {
+        if(!touch)return null;
+        for(const t of Array.from(event.changedTouches||[]))
+          if(t.identifier===touch.identifier)return t;
+        return null;
+      }
+      function move(event){
+        const g=touch;if(!g||!gestureOrigin)return;
+        if(event.touches?.length!==1){touch=null;return;}
+        const t=changed(event)||event.touches[0];
+        if(!t||t.identifier!==g.identifier)return;
+        const dy=g.y-t.clientY, dx=t.clientX-g.x;
+        if(g.side==='left'){
+          if(Math.abs(dx)>13||Math.abs(dy)>13)g.cancelled=true;
+          return;
+        }
+        if(!g.moving){
+          if(Math.abs(dx)>17&&Math.abs(dx)>Math.abs(dy)) {g.cancelled=true;return;}
+          if(g.cancelled||Math.abs(dy)<18||Math.abs(dy)<Math.abs(dx)*1.25)return;
+          g.moving=true;send('volume','start',0);
+        }
+        if(event.cancelable)event.preventDefault();
+        event.stopImmediatePropagation?.();
+        const delta=dy/Math.max(120,g.rectHeight*.8);
+        const now=Date.now();
+        if(now-g.last>=85){g.last=now;send('volume','move',delta);}
+      }
+      function end(event,cancelled){
+        const g=touch;if(!g)return;
+        const t=changed(event);if(!t)return;
+        touch=null;
+        const dx=t.clientX-g.x,dy=g.y-t.clientY;
+        if(g.side==='right'&&g.moving){
+          if(event.cancelable)event.preventDefault();
+          event.stopImmediatePropagation?.();
+          suppressClickUntil=Date.now()+450;
+          if(!cancelled)send('volume','end',dy/Math.max(120,g.rectHeight*.8));
+        }else if(g.side==='left'&&!cancelled&&!g.cancelled&&
+          Date.now()-g.at<550&&Math.abs(dx)<13&&Math.abs(dy)<13){
+          if(event.cancelable)event.preventDefault();
+          event.stopImmediatePropagation?.();
+          suppressClickUntil=Date.now()+450;
+          send('stats','tap');
+        }
+      }
+      // Capture before YouTube's bubble handlers; avoid suppressing native taps
+      // except a recognized left-side stats tap or a confirmed right-side swipe.
+      document.addEventListener('touchstart',start,{capture:true,passive:true});
+      document.addEventListener('touchmove',move,{capture:true,passive:false});
+      document.addEventListener('touchend',e=>end(e,false),{capture:true,passive:false});
+      document.addEventListener('touchcancel',e=>end(e,true),{capture:true,passive:false});
+      document.addEventListener('click',e=>{
+        if(Date.now()<suppressClickUntil){
+          e.preventDefault();e.stopImmediatePropagation?.();
+          suppressClickUntil=0;
+        }
+      },true);
+      window.addEventListener('blur',()=>{touch=null;});
+    }
     window.addEventListener('message',event=>{
       if(event.source!==window.parent || !origins.has(event.origin))return;
       const message=event.data;
@@ -112,6 +206,12 @@
           event.origin
         );
       };
+      if(message.action==='enableGestures') {
+        gestureOrigin=event.origin;
+        setupGestures();
+        respond({ok:true,data:{enabled:true}});
+        return;
+      }
       if(message.action==='stats') {
         respond({ok:true,data:readStats()});
         return;
@@ -142,7 +242,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.2.0', KEY='hmtc_enabled_v1';
+  const VERSION='0.3.0', KEY='hmtc_enabled_v1';
   const get=(key,def)=>GM_getValue(key,def);
   const set=(key,value)=>GM_setValue(key,value);
   if(!get(KEY,true)){
@@ -157,16 +257,19 @@
   const clamp=n=>Math.max(0,Math.min(100,Math.round(Number(n)||0)));
   const rowMap=new Map(), pending=new Map();
   const nativePending=new Map(), NATIVE_TAG='hmtc-youtube-stats-v1';
+  const activeFrames=new WeakSet(),armingFrames=new WeakSet(),swipes=new WeakMap();
+  let volumeToast=null,toastTimer=null;
   const YT_ORIGINS=new Set(['https://www.youtube.com','https://youtube.com','https://www.youtube-nocookie.com']);
   let sequence=0,nativeSequence=0,installed=false,installing=false,listing=false,active=null,sheet=null,statsBusy=false;
   let hintTimer=null,statsInterval=null;
 
   GM_addStyle(`
-  .hmtc-zone{position:absolute;z-index:25;right:0;top:16%;height:62%;width:34%;min-width:36px;max-width:104px;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;cursor:pointer;display:flex;justify-content:flex-end;align-items:center;padding-right:4px;box-sizing:border-box;pointer-events:auto;background:linear-gradient(to left,rgba(0,0,0,.12),transparent 80%)}
-  .hmtc-handle{pointer-events:none;width:32px;height:38px;border-radius:13px;background:rgba(17,23,36,.55);border:1px solid #ffffff44;color:white;display:flex;align-items:center;justify-content:center;font:20px system-ui;opacity:.68}
-  .hmtc-zone:active .hmtc-handle{opacity:1}
-  .hmtc-bubble{pointer-events:none;position:absolute;right:44px;top:50%;transform:translateY(-50%);background:#10151de8;padding:8px 12px;border-radius:9px;color:white;font:700 17px system-ui;white-space:nowrap}
-  .hmtc-bubble[hidden]{display:none!important}
+  /* v0.3.0: zero permanent UI elements within the video; temporary volume toast only. */
+  #hmtc-volume-toast{position:fixed;z-index:2147482999;pointer-events:none;
+    padding:6px 12px;border-radius:10px;background:#101725d9;color:#fff;
+    font:700 16px/1.3 system-ui;box-shadow:0 2px 12px #0008;min-width:54px;
+    text-align:center;transform:translate(-50%,-50%)}
+  #hmtc-volume-toast[hidden]{display:none!important}
   #hmtc-sheet{position:fixed;z-index:2147483000;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));max-width:460px;max-height:74vh;overflow:auto;margin:0 auto;background:#1a1e28f7;border:1px solid #ffffff54;border-radius:17px;padding:15px;color:#fff;box-shadow:0 8px 32px #000b;font:14px/1.45 system-ui,sans-serif;touch-action:pan-y;overscroll-behavior:contain;box-sizing:border-box}
   #hmtc-sheet[hidden]{display:none!important}
   #hmtc-sheet *{box-sizing:border-box}
@@ -338,8 +441,6 @@
     if(!root)return null;
     const slot=root.querySelector('.mv-frame');
     if(!slot)return null;
-    const zone=slot.querySelector('.hmtc-zone');
-    if(zone && zone.dataset.key!==row.layoutId+':'+row.videoId)return null;
     for(const frame of slot.querySelectorAll('iframe[src]')){
       let u;
       try{u=new URL(frame.src,location.href);}catch{continue;}
@@ -350,7 +451,7 @@
     return null;
   }
   function nativeRequest(row,action,timeout=1800) {
-    if(action!=='stats'&&action!=='nativeToggle')
+    if(!['stats','nativeToggle','enableGestures'].includes(action))
       return Promise.reject(new Error('不支持的 YouTube 指令'));
     const target=nativeFrame(row);
     if(!target)return Promise.reject(new Error('未找到当前视频的 YouTube 嵌入播放器'));
@@ -376,7 +477,42 @@
   window.addEventListener('message',event=>{
     if(!YT_ORIGINS.has(event.origin))return;
     const response=event.data;
-    if(response?.tag!==NATIVE_TAG||!Number.isSafeInteger(response.seq))return;
+    if(response?.tag!==NATIVE_TAG)return;
+    if(response.action==='gesture'){
+      // Match both frame WindowProxy and current video ID. Never trust a bare
+      // iframe-origin message as a command for arbitrary video cells.
+      if(!coarse||!isMulti()||document.hidden||
+        !['stats','volume'].includes(response.kind))return;
+      let row=null,frame=null;
+      for(const candidate of rowMap.values()){
+        if(candidate.videoId!==response.videoId)continue;
+        const result=nativeFrame(candidate);
+        if(result?.frame.contentWindow===event.source&&result.origin===event.origin){
+          row=candidate;frame=result.frame;break;
+        }
+      }
+      if(!row)return;
+      if(response.kind==='stats'){
+        if(response.stage==='tap')openSheet(row);
+        return;
+      }
+      if(!['start','move','end'].includes(response.stage))return;
+      if(response.stage==='start'){
+        swipes.set(frame,{videoId:row.videoId,layoutId:row.layoutId,
+          base:row.volume,started:Date.now()});
+        return;
+      }
+      const swipe=swipes.get(frame);
+      if(!swipe||swipe.videoId!==row.videoId||swipe.layoutId!==row.layoutId||
+         Date.now()-swipe.started>8000||!Number.isFinite(response.delta)||
+         Math.abs(response.delta)>1.001)return;
+      const value=clamp(swipe.base+response.delta*100);
+      if(value!==row.volume||row.muted)volume(row,value,null);
+      showVolumeToast(frame,value);
+      if(response.stage==='end')swipes.delete(frame);
+      return;
+    }
+    if(!Number.isSafeInteger(response.seq))return;
     const task=nativePending.get(response.seq);
     if(!task||task.frame.contentWindow!==event.source||
        task.origin!==event.origin||
@@ -399,79 +535,40 @@
     const mute=sheet.querySelector('[data-action="mute"]');
     if(mute)mute.textContent=row.muted?'🔇':'🔊';
   }
-  function bubble(zone,text,ms=1150){
-    const el=zone?.querySelector('.hmtc-bubble');
-    if(!el)return;
-    el.textContent=text;el.hidden=false;
-    clearTimeout(zone._hideTimer);
-    zone._hideTimer=setTimeout(()=>{el.hidden=true;},ms);
-  }
-  function volume(row,value,zone){
+  function volume(row,value){
     value=clamp(value);
     row.volume=value;row.muted=value===0;
-    if(zone){zone.dataset.volume=String(value);bubble(zone,'🔊 '+value+'%');}
-    if(active&&active.layoutId===row.layoutId&&active.videoId===row.videoId)renderVolume(row);
+    if(active&&active.layoutId===row.layoutId&&active.videoId===row.videoId)
+      renderVolume(row);
     rpc('volume',{layoutId:row.layoutId,videoId:row.videoId,volume:value})
-      .catch(e=>zone?bubble(zone,e.message,2000):field('note',e.message));
+      .catch(e=>field('note',e.message));
   }
-
-  function attach(root,row){
-    const frame=root.querySelector('.mv-frame');
-    if(!frame)return;
-    let zone=frame.querySelector(':scope > .hmtc-zone');
-    if(!zone){
-      zone=document.createElement('div');
-      zone.className='hmtc-zone';
-      zone.innerHTML='<div class="hmtc-handle" aria-hidden="true">🔊</div><div class="hmtc-bubble" hidden></div>';
-      frame.appendChild(zone);
-      zone.addEventListener('pointerdown',e=>{
-        if(e.button>0||!e.isPrimary)return;
-        const current=rowMap.get(zone.dataset.key);
-        if(!current)return;
-        e.preventDefault();e.stopPropagation();
-        zone._drag={id:e.pointerId,startY:e.clientY,volume:current.volume,
-          range:Math.max(105,zone.getBoundingClientRect().height*.9),moved:false,lastSent:0};
-        try{zone.setPointerCapture(e.pointerId);}catch{}
-      });
-      zone.addEventListener('pointermove',e=>{
-        const drag=zone._drag;
-        if(!drag||drag.id!==e.pointerId)return;
-        e.preventDefault();e.stopPropagation();
-        const dy=drag.startY-e.clientY;
-        if(!drag.moved&&Math.abs(dy)<8)return;
-        drag.moved=true;
-        const current=rowMap.get(zone.dataset.key);
-        if(!current)return;
-        const v=clamp(drag.volume+dy/drag.range*100);
-        if(v===current.volume&&!current.muted)return;
-        current.volume=v;current.muted=v===0;
-        bubble(zone,'🔊 '+v+'%',900);
-        if(active&&active.layoutId===current.layoutId&&active.videoId===current.videoId)
-          renderVolume(current);
-        if(performance.now()-drag.lastSent>90){
-          drag.lastSent=performance.now();
-          rpc('volume',{layoutId:current.layoutId,videoId:current.videoId,volume:v})
-            .catch(e=>bubble(zone,e.message,1800));
-        }
-      });
-      function finish(e,cancel){
-        const drag=zone._drag;
-        if(!drag||drag.id!==e.pointerId)return;
-        e.preventDefault();e.stopPropagation();
-        zone._drag=null;
-        try{zone.releasePointerCapture(e.pointerId);}catch{}
-        const current=rowMap.get(zone.dataset.key);
-        if(!current||cancel)return;
-        if(drag.moved)volume(current,current.volume,zone);
-        else openSheet(current);
-      }
-      zone.addEventListener('pointerup',e=>finish(e,false));
-      zone.addEventListener('pointercancel',e=>finish(e,true));
-      zone.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();});
-      zone.addEventListener('contextmenu',e=>e.preventDefault());
+  function showVolumeToast(frame,value){
+    if(!volumeToast?.isConnected){
+      volumeToast=document.createElement('div');
+      volumeToast.id='hmtc-volume-toast';
+      document.body.appendChild(volumeToast);
     }
-    zone.dataset.key=row.layoutId+':'+row.videoId;
-    zone.title='向上/向下滑动调音量；轻点打开统计';
+    const rect=frame.getBoundingClientRect();
+    volumeToast.style.left=Math.max(32,Math.min(innerWidth-32,rect.right-35))+'px';
+    volumeToast.style.top=Math.max(20,Math.min(innerHeight-20,rect.top+rect.height*.5))+'px';
+    volumeToast.textContent=value+'%';
+    volumeToast.hidden=false;
+    clearTimeout(toastTimer);
+    toastTimer=setTimeout(()=>{if(volumeToast)volumeToast.hidden=true;},750);
+  }
+  function armFrame(row){
+    const mapped=nativeFrame(row),frame=mapped?.frame;
+    if(!frame||activeFrames.has(frame)||armingFrames.has(frame))return;
+    armingFrames.add(frame);
+    nativeRequest(row,'enableGestures',1700).then(result=>{
+      if(result?.enabled){
+        activeFrames.add(frame);
+        // Loading new content into the same iframe requires a new handshake.
+        frame.addEventListener('load',()=>activeFrames.delete(frame),{once:true});
+      }
+    }).catch(()=>{ /* Webview may prohibit third-party iframe userscripts. */ })
+      .finally(()=>armingFrames.delete(frame));
   }
 
   function makeSheet(){
@@ -492,15 +589,10 @@
       '<div class="speed" data-field="speed">—</div>',
       '<div class="sub" data-field="network">正在读取 YouTube 嵌入播放器…</div></div>',
       '<div class="grid">',
-      '<div><label>播放状态</label><strong data-field="state">—</strong></div>',
-      '<div><label>录播缓冲比例</label><strong data-field="buffer">—</strong></div>',
-      '<div><label>播放时间</label><strong data-field="position">—</strong></div>',
-      '<div><label>倍速</label><strong data-field="rate">—</strong></div>',
       '<div><label>缓冲健康度</label><strong data-field="health">—</strong></div>',
+      '<div><label>播放时间</label><strong data-field="position">—</strong></div>',
       '<div><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
-      '<div><label>丢帧</label><strong data-field="dropped">—</strong></div>',
-      '<div><label>视频 / 音频编码</label><strong data-field="codecs">—</strong></div>',
-      '<div><label>直播延迟</label><strong data-field="latency">—</strong></div>',
+      '<div><label>播放状态</label><strong data-field="state">—</strong></div>',
       '</div><div class="actions" style="margin-top:10px">',
       '<button data-action="native">切换 YouTube 原版统计</button></div>',
       '<div class="note" data-field="note">',
@@ -510,7 +602,7 @@
     const slider=sheet.querySelector('[data-field="slider"]');
     slider.addEventListener('input',()=>{
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
-      if(row)volume(row,Number(slider.value),null);
+      if(row)volume(row,Number(slider.value));
     });
     sheet.addEventListener('click',async e=>{
       const btn=e.target.closest('button[data-action]');
@@ -519,9 +611,9 @@
       if(action==='close'){closeSheet();return;}
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
       if(!row)return;
-      if(action==='minus')volume(row,row.volume-10,null);
-      if(action==='plus')volume(row,row.volume+10,null);
-      if(action==='full')volume(row,100,null);
+      if(action==='minus')volume(row,row.volume-10);
+      if(action==='plus')volume(row,row.volume+10);
+      if(action==='full')volume(row,100);
       if(action==='mute'){
         try{
           const result=await rpc('mute',{layoutId:row.layoutId,videoId:row.videoId});
@@ -555,10 +647,6 @@
     field('health',typeof data?.bufferSeconds==='number'
       ? data.bufferSeconds.toFixed(1)+' s':'—');
     field('resolution',data?.resolution||'—');
-    field('codecs',data?.codecs||'—');
-    field('dropped',Number.isFinite(data?.dropped)?String(data.dropped):'—');
-    field('latency',Number.isFinite(data?.liveLatencySeconds)
-      ? data.liveLatencySeconds.toFixed(2)+' s':'—');
   }
   const status={'-1':'未开始','0':'结束','1':'播放中','2':'已暂停','3':'缓冲中','5':'待播放'};
   function timestamp(n){
@@ -583,10 +671,7 @@
       if(basic.status==='fulfilled'){
         const v=basic.value;
         field('state',!v.ready?'播放器尚未就绪':status[String(v.state)]||'未知');
-        field('buffer',v.live?'直播：不可用':
-          Number.isFinite(v.fraction)?(Math.min(100,v.fraction*100).toFixed(1)+'%'):'—');
         field('position',timestamp(v.position)+(v.live?'（直播）':' / '+timestamp(v.duration)));
-        field('rate',Number.isFinite(v.rate)?v.rate+'×':'—');
       }else field('state','暂时无法读取播放器状态');
       if(yt.status==='fulfilled')renderYouTubeStats(yt.value);
       else renderYouTubeStats(null,yt.reason?.message||'YouTube iframe 未响应');
@@ -618,18 +703,17 @@
         const key=row.layoutId+':'+row.videoId;
         validKeys.add(key);
         const old=rowMap.get(key);
-        // Keep optimistic swipe volume until the user releases the gesture.
-        const zone=roots[row.index]?.querySelector('.mv-frame > .hmtc-zone');
-        if(zone?._drag&&old){row.volume=old.volume;row.muted=old.muted;}
+        const frame=nativeFrame({...row,index:row.index})?.frame;
+        if(frame && swipes.get(frame) && old){
+          row.volume=old.volume;row.muted=old.muted;
+        }
         rowMap.set(key,row);
-        if(roots[row.index])attach(roots[row.index],row);
+        armFrame(row);
         if(active&&active.layoutId+':'+active.videoId===key)renderVolume(row);
       }
       for(const key of rowMap.keys())if(!validKeys.has(key))rowMap.delete(key);
-      for(const root of roots){
-        const zone=root.querySelector('.mv-frame > .hmtc-zone');
-        if(zone&&!validKeys.has(zone.dataset.key))zone.remove();
-      }
+      // Remove any leftover overlays if the old version was injected in-place.
+      for(const root of roots)root.querySelector('.mv-frame > .hmtc-zone')?.remove();
       if(active&&!rowMap.has(active.layoutId+':'+active.videoId))closeSheet();
     }catch{ /* Holodex may be building/changing the layout. */ }
     finally{listing=false;}
@@ -649,7 +733,17 @@
       if(isMulti()){if(!installed)installBridge();else refresh();}
     },1700);
     document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
-    GM_registerMenuCommand('Touch Controls 操作说明',()=>alert('Holodex 多视图 YouTube 视频右侧上下滑动调音量。轻点 🔊 查看 YouTube 原生 Stats for nerds 的 Connection Speed、缓冲健康度、分辨率等。原生接口属于实验性，嵌入 iframe 脚本必须获得网站权限。'));
+    GM_registerMenuCommand('Touch Controls 操作说明',()=>alert('v0.3.0：无常驻图标。YouTube 画面右侧中部向上/下滑调音量，左侧中部轻点打开精简统计。数据来自 YouTube Stats for nerds；需要允许第三方 YouTube iframe 运行脚本。')); 
+    GM_registerMenuCommand('选择视频查看统计（备用入口）',()=>{
+      const rows=[...rowMap.values()];
+      if(!rows.length)return alert('当前没有已识别的 YouTube 视频格子。');
+      if(rows.length===1){openSheet(rows[0]);return;}
+      const choice=prompt('选择要查看统计的序号：\n'+
+        rows.map((r,i)=>(i+1)+'. '+(r.title||r.videoId).slice(0,36)).join('\n'),'1');
+      if(choice===null)return;
+      const n=Number(choice);
+      if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
+    });
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});
   else init();
