@@ -539,6 +539,26 @@
     const frame=root?.querySelector('.mv-frame');
     if(!frame)return;
     const key=row.layoutId+':'+row.videoId;
+    const HOLD_MS=600, TAP_SLOP=13, SWIPE_SLOP=9;
+
+    function clearHold(gesture){
+      if(gesture?.timer){clearTimeout(gesture.timer);gesture.timer=null;}
+    }
+    function armHold(zone,gesture){
+      if(!allowsHold())return;
+      gesture.timer=setTimeout(()=>{
+        if(zone._gesture!==gesture||gesture.moved||gesture.held||
+           gesture.key!==zone.dataset.key||!zone.isConnected)return;
+        const target=rowMap.get(gesture.key);
+        if(!target)return;
+        gesture.held=true;
+        zone._lastTap=Date.now();
+        openSheet(target);
+      },HOLD_MS);
+    }
+    function point(event,id){
+      return [...(event.touches||[])].find(t=>t.identifier===id)||null;
+    }
     for(const side of ['left','right']){
       let zone=frame.querySelector('.hmtc-edge--'+side);
       if(!zone){
@@ -546,131 +566,153 @@
         zone.className='hmtc-edge hmtc-edge--'+side;
         zone.dataset.side=side;
         zone.setAttribute('aria-label',side==='left'
-          ? '点按查看当前视频播放统计'
-          : '上下滑动调整当前视频音量');
+          ? '轻点或长按查看当前视频播放统计'
+          : '上下滑动调整当前视频音量，可选择长按查看统计');
         frame.appendChild(zone);
-        if(side==='left'){
-          zone._lastTap=0;
-          let touch=null;
-          zone.addEventListener('touchstart',event=>{
-            touch=null;
-            if(event.touches.length!==1)return;
-            const t=event.touches[0];
-            touch={id:t.identifier,x:t.clientX,y:t.clientY,at:Date.now(),moved:false};
-          },{passive:true});
-          zone.addEventListener('touchmove',event=>{
-            if(!touch)return;
-            const t=[...event.touches].find(x=>x.identifier===touch.id);
-            if(t && (Math.abs(t.clientX-touch.x)>13||Math.abs(t.clientY-touch.y)>13))
-              touch.moved=true;
-          },{passive:true});
-          zone.addEventListener('touchend',event=>{
-            const g=touch;touch=null;
-            if(!g||g.moved||Date.now()-g.at>550)return;
-            const t=changedTouch(event,g.id);
-            if(!t||Math.abs(t.clientX-g.x)>13||Math.abs(t.clientY-g.y)>13)return;
-            const target=rowMap.get(zone.dataset.key);
+        zone._lastTap=0;
+        let gesture=null;
+
+        function reset(){
+          clearHold(gesture);
+          gesture=null;zone._gesture=null;zone._drag=null;
+        }
+        zone.addEventListener('touchstart',event=>{
+          reset();
+          if(event.touches?.length!==1)return;
+          const target=rowMap.get(zone.dataset.key);
+          if(!target)return;
+          const t=event.touches[0];
+          gesture={
+            id:t.identifier,key:zone.dataset.key,at:Date.now(),
+            x:t.clientX,y:t.clientY,moved:false,held:false,cancelled:false,
+            base:target.volume,value:target.volume,
+            range:Math.max(95,frame.getBoundingClientRect().height*.65)/getSensitivity(),
+            lastSent:0,timer:null
+          };
+          zone._gesture=gesture;
+          if(side==='right')zone._drag=gesture;
+          armHold(zone,gesture);
+          // Right edge owns vertical gestures: do not let Android scroll Holodex.
+          if(side==='right'){
+            if(event.cancelable)event.preventDefault();
+            event.stopPropagation();
+          }
+        },{passive:side==='left'});
+
+        zone.addEventListener('touchmove',event=>{
+          const g=gesture;
+          if(!g)return;
+          if(event.touches?.length!==1||g.key!==zone.dataset.key){
+            reset();return;
+          }
+          const t=point(event,g.id);
+          if(!t)return;
+          const dx=t.clientX-g.x, dy=g.y-t.clientY;
+          if(Math.abs(dx)>12||Math.abs(dy)>12){
+            g.moved=true;clearHold(g);
+          }
+          if(side==='left'||g.held)return;
+          if(event.cancelable)event.preventDefault();
+          event.stopPropagation();
+          if(Math.abs(dx)>Math.abs(dy)*1.4&&Math.abs(dx)>18){
+            g.cancelled=true;return;
+          }
+          if(g.cancelled)return;
+          if(Math.abs(dy)<SWIPE_SLOP)return;
+          g.value=clamp(g.base+dy/g.range*100);
+          showVolumeToast(frame,g.value);
+          const target=rowMap.get(g.key);
+          const now=Date.now();
+          if(target&&now-g.lastSent>=90&&(target.volume!==g.value||target.muted)){
+            g.lastSent=now;
+            volume(target,g.value);
+          }
+        },{passive:side==='left'});
+
+        zone.addEventListener('touchend',event=>{
+          const g=gesture;
+          if(!g)return;
+          const t=changedTouch(event,g.id);
+          reset();
+          if(!t||g.key!==zone.dataset.key)return;
+          if(side==='right'){
+            if(event.cancelable)event.preventDefault();
+            event.stopPropagation();
+            if(g.held||g.cancelled||Math.abs(g.y-t.clientY)<SWIPE_SLOP)return;
+            const target=rowMap.get(g.key);
+            if(!target)return;
+            const value=clamp(g.base+(g.y-t.clientY)/g.range*100);
+            if(target.volume!==value||target.muted)volume(target,value);
+            showVolumeToast(frame,value);
+          }else if(!g.held&&!g.moved&&allowsTap()&&
+                   Date.now()-g.at<=550&&Math.abs(t.clientX-g.x)<TAP_SLOP&&
+                   Math.abs(t.clientY-g.y)<TAP_SLOP){
+            const target=rowMap.get(g.key);
             if(!target)return;
             if(event.cancelable)event.preventDefault();
             event.stopPropagation();
             zone._lastTap=Date.now();
             openSheet(target);
-          },{passive:false});
-          zone.addEventListener('touchcancel',()=>{touch=null;},{passive:true});
-          zone.addEventListener('click',event=>{
-            event.preventDefault();event.stopPropagation();
-            if(Date.now()-zone._lastTap<650)return;
+          }
+        },{passive:false});
+
+        zone.addEventListener('touchcancel',reset,{passive:true});
+        zone.addEventListener('contextmenu',e=>{
+          if(allowsHold()){e.preventDefault();e.stopPropagation();}
+        });
+        zone.addEventListener('click',e=>{
+          e.preventDefault();e.stopPropagation();
+          if(side!=='left'||!allowsTap()||Date.now()-zone._lastTap<650)return;
+          // Click fallback for devices which synthesize click but not touchend.
+          const target=rowMap.get(zone.dataset.key);
+          if(target)openSheet(target);
+        });
+
+        // Stylus fallback; never grab mouse clicks on the video.
+        if(side==='right'){
+          zone.addEventListener('pointerdown',e=>{
+            if(e.pointerType!=='pen'||e.button!==0)return;
+            reset();
             const target=rowMap.get(zone.dataset.key);
-            if(target)openSheet(target);
+            if(!target)return;
+            e.preventDefault();
+            gesture={pointer:e.pointerId,key:zone.dataset.key,at:Date.now(),
+              x:e.clientX,y:e.clientY,base:target.volume,value:target.volume,
+              range:Math.max(95,frame.getBoundingClientRect().height*.65)/getSensitivity(),
+              moved:false,held:false,lastSent:0};
+            zone._gesture=gesture;zone._drag=gesture;
+            armHold(zone,gesture);
+            try{zone.setPointerCapture(e.pointerId);}catch{}
           });
-        } else {
-          let drag=null;
-          zone.addEventListener('touchstart',event=>{
-            drag=null;
-            if(event.touches.length!==1)return;
-            const target=rowMap.get(zone.dataset.key);
-            if(!target)return;
-            const t=event.touches[0];
-            drag={id:t.identifier,key:zone.dataset.key,startY:t.clientY,startX:t.clientX,
-              base:target.volume,value:target.volume,
-              range:Math.max(95,frame.getBoundingClientRect().height*.65),
-              moved:false,lastSent:0};
-            // Prevent the Android page from scrolling in the right-side gesture area.
-            if(event.cancelable)event.preventDefault();
-            event.stopPropagation();
-            zone._drag=drag;
-          },{passive:false});
-          zone.addEventListener('touchmove',event=>{
-            if(!drag)return;
-            if(event.touches.length!==1||drag.key!==zone.dataset.key){
-              drag=null;zone._drag=null;return;
+          zone.addEventListener('pointermove',e=>{
+            const g=gesture;
+            if(e.pointerType!=='pen'||g?.pointer!==e.pointerId||g.key!==zone.dataset.key)return;
+            if(Math.abs(e.clientY-g.y)>12||Math.abs(e.clientX-g.x)>12){
+              g.moved=true;clearHold(g);
             }
-            const t=[...event.touches].find(x=>x.identifier===drag.id);
-            if(!t)return;
-            if(event.cancelable)event.preventDefault();
-            event.stopPropagation();
-            const dy=drag.startY-t.clientY;
-            if(!drag.moved&&Math.abs(dy)<9)return;
-            drag.moved=true;
-            const target=rowMap.get(zone.dataset.key);
+            if(g.held)return;
+            if(!g.moved)return;
+            const target=rowMap.get(g.key);
             if(!target)return;
-            drag.value=clamp(drag.base+dy/drag.range*100);
-            showVolumeToast(frame,drag.value);
+            g.value=clamp(g.base+(g.y-e.clientY)/g.range*100);
+            showVolumeToast(frame,g.value);
             const now=Date.now();
-            if(now-drag.lastSent>=95 && (target.volume!==drag.value||target.muted)){
-              drag.lastSent=now;
-              volume(target,drag.value);
+            if(now-g.lastSent>=90&&(target.volume!==g.value||target.muted)){
+              g.lastSent=now;volume(target,g.value);
             }
-          },{passive:false});
-          zone.addEventListener('touchend',event=>{
-            const g=drag;drag=null;zone._drag=null;
-            if(!g||g.key!==zone.dataset.key)return;
-            const t=changedTouch(event,g.id);
-            if(event.cancelable)event.preventDefault();
-            event.stopPropagation();
-            if(!t||!g.moved)return;
-            const target=rowMap.get(zone.dataset.key);
-            if(!target)return;
-            const final=clamp(g.base+(g.startY-t.clientY)/g.range*100);
-            volume(target,final);
-            showVolumeToast(frame,final);
-          },{passive:false});
-          zone.addEventListener('touchcancel',()=>{
-            drag=null;zone._drag=null;
-          },{passive:true});
-          zone.addEventListener('click',event=>{
-            event.preventDefault();event.stopPropagation();
           });
-          // Pointer fallback for pen devices without touch-event dispatch.
-          zone.addEventListener('pointerdown',event=>{
-            if(event.pointerType!=='pen'||event.button!==0)return;
-            const target=rowMap.get(zone.dataset.key);
-            if(!target)return;
-            event.preventDefault();
-            drag={pointer:event.pointerId,startY:event.clientY,base:target.volume,
-              value:target.volume,range:Math.max(95,frame.getBoundingClientRect().height*.65),moved:false};
-            zone._drag=drag;
-            try{zone.setPointerCapture(event.pointerId);}catch{}
-          });
-          zone.addEventListener('pointermove',event=>{
-            if(event.pointerType!=='pen'||drag?.pointer!==event.pointerId)return;
-            const target=rowMap.get(zone.dataset.key);
-            if(!target)return;
-            const dy=drag.startY-event.clientY;
-            if(!drag.moved&&Math.abs(dy)<9)return;
-            drag.moved=true;
-            drag.value=clamp(drag.base+dy/drag.range*100);
-            showVolumeToast(frame,drag.value);
-          });
-          zone.addEventListener('pointerup',event=>{
-            if(event.pointerType!=='pen'||drag?.pointer!==event.pointerId)return;
-            const target=rowMap.get(zone.dataset.key);
-            if(target&&drag.moved){
-              volume(target,drag.value);
-              showVolumeToast(frame,drag.value);
+          zone.addEventListener('pointerup',e=>{
+            const g=gesture;
+            if(e.pointerType!=='pen'||g?.pointer!==e.pointerId)return;
+            reset();
+            const target=rowMap.get(g.key);
+            if(target&&!g.held&&g.moved){
+              const value=clamp(g.base+(g.y-e.clientY)/g.range*100);
+              if(target.volume!==value||target.muted)volume(target,value);
+              showVolumeToast(frame,value);
             }
-            drag=null;zone._drag=null;
           });
+          zone.addEventListener('pointercancel',reset);
         }
       }
       zone.dataset.key=key;
@@ -932,7 +974,7 @@
       if(isMulti()){if(!installed)installBridge();else refresh();}
     },1700);
     document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
-    GM_registerMenuCommand('Touch Controls 操作说明',()=>alert('v0.3.1：左右两侧中段使用窄透明触控区域（无常驻图标）。右侧上下滑动调音量，左侧轻点打开精简统计。第三方 YouTube iframe 不允许注入时，基本手势和播放时间仍可工作；原生连接速度需要 iframe 注入。调试时可用菜单显示触控区边界。')); 
+    GM_registerMenuCommand('Touch Controls 操作说明',()=>alert('v0.4.0：左右两侧各宽 36%、高 78% 的透明控制区。右侧上下滑调节音量，左侧轻点打开统计。通过「触控手势设置」配置 0.4–2.5× 灵敏度或左右长按 600ms 查看统计；YouTube 原生连接速度和直播延迟依赖第三方 iframe 读取。')); 
     GM_registerMenuCommand('选择视频查看统计（备用入口）',()=>{
       const rows=[...rowMap.values()];
       if(!rows.length)return alert('当前没有已识别的 YouTube 视频格子。');
