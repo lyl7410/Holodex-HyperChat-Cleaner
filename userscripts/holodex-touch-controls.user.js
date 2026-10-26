@@ -131,8 +131,22 @@
   function youtubeWatchControls(){
     const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
     const supported=()=>/^\/(?:watch(?:\/|$)|live\/|shorts\/)/.test(location.pathname);
-    const p=()=>page.document.querySelector('#movie_player.html5-video-player')||
-      page.document.querySelector('.html5-video-player');
+    const p=()=>{
+      const primary=page.document.querySelector('#movie_player.html5-video-player');
+      if(!/\/shorts\//.test(location.pathname)&&primary)return primary;
+      const candidates=[...page.document.querySelectorAll('.html5-video-player')];
+      if(!candidates.length)return primary||null;
+      const inViewport=el=>{
+        const r=el.getBoundingClientRect?.();
+        const h=page.innerHeight||innerHeight,w=page.innerWidth||innerWidth;
+        return !!r&&r.width>60&&r.height>60&&
+          r.top<h*.92&&r.bottom>h*.08&&r.left<w*.95&&r.right>w*.05;
+      };
+      const visible=candidates.filter(inViewport);
+      return visible.find(el=>{
+        try{return el.getPlayerState?.()===1;}catch{return false;}
+      })||visible[0]||primary||null;
+    };
     const controls=youtubePlaybackTools(page.document,p);
     const coarse=matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>0;
     const enabledKey='hmtc_youtube_edges_v1';
