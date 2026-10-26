@@ -39,10 +39,10 @@ Quick Add、Cleaner、Channel Name Fix 均无需改动。本脚本不处理 Twit
 
 | 项目 | 来源与说明 |
 | --- | --- |
-| **Connection Speed（Mbps）** | YouTube 原生 `getStatsForNerds()` 的 `bandwidth_kbps`，换算成 Mbps；仅代表其对当前播放连接的带宽估计 |
+| **Connection Speed（Mbps）** | 优先从 YouTube 内部 `getStatsForNerdsData()` / `getStatsForNerds()` 获取 `bandwidth_kbps` 并换算为 Mbps；仅代表当前播放连接的带宽估计 |
 | **Buffer Health（秒）** | YouTube 内部原生缓冲健康度字段，可用时显示 |
 | **播放时间** | Holodex 所用 YouTube IFrame API 的当前播放位置和时长；直播标记为直播 |
-| **当前／推荐分辨率** | YouTube 原生详细统计的分辨率信息，内部接口有值时显示 |
+| **当前／推荐分辨率** | 优先用 YouTube 原生统计；字段缺失时读取视频元素实际解码帧尺寸并标记「实际帧」，不冒充推荐分辨率 |
 
 另外保留「播放状态」、音量滑块、静音、±10 按钮，以及可选的「切换 YouTube 原版统计」。
 
