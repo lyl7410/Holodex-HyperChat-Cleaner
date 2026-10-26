@@ -705,21 +705,25 @@
     const row=rowMap.get(key);
     if(!row){closeSheet();return;}
     statsBusy=true;
-    try {
-      const [basic,yt]=await Promise.allSettled([
-        rpc('stats',{layoutId:row.layoutId,videoId:row.videoId},4000),
-        nativeRequest(row,'stats',1900)
-      ]);
-      // Responses from an old or replaced cell must not update a newer panel.
-      if(sheet.hidden||!active||active.layoutId+':'+active.videoId!==key)return;
-      if(basic.status==='fulfilled'){
-        const v=basic.value;
-        field('state',!v.ready?'播放器尚未就绪':status[String(v.state)]||'未知');
-        field('position',timestamp(v.position)+(v.live?'（直播）':' / '+timestamp(v.duration)));
-      }else field('state','暂时无法读取播放器状态');
-      if(yt.status==='fulfilled')renderYouTubeStats(yt.value);
-      else renderYouTubeStats(null,yt.reason?.message||'YouTube iframe 未响应');
-    }finally{statsBusy=false;}
+    const stillActive=()=>!!active&&!sheet.hidden&&active.layoutId+':'+active.videoId===key;
+    // Do not delay reliable playback time while optional YouTube private stats
+    // wait for an inaccessible third-party iframe and eventually time out.
+    const playback=rpc('stats',{
+      layoutId:row.layoutId,videoId:row.videoId
+    },3500).then(v=>{
+      if(!stillActive())return;
+      field('state',!v.ready?'播放器尚未就绪':status[String(v.state)]||'未知');
+      field('position',timestamp(v.position)+(v.live?'（直播）':' / '+timestamp(v.duration)));
+    }).catch(error=>{
+      if(stillActive())field('state','无法读取播放状态');
+    });
+    const native=nativeRequest(row,'stats',1900).then(v=>{
+      if(stillActive())renderYouTubeStats(v);
+    }).catch(error=>{
+      if(stillActive())renderYouTubeStats(null,error.message||'YouTube iframe 未响应');
+    });
+    try {await Promise.allSettled([playback,native]);}
+    finally {statsBusy=false;}
   }
   function openSheet(row){
     makeSheet();
