@@ -624,7 +624,7 @@
           if(track)removeAutoplayListener(key);
           track={player,lastState:null,lastTry:0,tries:0,gestureTries:0,
             returned:false,suppressed:false,everPlaying:false,campaigns:0,
-            playingSince:0,blockedAt:0,lastFailure:''};
+            playingSince:0,blockedAt:0,lastFailure:'',firstSeen:now};
           attempts.set(key,track);
           subscribeAutoplayBlocked(key,player,track);
         }
@@ -654,6 +654,12 @@
         }
         track.lastState=state;
         if(![-1,2,5].includes(state)){result.waiting++;continue;}
+        // On a fresh reload Holodex first creates its YouTube Player, then
+        // cues the media asynchronously. Spending all retries during the
+        // initial -1 state can leave every video stopped after it becomes ready.
+        if(state===-1&&!manualRun&&now-track.firstSeen<3200){
+          result.waiting++;continue;
+        }
         if(manualRun){
           unmarkManual(key);track.tries=0;track.gestureTries=0;
           track.suppressed=false;
@@ -723,6 +729,8 @@
           state===0?'播放已结束（不自动重播）':
           protectedPause?'受保护的手动暂停':
           track?.lastFailure||(
+            state===-1&&track&&Date.now()-track.firstSeen<3200?
+              '等待 YouTube 播放器完成初次加载':
             track?.tries>=4&&track?.gestureTries>=2?'自动尝试已用尽':
             track?.tries>=4?'普通自动尝试已用尽，可在页面点一下':
             state===2||state===5||state===-1?'等待下一次自动尝试':
