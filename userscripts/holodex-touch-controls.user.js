@@ -99,6 +99,8 @@
       if(document.getElementById('hmtc-silent-stats-css'))return;
       const style=document.createElement('style');
       style.id='hmtc-silent-stats-css';
+      const nonce=document.querySelector('script[nonce],style[nonce]')?.nonce;
+      if(nonce)style.nonce=nonce;
       style.textContent='html.'+SILENT_CLASS+
         ' .html5-video-info-panel,html.'+SILENT_CLASS+
         ' .ytp-stats-for-nerds{opacity:0!important;pointer-events:none!important;'+
@@ -232,13 +234,15 @@
       // statistics panel is actively enabled. Hidden snapshots can be stale.
       if(isNativeVisible(p)===true){
         const fromPanel=parse(null,true);
-        if(data.bandwidthKbps==null && fromPanel.bandwidthKbps!=null){
+        // When the native panel is actively updating, its displayed value
+        // may be newer than the return value of a cached internal method.
+        if(fromPanel.bandwidthKbps!=null){
           data.bandwidthKbps=fromPanel.bandwidthKbps;
           source='native-panel-dom';
         }
-        if(data.bufferSeconds==null) data.bufferSeconds=fromPanel.bufferSeconds;
+        if(fromPanel.bufferSeconds!=null)data.bufferSeconds=fromPanel.bufferSeconds;
         if(!data.resolution) data.resolution=fromPanel.resolution;
-        if(data.liveLatencySeconds==null)data.liveLatencySeconds=fromPanel.liveLatencySeconds;
+        if(fromPanel.liveLatencySeconds!=null)data.liveLatencySeconds=fromPanel.liveLatencySeconds;
       }
       if(!data.resolution) {
         // HTMLVideoElement intrinsic dimensions reflect the decoded video
@@ -266,6 +270,10 @@
         );
       };
       if(message.action==='stats') {
+        // A YouTube playback change can turn its statistics off again.
+        // Re-arm only if this script owns a silent monitoring session.
+        if(monitor.active&&monitor.forced&&!monitor.manual&&
+           isNativeVisible(player())===false)startMonitor();
         respond({ok:true,data:readStats()});
         return;
       }
@@ -989,9 +997,14 @@
     const previous=nativeCollector;
     nativeCollector=null;
     if(!previous)return;
-    nativeRequest(previous.row,'monitorStop',1100).catch(()=>{
-      // Cross-origin frame navigated/closed; its old context no longer exists.
-    });
+    // Send directly to the original WindowProxy rather than re-locating by
+    // layout index: Holodex may already have rearranged its video cells.
+    try {
+      previous.win.postMessage({
+        tag:NATIVE_TAG,seq:++nativeSequence,
+        videoId:previous.row.videoId,action:'monitorStop'
+      },previous.origin);
+    }catch{ /* The original frame was navigated or closed. */ }
   }
   function ensureNativeCollector(row){
     const target=nativeFrame(row);
@@ -1001,7 +1014,7 @@
        (nativeCollector.key!==key || nativeCollector.win!==target.frame.contentWindow))
       stopNativeCollector();
     if(!nativeCollector){
-      nativeCollector={key,win:target.frame.contentWindow,
+      nativeCollector={key,win:target.frame.contentWindow,origin:target.origin,
         row:{index:row.index,layoutId:row.layoutId,videoId:row.videoId},
         enabled:false,pending:null,retryAfter:0};
     }
