@@ -1693,8 +1693,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.5.1 说明',()=>
-      alert('v0.5.1：进入／刷新多视图时自动尝试播放；防止浏览器的自动播放拒绝被误记为手动暂停。油猴菜单新增「诊断多视图自动播放状态」，可查看每路视频是否被浏览器拦截、播放器未加载或被暂停保护。默认保持声音，不强制静音；安卓仍保留音量手势和统计。'));
+    GM_registerMenuCommand('Touch Controls v0.5.2 说明',()=>
+      alert('v0.5.2：进入／刷新多视图时自动播放已启用的未播放视频。若诊断显示「状态：已关闭」，可从「▶ 开启智能自动播放」启用，或从诊断确认开启；「⏸ 关闭智能自动播放」仅用于手动停用。默认保留声音，不重启已在播放的视频；安卓保留原来的音量手势与统计。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
