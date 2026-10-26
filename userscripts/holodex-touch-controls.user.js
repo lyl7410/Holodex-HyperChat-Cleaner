@@ -59,10 +59,13 @@
         s.buffer_health_seconds, s.bufferHealthSeconds,
         metric(/(?:Buffer Health|缓冲健康度|緩衝健康度)\s*[:：]?\s*([\d,.]+)\s*s/i)
       );
-      const sourceResolution = s.resolution || s.current_resolution || '';
-      const resolution = typeof sourceResolution === 'string'
-        ? sourceResolution.slice(0,90)
-        : '';
+      const sourceResolution = s.resolution || s.current_resolution ||
+        s.currentResolution || s.current_optimal_resolution || '';
+      const fromStatsText = body.match(
+        /(?:Current\s*\/\s*Optimal\s*Res|当前\s*\/\s*最佳分辨率|当前.*分辨率)\s*[:：]?\s*(\d{3,5}\s*[x×]\s*\d{3,5}(?:@\d+)?(?:\s*\/\s*\d{3,5}\s*[x×]\s*\d{3,5}(?:@\d+)?)?)/i
+      )?.[1] || '';
+      const resolution = (typeof sourceResolution==='string' && sourceResolution
+        ? sourceResolution : fromStatsText).slice(0,90);
       const sourceCodecs = s.codecs || '';
       const codecs = typeof sourceCodecs === 'string' ? sourceCodecs.slice(0,120) : '';
       const viewportFrames = String(s.viewport || s.frames || '').slice(0,100);
@@ -88,14 +91,33 @@
       if(actualId&&actualId!==videoId)
         return {available:false,reason:'播放视频已切换'};
       let raw=null,source='none';
-      if(typeof p.getStatsForNerds==='function') {
-        try{raw=p.getStatsForNerds();source='getStatsForNerds';}catch{}
-        if(!raw)try{raw=p.getStatsForNerds(0);source='getStatsForNerds(0)';}catch{}
-      }
-      if(!raw&&typeof p.getDebugText==='function'){
-        try{raw=p.getDebugText();source='getDebugText';}catch{}
+      // Some YouTube builds use getStatsForNerdsData rather than getStatsForNerds.
+      for(const [name,args] of [
+        ['getStatsForNerdsData',[]],
+        ['getStatsForNerds',[]],
+        ['getStatsForNerds',[0]],
+        ['getDebugText',[]]
+      ]) {
+        if(typeof p[name]!=='function')continue;
+        try{
+          const result=p[name](...args);
+          if(result && (typeof result==='string'||typeof result==='object')){
+            const parsed=parse(result);
+            if(parsed.bandwidthKbps!=null||parsed.bufferSeconds!=null||
+               parsed.resolution||parsed.codecs){
+              raw=result;source=name;break;
+            }
+          }
+        }catch{}
       }
       const data=parse(raw);
+      if(!data.resolution) {
+        // HTMLVideoElement intrinsic dimensions reflect the decoded video
+        // frame; label them explicitly rather than inventing optimal resolution.
+        const video=p.querySelector?.('video') || page.document.querySelector('video.html5-main-video');
+        if(video?.videoWidth>0 && video?.videoHeight>0)
+          data.resolution=video.videoWidth+'×'+video.videoHeight+'（实际帧）';
+      }
       const meaningful=data.bandwidthKbps!=null||data.bufferSeconds!=null||
         !!data.resolution||!!data.codecs;
       return {available:meaningful,source,
