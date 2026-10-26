@@ -71,7 +71,7 @@
     // Open the quality submenu through YouTube's *real* UI. No fake 1080p
     // choices and no deprecated IFrame quality API; the user chooses a
     // resolution from the native choices actually offered by this video.
-    function openQualityMenu(){
+    async function openQualityMenu(){
       const p=getPlayer();
       const setting=p?.querySelector?.('.ytp-settings-button');
       if(!setting||typeof setting.click!=='function')
@@ -80,6 +80,7 @@
         pageDoc.defaultView?.getComputedStyle?.(el)?.visibility!=='hidden';
       const menu=()=>p.querySelector('.ytp-settings-menu');
       if(!visible(menu()))setting.click();
+      await new Promise(resolve=>setTimeout(resolve,120));
       const pickQuality=()=>{
         const options=[...p.querySelectorAll('.ytp-settings-menu .ytp-menuitem')];
         const label=x=>String(x?.getAttribute('aria-label')||'')+' '+
@@ -339,7 +340,7 @@
         reason:meaningful?'':'嵌入播放器未提供原生详细统计',...data};
     }
 
-    window.addEventListener('message',event=>{
+    window.addEventListener('message',async event=>{
       if(event.source!==window.parent || !origins.has(event.origin))return;
       const message=event.data;
       if(!message||message.tag!==TAG||message.videoId!==videoId||
@@ -377,7 +378,7 @@
           let info;
           if(message.action==='playbackInfo')info=controls.snapshot();
           if(message.action==='playbackRate')info=controls.setRate(message.rate);
-          if(message.action==='qualityMenu')info=controls.openQualityMenu();
+          if(message.action==='qualityMenu')info=await controls.openQualityMenu();
           respond({ok:true,data:info});
         }catch(error){
           respond({ok:false,error:String(error?.message||error).slice(0,150)});
