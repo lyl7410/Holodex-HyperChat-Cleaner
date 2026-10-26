@@ -1,14 +1,15 @@
 # Holodex HyperChat Cleaner
 
-面向 **YouTube、Holodex Watch / Multiview** 的轻量级用户脚本，包含聊天清理、频道资料修复，以及 PC / Android 通用的一键添加视频。
+面向 **YouTube、Holodex Watch / Multiview** 的轻量级用户脚本，包含聊天清理、频道资料修复、PC / Android 一键添加视频，以及 **Holodex 多视图手机手势音量与播放统计**。
 
 ## 安装
 
 1. [HyperChat Cleaner](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/hyperchat-cleaner.user.js)
 2. [Channel Name Fix](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/channel-name-fix.user.js)
 3. [Holodex Quick Add（PC + Android）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-mobile-quick-add.user.js)
+4. [Holodex Touch Controls（手机手势音量与播放统计）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)
 
-三个脚本可独立安装。Quick Add 不要求安装另外两个脚本；要使用聊天清理或频道名修复时再分别安装。更新时覆盖同名脚本并刷新相关页面，不要同时启用多份旧版。
+四个脚本可独立安装。Quick Add 不要求安装另外三个脚本；Touch Controls 独立处理手机触控音量和统计，其他功能按需安装。更新时覆盖同名脚本并刷新相关页面，不要同时启用多份旧版。
 
 ## 功能
 
@@ -33,6 +34,14 @@
 - 保留油猴菜单：查看缓存、重新获取当前视频资料、清空缓存。
 
 ## 使用说明
+
+### Holodex Touch Controls v0.1.0（Android 触摸屏）
+
+- 在 Holodex 多视图的 **YouTube 视频画面右侧中段**上下滑动，调节当前这一路视频音量；轻点 🔊 打开大滑块、±10、静音和播放统计。
+- 自定义统计优先显示浏览器 `navigator.connection.downlink` 的**设备网络速度估算（Mbps）**及网络 RTT、播放状态、录播缓冲比例。**不是单路 YouTube 视频的实际 CDN 连接速度**；浏览器不支持会显示不可用。
+- 只占视频中间右侧的一部分，不遮挡 YouTube 底部的原生操作栏；纯 PC 鼠标环境不启用手势区。
+- [安装与触控/统计说明](docs/touch-controls.md)。
+
 
 ### Quick Add 通用版 v0.3.0（PC / Android）
 
@@ -68,13 +77,17 @@ userscripts/
   hyperchat-cleaner.user.js
   channel-name-fix.user.js
   holodex-mobile-quick-add.user.js
+  holodex-touch-controls.user.js
 docs/
   mobile-quick-add.md
   desktop-quick-add.md
+  touch-controls.md
 README.md
 ```
 
 ## 版本记录
+
+- **2026-10-26 — Touch Controls v0.1.0**：独立脚本支持 Holodex 视频画面右侧上下滑动控制逐路音量、轻点打开大音量滑块与设备网络速度估算/播放状态面板；不干预 YouTube iframe 内部。语法和模拟测试通过，手机真机待验证。
 
 - **2026-10-25 — Quick Add v0.3.0**：同一安装脚本支持 PC / Android；PC 增加悬停展开入口、快捷键、Shift＋点击新建接收页、后台接收以及优先桌面布局后备；保留手机原有触摸及自动隐藏行为。仅模拟测试和静态检查通过，PC 端尚需实机回归。
 
