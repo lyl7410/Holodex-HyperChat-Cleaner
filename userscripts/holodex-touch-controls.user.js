@@ -14,6 +14,7 @@
 // @grant        GM_setValue
 // @grant        GM.getValue
 // @grant        GM.setValue
+// @grant        GM_addValueChangeListener
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
 // @updateURL    https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js
@@ -424,7 +425,10 @@
     catch(error){autoLastWriteError=String(error?.message||error);return null;}
   }
   const syncRecord=getAutoRecordSync();
-  if(syncRecord)acceptAutoRecord(syncRecord,'Tampermonkey GM 主记录（同步）');
+  if(syncRecord){
+    acceptAutoRecord(syncRecord,'Tampermonkey GM 主记录（同步）');
+    autoGmSyncVerified=true; // Read a well-formed persisted record at boot.
+  }
   function buildAutoRecord(){
     return {
       schema:2,revision:++prefRevision,updatedAt:Date.now(),
@@ -450,17 +454,22 @@
         const modern=await GM.getValue(AUTO_RECORD_KEY,null);
         if(before!==prefInteractionEpoch)return;
         const parsed=validateAutoRecord(modern);
-        if(parsed&&(!autoGmRecordValid||parsed.revision>=prefRevision))
-          acceptAutoRecord(parsed,'Tampermonkey GM 主记录（异步）');
+        if(parsed){
+          autoGmAsyncVerified=true; // Modern GM read verified persisted data.
+          if(!autoGmRecordValid||parsed.revision>=prefRevision)
+            acceptAutoRecord(parsed,'Tampermonkey GM 主记录（异步）');
+        }
         if(!autoGmRecordValid){
           // For existing users without the canonical record, probe the modern
           // API's legacy values; prefer a previously saved origin backup.
-          for(const key of AUTO_KEYS){
-            const raw=await GM.getValue(key,null);
-            if(before!==prefInteractionEpoch)return;
+          const values=await Promise.all(
+            AUTO_KEYS.map(key=>GM.getValue(key,null)));
+          if(before!==prefInteractionEpoch)return;
+          AUTO_KEYS.forEach((key,index)=>{
+            const raw=values[index];
             if(typeof raw==='boolean'&&!autoLocalValues.has(key))
               autoLocalValues.set(key,raw);
-          }
+          });
           if(!AUTO_KEYS.some(k=>typeof previousBackup[k]==='boolean'))
             preferenceSource='Tampermonkey GM 历史设置';
         }
@@ -543,6 +552,21 @@
       savedEnabled:autoplaySettings().enabled,
       revision:prefRevision,backupError:autoLastWriteError
     };
+  }
+  // Keep different Holodex tabs consistent using the GM record rather than
+  // relying on a website storage event (which may be sandboxed).
+  if(typeof GM_addValueChangeListener==='function'){
+    try{
+      GM_addValueChangeListener(AUTO_RECORD_KEY,(key,oldValue,newValue,remote)=>{
+        if(!remote)return;
+        const latest=validateAutoRecord(newValue);
+        if(!latest||latest.revision<=prefRevision)return;
+        if(acceptAutoRecord(latest,'Tampermonkey GM 主记录（其他标签页）'))
+          autoPrefsReady.then(()=>syncAutoSettings().catch(()=>{}));
+      });
+    }catch(error){
+      autoLastWriteError='跨标签页监听不可用：'+String(error?.message||error);
+    }
   }
   window.addEventListener('storage',event=>{
     if(event.key!==AUTO_BACKUP_KEY||!event.newValue)return;
