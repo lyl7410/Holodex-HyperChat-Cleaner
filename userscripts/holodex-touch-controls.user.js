@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Holodex Touch Controls（手势音量与播放统计）
+// @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.4.2
-// @description  Holodex 手机手势音量、原生连接速度持续刷新、轻点标题快速关闭统计；无常驻图标。
+// @version      0.5.0
+// @description  Holodex 多视图智能自动播放未播放视频（PC/安卓），保留音量手势、原生播放统计及手动暂停保护。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -301,7 +301,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.4.2', KEY='hmtc_enabled_v1';
+  const VERSION='0.5.0', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -499,6 +499,181 @@
       values.forEach((v,i)=>{if(v.status==='fulfilled'&&v.value!=null)data[fields[i]]=v.value;});
       return data;
     }
+
+    // Multiview-wide autoplay runs in the site realm so it can call the
+    // existing YouTube IFrame API without crossing an iframe touch boundary.
+    // Configure it from the userscript; do not start any video until configured.
+    const autoCfg={enabled:false,onReturn:true,respectPause:true,muteFallback:false};
+    const AUTO_MANUAL_KEY='hmtc_autoplay_manual_pause_v1';
+    const AUTO_MANUAL_AGE=12*60*60*1000;
+    const attempts=new Map(),manualPauses=new Map(),wasPlayingHidden=new Set();
+    try {
+      const cached=JSON.parse(win.sessionStorage?.getItem(AUTO_MANUAL_KEY)||'{}');
+      for(const [key,at] of Object.entries(cached)){
+        if(/^[^:]{1,80}:[\w-]{11}$/.test(key)&&Number.isFinite(at)&&
+           Date.now()-at>=0&&Date.now()-at<AUTO_MANUAL_AGE)
+          manualPauses.set(key,at);
+      }
+    }catch{}
+    function saveManual(){
+      try {
+        win.sessionStorage?.setItem(AUTO_MANUAL_KEY,
+          JSON.stringify(Object.fromEntries(manualPauses)));
+      }catch{}
+    }
+    function markManual(key){
+      if(!manualPauses.has(key)){manualPauses.set(key,Date.now());saveManual();}
+    }
+    function unmarkManual(key){
+      if(manualPauses.delete(key))saveManual();
+    }
+    const cellKey=(vm)=>String(vm.item?.i??'')+':'+vm.video?.id;
+    function autoplayCells(){
+      const roots=doc.querySelectorAll('.multiview .mv-cell > .cell-content');
+      const result=[];
+      for(const root of roots){
+        if(!root.querySelector('.mv-frame'))continue;
+        const vm=findCell(root);
+        if(!vm||!valid(vm.video?.id)||vm.isTwitchVideo)continue;
+        const key=cellKey(vm);
+        if(!key.startsWith(':'))result.push({key,vm});
+      }
+      return result;
+    }
+    function getPlaybackState(player){
+      if(typeof player?.getPlayerState!=='function')return null;
+      try {
+        const state=Number(player.getPlayerState());
+        return Number.isFinite(state)?state:null;
+      }catch{return null;}
+    }
+    let nextGestureCheck=0, lastAutoSummary=null;
+    function autoScan(mode='tick'){
+      const manualRun=mode==='force', gesture=mode==='gesture';
+      const result={playing:0,attempted:0,protected:0,blocked:0,waiting:0,ended:0};
+      if(!doc.querySelector('.multiview')||doc.hidden||
+         (!autoCfg.enabled&&!manualRun))return result;
+      const now=Date.now(),current=new Set();
+      for(const {key,vm} of autoplayCells()){
+        current.add(key);
+        const player=vm.ytPlayer;
+        const state=getPlaybackState(player);
+        if(state===null){result.waiting++;continue;}
+        let track=attempts.get(key);
+        if(!track||track.player!==player){
+          track={player,lastState:null,lastTry:0,tries:0,gestureTries:0,
+            returned:false,suppressed:false};
+          attempts.set(key,track);
+        }
+        // 1 = playing, 3 = buffering. Neither should ever be restarted.
+        if(state===1||state===3){
+          result.playing++;
+          track.lastState=state;track.tries=0;track.gestureTries=0;
+          track.returned=false;track.suppressed=false;
+          unmarkManual(key);
+          continue;
+        }
+        if(state===0){track.lastState=state;result.ended++;continue;}
+        // Observe a foreground transition from playback to pause. Since the
+        // IFrame API does not attribute pauses to a user, treat any visible
+        // playing->paused transition as intentionally paused (conservative).
+        if(state===2&&(track.lastState===1||track.lastState===3)&&
+           !track.returned){
+          markManual(key);
+        }
+        track.lastState=state;
+        if(![-1,2,5].includes(state)){result.waiting++;continue;}
+        if(manualRun){
+          unmarkManual(key);track.tries=0;track.gestureTries=0;
+          track.suppressed=false;
+        }
+        if(track.suppressed&&!manualRun){result.protected++;continue;}
+        if(autoCfg.respectPause&&manualPauses.has(key)&&!manualRun){
+          result.protected++;continue;
+        }
+        if(!manualRun&&track.tries>=4){
+          if(!gesture||track.gestureTries>=2||now-track.lastTry<1600){
+            result.blocked++;continue;
+          }
+          track.gestureTries++;
+        }else if(!manualRun&&track.tries>0&&
+                 now-track.lastTry<Math.min(5200,650*2**(track.tries-1))){
+          result.waiting++;continue;
+        }
+        if(typeof player.playVideo!=='function'){result.waiting++;continue;}
+        try{
+          // By default do not change any existing volume or muted setting.
+          // Muting is an opt-in final fallback only after repeated failures.
+          if(autoCfg.muteFallback&&track.tries>=2&&
+             typeof player.isMuted==='function'&&!player.isMuted()){
+            if(typeof vm.setMuted==='function')vm.setMuted(true);
+            else player.mute?.();
+          }
+          player.playVideo();
+          track.lastTry=now;track.tries++;
+          result.attempted++;
+        }catch{
+          track.lastTry=now;track.tries++;
+          result.blocked++;
+        }
+      }
+      // Do not reuse an old attempt record if Holodex removed/replaced its cell.
+      for(const key of attempts.keys()){
+        if(!current.has(key)){attempts.delete(key);unmarkManual(key);}
+      }
+      lastAutoSummary=result;
+      return result;
+    }
+    function autoConfigure(msg){
+      for(const name of ['enabled','onReturn','respectPause','muteFallback'])
+        if(typeof msg[name]==='boolean')autoCfg[name]=msg[name];
+      if(!autoCfg.enabled)return {...autoCfg,ready:true};
+      autoScan('config');
+      return {...autoCfg,ready:true};
+    }
+    function autoResumeFromHidden(){
+      if(!autoCfg.enabled||!autoCfg.onReturn)return;
+      // Browser background throttling may pause a video without user action.
+      // Suppress manual-pause inference on that first foreground sample.
+      for(const key of wasPlayingHidden){
+        const track=attempts.get(key);
+        if(track){track.returned=true;track.lastState=null;track.tries=0;}
+      }
+      wasPlayingHidden.clear();
+      autoScan('return');
+    }
+    doc.addEventListener('visibilitychange',()=>{
+      if(doc.hidden){
+        wasPlayingHidden.clear();
+        for(const [key,t] of attempts)
+          if(t.lastState===1||t.lastState===3)wasPlayingHidden.add(key);
+      }else if(autoCfg.onReturn){
+        autoResumeFromHidden();
+      }else {
+        // Preserve background-interrupted videos, but don't resume them.
+        for(const key of wasPlayingHidden){
+          const t=attempts.get(key);
+          if(t){t.returned=true;t.suppressed=true;t.lastState=null;}
+        }
+        wasPlayingHidden.clear();
+      }
+    });
+    win.addEventListener('pageshow',()=>{if(!doc.hidden&&autoCfg.onReturn)autoResumeFromHidden();});
+    win.addEventListener('focus',()=>{if(!doc.hidden&&autoCfg.onReturn)autoResumeFromHidden();});
+    // A real user gesture may allow an otherwise blocked autoplay, but never
+    // lets this module override a remembered manual pause. Strict retry caps.
+    const gestureRetry=()=>{
+      const now=Date.now();
+      if(!autoCfg.enabled||now<nextGestureCheck||doc.hidden)return;
+      nextGestureCheck=now+1800;
+      autoScan('gesture');
+    };
+    doc.addEventListener('pointerdown',gestureRetry,{passive:true});
+    doc.addEventListener('touchend',gestureRetry,{passive:true});
+    // Observe user pauses and newly added videos. Bounded retries per video.
+    const autoTimer=win.setInterval(()=>autoScan(),1050);
+    win.addEventListener('pagehide',()=>win.clearInterval(autoTimer));
+
     doc.addEventListener(channel+':request',async ev=>{
       let msg;try{msg=JSON.parse(ev.detail);}catch{return;}
       if(!Number.isSafeInteger(msg?.seq))return;
@@ -508,6 +683,14 @@
       try{
         if(!doc.querySelector('.multiview'))return reply({ok:false,error:'不在多视图页面'});
         if(msg.action==='list')return reply({ok:true,data:enumerate()});
+        if(msg.action==='autoConfig')
+          return reply({ok:true,data:autoConfigure(msg)});
+        if(msg.action==='autoKick')
+          return reply({ok:true,data:autoScan('force')});
+        if(msg.action==='autoStatus')
+          return reply({ok:true,data:{
+            ...autoCfg,summary:lastAutoSummary,manualPaused:manualPauses.size
+          }});
         if(typeof msg.layoutId!=='string'||!valid(msg.videoId))
           return reply({ok:false,error:'没有对应的视频 ID'});
         const vm=locate(msg.layoutId,msg.videoId);
