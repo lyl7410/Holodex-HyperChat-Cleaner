@@ -565,7 +565,8 @@
     }
     function nextRetryCampaign(){
       for(const [key,track] of attempts){
-        if(track.tries>=4&&track.campaigns<2&&!manualPauses.has(key)){
+        if(track.tries>=4&&track.campaigns<2&&
+           (!autoCfg.respectPause||!manualPauses.has(key))){
           track.tries=0;track.gestureTries=0;track.lastTry=0;
           track.campaigns++;
         }
