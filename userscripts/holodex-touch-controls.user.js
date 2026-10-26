@@ -1170,28 +1170,45 @@
   function installBridge(){
     if(installed||installing||!isMulti())return;
     installing=true;
-    const ready=()=>{
-      installed=true;installing=false;
-      document.removeEventListener(token+':ready',ready);
-      refresh();
-      // Wait for Tampermonkey's async GM.getValue to finish before the first
-      // page-agent autoConfig. Otherwise an old false value can win on reload.
-      autoPrefsReady.then(()=>syncAutoSettings()).catch(error=>
-        console.warn('[Holodex Touch Controls] 自动播放初始配置同步失败',error));
-    };
-    document.addEventListener(token+':ready',ready);
-    const tag=document.createElement('script');
-    const nonce=document.querySelector('script[nonce]')?.nonce;
-    if(nonce)tag.nonce=nonce;
-    tag.textContent='('+pageAgent.toString()+')('+JSON.stringify(token)+',window);';
-    try{(document.head||document.documentElement).appendChild(tag);tag.remove();}catch{}
-    setTimeout(()=>{
+    // Do not instantiate the page agent until the persisted GM settings have
+    // finished loading. Previously the page agent booted disabled and only a
+    // second RPC could enable it; Android reloads sometimes missed that RPC.
+    const start=()=>{
       if(installed)return;
-      try{
-        if(page.document?.querySelector('.multiview'))pageAgent(token,page);
-      }catch(error){console.warn('[Holodex Touch Controls] 页面桥接失败',error);}
-      if(!installed){installing=false;document.removeEventListener(token+':ready',ready);}
-    },800);
+      if(!isMulti()){installing=false;return;}
+      const bootConfig=autoplaySettings();
+      const ready=()=>{
+        installed=true;installing=false;
+        document.removeEventListener(token+':ready',ready);
+        refresh();
+        // Idempotent verification after direct boot: GM and the page agent
+        // should now agree. This is not needed for initial playback to start.
+        syncAutoSettings().catch(error=>
+          console.warn('[Holodex Touch Controls] 自动播放配置校验失败',error));
+      };
+      document.addEventListener(token+':ready',ready);
+      const tag=document.createElement('script');
+      const nonce=document.querySelector('script[nonce]')?.nonce;
+      if(nonce)tag.nonce=nonce;
+      tag.textContent='('+pageAgent.toString()+')('+
+        JSON.stringify(token)+',window,'+JSON.stringify(bootConfig)+');';
+      try{(document.head||document.documentElement).appendChild(tag);tag.remove();}catch{}
+      setTimeout(()=>{
+        if(installed)return;
+        try{
+          if(page.document?.querySelector('.multiview'))
+            pageAgent(token,page,bootConfig);
+        }catch(error){console.warn('[Holodex Touch Controls] 页面桥接失败',error);}
+        if(!installed){
+          installing=false;
+          document.removeEventListener(token+':ready',ready);
+        }
+      },800);
+    };
+    autoPrefsReady.then(start).catch(error=>{
+      console.warn('[Holodex Touch Controls] GM 设置读取失败，使用当前已知值',error);
+      start();
+    });
   }
 
   function syncAutoSettings(){
