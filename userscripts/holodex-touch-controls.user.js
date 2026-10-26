@@ -1797,7 +1797,7 @@
           // An embed can temporarily report only [1] while still loading.
           // Accept a bounded fixed preset; confirm actual application by
           // reading getPlaybackRate() instead of trusting a stale list.
-          if(!Number.isFinite(r)||!COMMON_RATES.some(x=>Math.abs(x-r)<.001))
+          if(!Number.isFinite(r)||![.5,.75,1,1.25,1.5,1.75,2].some(x=>Math.abs(x-r)<.001))
             throw Error('无效的播放速度快捷档位');
           p.setPlaybackRate(r);
           const applied=Number(p.getPlaybackRate?.());
