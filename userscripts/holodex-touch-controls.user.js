@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量与播放统计）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.4.1
+// @version      0.4.2
 // @description  Holodex 手机手势音量、原生连接速度持续刷新、轻点标题快速关闭统计；无常驻图标。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -301,7 +301,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.4.1', KEY='hmtc_enabled_v1';
+  const VERSION='0.4.2', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -385,6 +385,8 @@
   #hmtc-sheet .title,#hmtc-settings .title{
     font-weight:730;flex:1;min-width:0;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis;font-size:16px}
+  #hmtc-sheet .hmtc-dismiss-zone{cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+  #hmtc-sheet .hmtc-dismiss-zone .metric{cursor:pointer}
   #hmtc-sheet .eyebrow{color:#91cbd9;font:700 11px system-ui;letter-spacing:.09em;
     margin-bottom:5px;cursor:pointer;min-height:23px;display:flex;align-items:center;justify-content:center}
   #hmtc-sheet .head{min-height:43px;cursor:pointer}
@@ -868,7 +870,8 @@
     sheet.setAttribute('role','dialog');
     sheet.setAttribute('aria-label','YouTube 当前视频控制和详细统计');
     sheet.innerHTML=[
-      '<div class="eyebrow" data-action="dismissHeader" title="轻点收起">HOLODEX · LIVE MONITOR　⌄ 轻点收起</div>',
+      '<div class="hmtc-dismiss-zone" data-action="dismissHeader" title="轻点任意统计数据收起">',
+      '<div class="eyebrow">HOLODEX · LIVE MONITOR　⌄ 轻点收起</div>',
       '<div class="head" data-action="dismissHeader" title="轻点标题收起">',
       '<div class="title" data-field="title">YouTube</div>',
       '<button type="button" data-action="close" aria-label="关闭">✕</button></div>',
@@ -880,7 +883,7 @@
       '<div class="metric"><label>直播延迟 · Latency</label><strong data-field="latency">—</strong></div>',
       '<div class="metric"><label>播放时间</label><strong data-field="position">—</strong></div>',
       '<div class="metric"><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
-      '</div>',
+      '</div></div>',
       '<div class="volume"><button type="button" data-action="mute" aria-label="静音">🔊</button>',
       '<input type="range" data-field="slider" aria-label="当前视频音量" min="0" max="100" step="1">',
       '<span class="value" data-field="volume">—</span></div>',
