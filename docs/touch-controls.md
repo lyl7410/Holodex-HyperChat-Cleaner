@@ -1,8 +1,8 @@
-# Holodex Touch Controls — v0.4.0 安卓触摸增强
+# Holodex Touch Controls — v0.4.1 原生统计持续采集与便捷关闭
 
-针对 **Holodex Multiview 内的 YouTube 小播放器** 的独立油猴脚本。此版本在 v0.3.1 安卓透明边缘触控方案上扩大手势区域、增加灵敏度与长按配置，并重新设计直播统计面板。
+针对 **Holodex Multiview 内的 YouTube 小播放器** 的独立油猴脚本。在 v0.4.0 的双倍宽触控、灵敏度与长按功能基础上，修复原生 Connection Speed 返回旧值的问题，并支持点击上方标题或面板外上方空白处快速关闭统计。
 
-**[安装 / 更新 v0.4.0](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装 / 更新 v0.4.1](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -57,7 +57,27 @@
 | 指标卡片 | **播放时间** | Holodex 的 YouTube IFrame API 提供当前时间和时长；直播会标注「直播」 |
 | 指标卡片 | **当前／推荐分辨率** | 优先取 YouTube 原生数据，缺失时可显示实际解码视频帧尺寸并注明「实际帧」 |
 
-**已经删除“播放状态”卡片**，保留每路音量滑块、静音、±10、100%、切换 YouTube 原版统计，以及手势设置按钮。统计面板显示时约每 2.4 秒刷新一次，关闭后停止；当前播放时间无需等待 YouTube iframe 的私有接口超时。
+**不显示“播放状态”卡片**，保留每路音量滑块、静音、±10、100%、切换 YouTube 原版统计，以及手势设置按钮。统计面板打开期间约每 **1.8 秒尝试读取**一次，关闭后停止；实际底层更新周期由 YouTube 决定。播放时间无需等待 YouTube iframe 的私有接口超时。
+
+## v0.4.1：为什么以前要开启原版统计才有实时带宽？
+
+旧版先读取已有的 YouTube Stats for nerds DOM 内容，这些内容在原版统计被关闭后可能只是上一次的缓存值；即使随后调用 `getStatsForNerdsData()`，部分新值也会被旧 DOM 数据覆盖。
+
+**现在采用两层修复：**
+
+1. **先读取内部统计方法**，不再让原版统计已关闭时残留的 DOM 旧值覆盖数据。
+2. 自定义面板打开期间，尝试通过 YouTube 的 `showVideoInfo()` 保持内部统计计算开启，同时仅将原版统计浮层设为**透明、不接收点击**，而不是 `display:none`。这样在自定义面板里可以继续尝试读取原版面板的活跃数据；点击「YouTube 原版统计」可以正常显示，再点击切回透明采集。
+3. **关闭自定义面板**后停止隐藏采集并恢复打开前的原版统计显示状态。只针对当前选中的这一路视频操作，不会对所有直播同时开启统计。
+4. 若 YouTube 不提供可确认的 `isVideoInfoVisible()` 或 `showVideoInfo()`，不强制启动原版面板，继续读取公开可访问的内部字段；数据不更新或不可用时不能保证显示实时带宽。
+
+刷新频率不等于保证数据每次都变化：即使连续两次显示相同的 Mbps，也可能是 YouTube 自身的带宽估算暂未变化，不能简单判断脚本失效。
+
+### 手机上快速收起统计
+
+- **点击统计面板顶部的 “HOLODEX · LIVE MONITOR / 轻点收起” 或视频标题栏的中间位置**，即可关闭面板。
+- 点击统计面板**外、上方的 Holodex 页面空白区域**也能收起（能否接收到点击取决于所点位置是否属于跨域 YouTube iframe）。
+- 原来的右上角 **×** 和 Escape 操作继续保留。
+- 音量滑块、音量按钮、指标卡片、设置按钮的操作不会被误当作关闭动作。
 
 Connection Speed 与 Live Latency 并不是 YouTube 官方公开的稳定 IFrame API：`getStatsForNerdsData()` / `getStatsForNerds()` 等内部接口可能失效，脚本按数据是否存在显示，不会伪造、推算直播延迟或用 `navigator.connection` 替代 YouTube 网速。
 
@@ -75,4 +95,4 @@ Connection Speed 与 Live Latency 并不是 YouTube 官方公开的稳定 IFrame
 
 已完成 JavaScript 语法检查及独立模拟测试：左右轻点/滑动、双倍区域、不误触、长按 600ms 与移动取消、三种统计触发模式、灵敏度倍率、多指取消、旧视频保护、YouTube 原生速率/缓冲/直播延迟解析及来源校验。
 
-**v0.4.0 尚未在你的安卓手机上做过实机回归**。不同 Android 浏览器可能限制嵌入播放器音量软件调节，所有跨域原生数据也仍有兼容性限制。
+**v0.4.1 尚未在你的安卓手机上完成实机回归**。已用模拟播放器验证动态带宽值变化、隐藏式采集的启停与原版统计恢复、标题/上方区域快速关闭；不同 Android 浏览器可能限制嵌入播放器音量软件调节，所有跨域原生数据也仍有兼容性限制。
