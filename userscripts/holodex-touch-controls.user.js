@@ -121,7 +121,7 @@
         touch=null;
         if(!gestureOrigin||event.touches?.length!==1||inControls(event.target))return;
         const p=player();
-        if(!p)return;
+        if(!p||!p.contains?.(event.target))return;
         let id;
         try{id=p.getVideoData?.()?.video_id;}catch{}
         if(id && id!==videoId)return;
@@ -172,7 +172,7 @@
           if(event.cancelable)event.preventDefault();
           event.stopImmediatePropagation?.();
           suppressClickUntil=Date.now()+450;
-          if(!cancelled)send('volume','end',dy/Math.max(120,g.rectHeight*.8));
+          send('volume',cancelled?'cancel':'end',dy/Math.max(120,g.rectHeight*.8));
         }else if(g.side==='left'&&!cancelled&&!g.cancelled&&
           Date.now()-g.at<550&&Math.abs(dx)<13&&Math.abs(dy)<13){
           if(event.cancelable)event.preventDefault();
@@ -188,7 +188,7 @@
       document.addEventListener('touchend',e=>end(e,false),{capture:true,passive:false});
       document.addEventListener('touchcancel',e=>end(e,true),{capture:true,passive:false});
       document.addEventListener('click',e=>{
-        if(Date.now()<suppressClickUntil){
+        if(Date.now()<suppressClickUntil&&player()?.contains?.(e.target)){
           e.preventDefault();e.stopImmediatePropagation?.();
           suppressClickUntil=0;
         }
@@ -496,18 +496,19 @@
         if(response.stage==='tap')openSheet(row);
         return;
       }
-      if(!['start','move','end'].includes(response.stage))return;
+      if(!['start','move','end','cancel'].includes(response.stage))return;
       if(response.stage==='start'){
         swipes.set(frame,{videoId:row.videoId,layoutId:row.layoutId,
           base:row.volume,started:Date.now()});
         return;
       }
       const swipe=swipes.get(frame);
+      if(response.stage==='cancel'){swipes.delete(frame);return;}
       if(!swipe||swipe.videoId!==row.videoId||swipe.layoutId!==row.layoutId||
          Date.now()-swipe.started>8000||!Number.isFinite(response.delta)||
          Math.abs(response.delta)>1.001)return;
       const value=clamp(swipe.base+response.delta*100);
-      if(value!==row.volume||row.muted)volume(row,value,null);
+      if(value!==row.volume||row.muted)volume(row,value);
       showVolumeToast(frame,value);
       if(response.stage==='end')swipes.delete(frame);
       return;
@@ -704,9 +705,10 @@
         validKeys.add(key);
         const old=rowMap.get(key);
         const frame=nativeFrame({...row,index:row.index})?.frame;
-        if(frame && swipes.get(frame) && old){
+        const swipe=frame&&swipes.get(frame);
+        if(swipe && Date.now()-swipe.started<8000 && old){
           row.volume=old.volume;row.muted=old.muted;
-        }
+        } else if(swipe){swipes.delete(frame);}
         rowMap.set(key,row);
         armFrame(row);
         if(active&&active.layoutId+':'+active.videoId===key)renderVolume(row);
