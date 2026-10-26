@@ -682,27 +682,32 @@
     sheet=document.createElement('section');
     sheet.id='hmtc-sheet';sheet.hidden=true;
     sheet.setAttribute('role','dialog');
-    sheet.setAttribute('aria-label','YouTube 音量和播放统计');
+    sheet.setAttribute('aria-label','YouTube 当前视频控制和详细统计');
     sheet.innerHTML=[
+      '<div class="eyebrow">HOLODEX · LIVE MONITOR</div>',
       '<div class="head"><div class="title" data-field="title">YouTube</div>',
-      '<button data-action="close" aria-label="关闭">✕</button></div>',
-      '<div class="volume"><button data-action="mute" aria-label="切换静音">🔊</button>',
+      '<button type="button" data-action="close" aria-label="关闭">✕</button></div>',
+      '<div class="net"><div class="sub">YouTube 当前视频 · Connection Speed</div>',
+      '<div><span class="speed" data-field="speed">—</span><span class="unit">Mbps</span></div>',
+      '<div class="sub" data-field="network">正在读取 YouTube 原生详细统计…</div></div>',
+      '<div class="grid">',
+      '<div class="metric"><label>缓冲健康度 · Buffer</label><strong data-field="health">—</strong></div>',
+      '<div class="metric"><label>直播延迟 · Latency</label><strong data-field="latency">—</strong></div>',
+      '<div class="metric"><label>播放时间</label><strong data-field="position">—</strong></div>',
+      '<div class="metric"><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
+      '</div>',
+      '<div class="volume"><button type="button" data-action="mute" aria-label="静音">🔊</button>',
       '<input type="range" data-field="slider" aria-label="当前视频音量" min="0" max="100" step="1">',
       '<span class="value" data-field="volume">—</span></div>',
-      '<div class="actions"><button data-action="minus">−10</button>',
-      '<button data-action="plus">＋10</button><button data-action="full">100%</button></div>',
-      '<div class="net"><div class="sub">YouTube 原生连接速度估计 · 当前视频</div>',
-      '<div class="speed" data-field="speed">—</div>',
-      '<div class="sub" data-field="network">正在读取 YouTube 嵌入播放器…</div></div>',
-      '<div class="grid">',
-      '<div><label>缓冲健康度</label><strong data-field="health">—</strong></div>',
-      '<div><label>播放时间</label><strong data-field="position">—</strong></div>',
-      '<div><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
-      '<div><label>播放状态</label><strong data-field="state">—</strong></div>',
-      '</div><div class="actions" style="margin-top:10px">',
-      '<button data-action="native">切换 YouTube 原版统计</button></div>',
+      '<div class="actions">',
+      '<button type="button" data-action="minus">−10</button>',
+      '<button type="button" data-action="plus">＋10</button>',
+      '<button type="button" data-action="full">100%</button></div>',
+      '<div class="footer">',
+      '<button type="button" data-action="native">YouTube 原版统计</button>',
+      '<button type="button" data-action="settings" aria-label="触控设置">⚙ 设置</button></div>',
       '<div class="note" data-field="note">',
-      'Connection Speed 是 YouTube 对当前播放连接的带宽估计，非瞬时下载流量。内部接口可能随播放器更新而失效。</div>'
+      '连接速度与直播延迟来自 YouTube 内部统计，字段缺失时显示 —，不是 0。</div>'
     ].join('');
     document.body.appendChild(sheet);
     const slider=sheet.querySelector('[data-field="slider"]');
@@ -715,6 +720,7 @@
       if(!btn)return;
       const action=btn.dataset.action;
       if(action==='close'){closeSheet();return;}
+      if(action==='settings'){openSettings();return;}
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
       if(!row)return;
       if(action==='minus')volume(row,row.volume-10);
@@ -730,14 +736,73 @@
         try{
           const result=await nativeRequest(row,'nativeToggle',2000);
           field('note',result.visible
-            ? '已请求显示 YouTube 原版统计，它会覆盖在当前小播放器画面内。'
+            ? 'YouTube 原版统计已请求显示在小播放器内。'
             : '已请求隐藏 YouTube 原版统计。');
           stats();
         }catch(error){field('note',error.message);}
       }
     });
-    document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!sheet.hidden)closeSheet();});
+    document.addEventListener('keydown',e=>{
+      if(e.key!=='Escape')return;
+      if(settings?.hidden===false)closeSettings();
+      else if(!sheet.hidden)closeSheet();
+    });
   }
+  let settings=null;
+  function makeSettings(){
+    if(settings?.isConnected)return settings;
+    settings=document.createElement('section');
+    settings.id='hmtc-settings';settings.hidden=true;
+    settings.setAttribute('role','dialog');
+    settings.setAttribute('aria-label','Holodex 触控手势设置');
+    settings.innerHTML=[
+      '<div class="head"><span class="title">⚙ 触控手势设置</span>',
+      '<button type="button" data-action="close" aria-label="关闭设置">✕</button></div>',
+      '<div class="setting"><label>音量滑动灵敏度：<b data-value="sensitivity">1.0×</b></label>',
+      '<input type="range" min="0.4" max="2.5" step="0.1" data-control="sensitivity">',
+      '<div class="presets">',
+      '<button type="button" data-preset="0.6">精细</button>',
+      '<button type="button" data-preset="1">标准</button>',
+      '<button type="button" data-preset="1.6">快速</button></div>',
+      '<div class="setting-summary">系数越大，相同滑动距离改变的音量越多；设置立即生效。</div></div>',
+      '<div class="setting"><label for="hmtc-stats-mode">打开统计的触控方式</label>',
+      '<select id="hmtc-stats-mode" data-control="statsMode">',
+      '<option value="tap">左侧轻点（默认）</option>',
+      '<option value="hold">左右侧长按（600ms）</option>',
+      '<option value="both">左侧轻点＋左右侧长按</option>',
+      '</select>',
+      '<div class="setting-summary">长按识别前滑动超过 12px 会取消；右侧纵向滑动继续调节音量。</div></div>',
+      '<div class="setting-summary" style="margin-top:16px">',
+      '触控区域左右各宽 36%，最大 112px，纵向覆盖 11%–89%。',
+      '可从油猴菜单显示边界或关闭边缘手势。</div>'
+    ].join('');
+    document.body.appendChild(settings);
+    settings.querySelector('[data-action="close"]').addEventListener('click',closeSettings);
+    const slider=settings.querySelector('[data-control="sensitivity"]');
+    const updateSensitivity=value=>{
+      const n=Math.max(.4,Math.min(2.5,Number(value)||1));
+      set(SENS_KEY,Math.round(n*10)/10);
+      slider.value=String(getSensitivity());
+      settings.querySelector('[data-value="sensitivity"]').textContent=getSensitivity().toFixed(1)+'×';
+    };
+    slider.addEventListener('input',()=>updateSensitivity(slider.value));
+    settings.querySelectorAll('[data-preset]').forEach(b=>{
+      b.addEventListener('click',()=>updateSensitivity(b.dataset.preset));
+    });
+    settings.querySelector('[data-control="statsMode"]').addEventListener('change',e=>{
+      if(['tap','hold','both'].includes(e.target.value))set(STATS_MODE_KEY,e.target.value);
+    });
+    return settings;
+  }
+  function openSettings(){
+    makeSettings();
+    settings.querySelector('[data-control="sensitivity"]').value=String(getSensitivity());
+    settings.querySelector('[data-value="sensitivity"]').textContent=getSensitivity().toFixed(1)+'×';
+    settings.querySelector('[data-control="statsMode"]').value=getStatsMode();
+    settings.hidden=false;
+  }
+  function closeSettings(){if(settings)settings.hidden=true;}
+
   function renderYouTubeStats(data,reason) {
     if(!data?.available){
       field('speed','—');
@@ -745,7 +810,7 @@
     }else {
       const kbps=data.bandwidthKbps;
       field('speed',typeof kbps==='number'&&Number.isFinite(kbps)&&kbps>0
-        ? '≈ '+(kbps/1000).toFixed(2)+' Mbps':'—');
+        ? '≈ '+(kbps/1000).toFixed(2):'—');
       field('network',kbps!=null
         ? '当前视频 · YouTube '+(data.source||'原生统计')
         : '已连接 YouTube，但本播放器未提供带宽数值');
@@ -753,8 +818,9 @@
     field('health',typeof data?.bufferSeconds==='number'
       ? data.bufferSeconds.toFixed(1)+' s':'—');
     field('resolution',data?.resolution||'—');
+    field('latency',Number.isFinite(data?.liveLatencySeconds)
+      ? data.liveLatencySeconds.toFixed(2)+' s':'—');
   }
-  const status={'-1':'未开始','0':'结束','1':'播放中','2':'已暂停','3':'缓冲中','5':'待播放'};
   function timestamp(n){
     if(!Number.isFinite(Number(n))||Number(n)<0)return '—';
     n=Math.floor(Number(n));
@@ -774,10 +840,11 @@
       layoutId:row.layoutId,videoId:row.videoId
     },3500).then(v=>{
       if(!stillActive())return;
-      field('state',!v.ready?'播放器尚未就绪':status[String(v.state)]||'未知');
-      field('position',timestamp(v.position)+(v.live?'（直播）':' / '+timestamp(v.duration)));
+      field('position',v.ready
+        ? timestamp(v.position)+(v.live?' · 直播':' / '+timestamp(v.duration))
+        : '尚未就绪');
     }).catch(error=>{
-      if(stillActive())field('state','无法读取播放状态');
+      if(stillActive())field('position','暂时无法读取');
     });
     const native=nativeRequest(row,'stats',1900).then(v=>{
       if(stillActive())renderYouTubeStats(v);
@@ -794,6 +861,7 @@
     field('title',row.title||row.videoId);
     renderVolume(row);
     renderYouTubeStats(null,'正在读取 YouTube 嵌入播放器…');
+    field('position','读取中…');
     stats();
     clearInterval(statsInterval);statsInterval=setInterval(stats,2400);
   }
@@ -850,6 +918,7 @@
       else refresh();
       alert('触摸手势已'+(next?'启用':'禁用')+'；播放统计仍可通过脚本菜单查看。');
     });
+    GM_registerMenuCommand('触控手势设置（灵敏度／长按）',openSettings);
     GM_registerMenuCommand('显示/隐藏边缘触控区域（调试）',()=>{
       const next=!get(DEBUG_KEY,false);
       set(DEBUG_KEY,next);
