@@ -7,9 +7,9 @@
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
 // @match        https://youtube.com/embed/*
-// @match        https://www.youtube.com/watch*
-// @match        https://youtube.com/watch*
-// @match        https://m.youtube.com/watch*
+// @match        https://www.youtube.com/*
+// @match        https://youtube.com/*
+// @match        https://m.youtube.com/*
 // @match        https://www.youtube.com/live/*
 // @match        https://youtube.com/live/*
 // @match        https://m.youtube.com/live/*
@@ -393,6 +393,9 @@
   if(embed && /^(?:www\.)?youtube(?:-nocookie)?\.com$/.test(location.hostname)) {
     if(window.top!==window.self)youtubeFrameBridge(embed[1]);
     return;
+  }
+  if(window.top===window.self&&/^(?:www\.|m\.)?youtube\.com$/.test(location.hostname)){
+    youtubeWatchControls();return;
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
