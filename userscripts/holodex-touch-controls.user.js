@@ -200,6 +200,9 @@
       '#hmtc-yt-panel .actions{display:flex;gap:6px;margin:10px 0}',
       '#hmtc-yt-panel .actions button{flex:1}',
       '#hmtc-yt-panel .hint{font-size:11px;color:#bdd0db;margin-top:10px}',
+      '#hmtc-yt-panel details{margin-top:12px;border-top:1px solid #ffffff20;padding-top:10px}',
+      '#hmtc-yt-panel details summary{cursor:pointer;font-size:12px;font-weight:650;color:#b9dfdf}',
+      '#hmtc-yt-panel details .row input{accent-color:#66dad1}',
       '#hmtc-yt-toast{position:fixed;z-index:2147482992;pointer-events:none;',
       'transform:translate(-50%,-50%);background:#1a2c41f5;border-radius:12px;',
       'padding:11px 15px;color:#eff;font:800 22px system-ui}',
@@ -289,9 +292,32 @@
         '<strong data-id="vol">—</strong></div>',
         '<div class="actions"><button data-action="minus">−10</button>',
         '<button data-action="plus">＋10</button><button data-action="full">100%</button></div>',
-        '<div class="hint" data-id="hint">画质通过 YouTube 原生菜单选择；倍速以实际生效值为准。</div>'
+        '<div class="hint" data-id="hint">画质通过 YouTube 原生菜单选择；倍速以实际生效值为准。</div>',
+        '<details class="hmtc-yt-preferences"><summary>⚙ 手势设置</summary>',
+        '<div class="row"><label>统计</label><select data-id="mode">',
+        '<option value="tap">左侧轻点打开</option>',
+        '<option value="hold">长按 600ms 打开</option>',
+        '<option value="both">轻点或长按</option></select></div>',
+        '<div class="row"><label>灵敏度</label>',
+        '<input type="range" data-id="sense" min="0.4" max="2.5" step="0.1">',
+        '<strong data-id="senseText">1.0×</strong></div>',
+        '</details>'
       ].join('');
       document.body.appendChild(sheet);
+      const modeSelect=sheet.querySelector('[data-id="mode"]');
+      modeSelect.value=['tap','hold','both'].includes(mode())?mode():'tap';
+      modeSelect.addEventListener('change',event=>{
+        if(['tap','hold','both'].includes(event.target.value))
+          GM_setValue('hmtc_stats_trigger_v1',event.target.value);
+      });
+      const senseInput=sheet.querySelector('[data-id="sense"]');
+      senseInput.value=String(sense());
+      text('senseText',sense().toFixed(1)+'×');
+      senseInput.addEventListener('input',event=>{
+        const n=Math.max(.4,Math.min(2.5,Number(event.target.value)||1));
+        GM_setValue('hmtc_volume_sensitivity_v1',Math.round(n*10)/10);
+        text('senseText',n.toFixed(1)+'×');
+      });
       sheet.querySelector('[data-id="slider"]').addEventListener('input',e=>{
         try{volume(e.target.value);refreshSheet();}catch(error){text('hint',error.message);}
       });
@@ -462,6 +488,9 @@
     GM_registerMenuCommand('YouTube：启用／禁用透明触控区',()=>{
       const next=!setting(enabledKey,true);GM_setValue(enabledKey,next);refresh();
       alert('YouTube 边缘触控区已'+(next?'启用':'关闭'));
+    });
+    GM_registerMenuCommand('YouTube：打开触控设置',()=>{
+      open();sheet?.querySelector('.hmtc-yt-preferences')?.setAttribute('open','');
     });
     GM_registerMenuCommand('YouTube：显示／隐藏手势区（调试）',()=>{
       document.documentElement.classList.toggle('hmtc-yt-debug');
