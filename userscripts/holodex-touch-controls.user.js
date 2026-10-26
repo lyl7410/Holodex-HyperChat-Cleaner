@@ -129,9 +129,9 @@
   function youtubeWatchControls(){
     const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
     const supported=()=>/^\/(?:watch(?:\/|$)|live\/|shorts\/)/.test(location.pathname);
-    const p=()=>document.querySelector('#movie_player.html5-video-player')||
-      document.querySelector('.html5-video-player');
-    const controls=youtubePlaybackTools(document,p);
+    const p=()=>page.document.querySelector('#movie_player.html5-video-player')||
+      page.document.querySelector('.html5-video-player');
+    const controls=youtubePlaybackTools(page.document,p);
     const coarse=matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>0;
     const enabledKey='hmtc_youtube_edges_v1';
     const setting=(key,def)=>GM_getValue(key,def);
