@@ -1030,7 +1030,11 @@
   }
   async function setAutoEnabled(enabled){
     // This command sets the requested state. It never toggles blindly.
-    await Promise.resolve(setAutoValue(AUTO_ENABLED_KEY,!!enabled));
+    const writing=setAutoValue(AUTO_ENABLED_KEY,!!enabled);
+    // A slow userscript-manager write must not block an explicit gesture.
+    // The same-origin backup was written synchronously.
+    Promise.resolve(writing).catch(error=>
+      console.warn('[HMTC] GM 自动播放设置镜像写入失败',error));
     if(settings?.isConnected){
       settings.querySelector('[data-control="autoEnabled"]').checked=!!enabled;
       const indicator=settings.querySelector('[data-field="autoState"]');
@@ -1059,9 +1063,17 @@
         return;
       }
       const rows=data.rows||[];
+      const pref=autoPreferenceSource();
+      const source=pref.enabledBacked?'Holodex 本地持久备份':
+        '脚本管理器原有存储';
+      const outOfSync=typeof pref.gmEnabled==='boolean'&&
+        pref.gmEnabled!==pref.savedEnabled?
+        '（脚本管理器镜像值与本地设置暂不一致）':'';
       const prefix='智能自动播放 v'+(data.version||'0.5.3')+
         '\n状态：'+(data.enabled?'已启用':'已关闭')+
         '｜识别：'+(data.detected||0)+' 路'+
+        '\n设置来源：'+source+outOfSync+
+        (!pref.backupAvailable?'\n注意：Holodex 同源持久存储当前不可用':'')+
         '\n声音策略：'+(data.muteFallback?'失败后允许静音':'保留原有音量（静音回退关闭）');
       const lines=rows.slice(0,16).map((row,i)=>
         (i+1)+'. '+row.title.slice(0,30)+
@@ -1542,14 +1554,16 @@
             '当前已开启：进入／刷新多视图会自动尝试播放':
             '当前已关闭：刷新后不会自动尝试播放';
         Promise.resolve(setAutoValue(key,!!e.target.checked))
-          .then(()=>syncAutoSettings())
-          .catch(error=>console.warn('[HMTC] 自动播放设置',error));
+          .catch(error=>console.warn('[HMTC] 自动播放设置持久镜像',error));
+        syncAutoSettings().catch(error=>
+          console.warn('[HMTC] 自动播放设置同步',error));
       });
     }
     settings.querySelector('[data-control="autoMute"]').addEventListener('change',e=>{
       Promise.resolve(setAutoValue(AUTO_MUTE_KEY,e.target.value==='mute'))
-        .then(()=>syncAutoSettings())
-        .catch(error=>console.warn('[HMTC] 自动播放静音设置',error));
+        .catch(error=>console.warn('[HMTC] 自动播放静音设置持久镜像',error));
+      syncAutoSettings().catch(error=>
+        console.warn('[HMTC] 自动播放静音设置同步',error));
     });
     settings.querySelector('[data-action="autoNow"]').addEventListener('click',manualAutoPlay);
     settings.querySelector('[data-action="autoDiagnose"]').addEventListener('click',diagnoseAutoPlay);
