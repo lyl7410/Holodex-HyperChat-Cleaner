@@ -1,8 +1,8 @@
-# Holodex Touch Controls — v0.4.1 原生统计持续采集与便捷关闭
+# Holodex Touch Controls — v0.4.2 扩大统计面板快捷关闭范围
 
-针对 **Holodex Multiview 内的 YouTube 小播放器** 的独立油猴脚本。在 v0.4.0 的双倍宽触控、灵敏度与长按功能基础上，修复原生 Connection Speed 返回旧值的问题，并支持点击上方标题或面板外上方空白处快速关闭统计。
+针对 **Holodex Multiview 内的 YouTube 小播放器** 的独立油猴脚本。在 v0.4.1 原生 Connection Speed 持续采集修复基础上，进一步扩大面板内部的轻点关闭区域：播放时间、分辨率，以及它们上方的全部统计数据都可以轻点收起。
 
-**[安装 / 更新 v0.4.1](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装 / 更新 v0.4.2](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -74,10 +74,10 @@
 
 ### 手机上快速收起统计
 
-- **点击统计面板顶部的 “HOLODEX · LIVE MONITOR / 轻点收起” 或视频标题栏的中间位置**，即可关闭面板。
+- **点击统计面板中上部任意统计区域**即可关闭：顶部标题、YouTube Connection Speed、Buffer Health、直播延迟、播放时间、当前／推荐分辨率，以及这些卡片间的空白区域。
 - **点击统计面板外的画面中上部（包括原本属于 YouTube iframe 的位置）**即可收起。脚本仅在面板展开期间创建透明背景点击层，确保跨域 iframe 区域的轻点也能可靠关闭；收起后立即隐藏点击层，不阻挡正常观看。
 - 原来的右上角 **×** 和 Escape 操作继续保留。
-- 音量滑块、音量按钮、指标卡片、设置按钮的操作不会被误当作关闭动作。
+- **仅指标展示区域支持点按关闭**；下方的音量滑块、静音、±10、100%、原版统计和设置按钮保持原本交互，不会点一下就收起。
 
 Connection Speed 与 Live Latency 并不是 YouTube 官方公开的稳定 IFrame API：`getStatsForNerdsData()` / `getStatsForNerds()` 等内部接口可能失效，脚本按数据是否存在显示，不会伪造、推算直播延迟或用 `navigator.connection` 替代 YouTube 网速。
 
@@ -95,4 +95,4 @@ Connection Speed 与 Live Latency 并不是 YouTube 官方公开的稳定 IFrame
 
 已完成 JavaScript 语法检查及独立模拟测试：左右轻点/滑动、双倍区域、不误触、长按 600ms 与移动取消、三种统计触发模式、灵敏度倍率、多指取消、旧视频保护、YouTube 原生速率/缓冲/直播延迟解析及来源校验。
 
-**v0.4.1 尚未在你的安卓手机上完成实机回归**。已用模拟播放器验证动态带宽值变化、隐藏式采集的启停与原版统计恢复、标题/画面外部区域快速关闭；不同 Android 浏览器可能限制嵌入播放器音量软件调节，所有跨域原生数据也仍有兼容性限制。
+**v0.4.2 尚未在你的安卓手机上完成实机回归**。已用模拟播放器验证动态带宽值变化、隐藏式采集的启停与原版统计恢复、标题/画面外部区域快速关闭；不同 Android 浏览器可能限制嵌入播放器音量软件调节，所有跨域原生数据也仍有兼容性限制。
