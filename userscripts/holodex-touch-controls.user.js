@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.5.5
-// @description  Holodex 多视图智能自动播放：修复已启用 GM 设置却在刷新后显示已关闭；初始化直接携带配置并自动恢复。
+// @version      0.5.6
+// @description  Holodex PC/安卓多视图智能自动播放：浏览器拦截后可选静音再尝试启动，保留已播放视频音量及触控统计。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -304,7 +304,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.5.5', KEY='hmtc_enabled_v1';
+  const VERSION='0.5.6', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -871,7 +871,7 @@
     let nextGestureCheck=0, lastAutoSummary=null;
     function autoScan(mode='tick'){
       const manualRun=mode==='force', gesture=mode==='gesture';
-      const result={playing:0,attempted:0,protected:0,blocked:0,waiting:0,ended:0};
+      const result={playing:0,attempted:0,protected:0,blocked:0,waiting:0,ended:0,mutedStart:0};
       if((win.location?.pathname&&!/^\/multiview(?:\/|$)/.test(win.location.pathname))||
          !doc.querySelector('.multiview')||doc.hidden||
          (!autoCfg.enabled&&!manualRun))return result;
@@ -893,7 +893,8 @@
           if(track){restoreFirstPlay(track);removeAutoplayListener(key);}
           track={player,lastState:null,lastTry:0,tries:0,gestureTries:0,
             returned:false,suppressed:false,everPlaying:false,campaigns:0,
-            playingSince:0,blockedAt:0,lastFailure:'',firstSeen:now};
+            playingSince:0,blockedAt:0,lastFailure:'',firstSeen:now,
+            muteAppliedAt:0,mutedStarts:0,pendingMutedPlay:false};
           attempts.set(key,track);
           subscribeAutoplayBlocked(key,player,track);
         }
@@ -951,27 +952,68 @@
           result.waiting++;continue;
         }
         if(typeof player.playVideo!=='function'){result.waiting++;continue;}
+        if(track.pendingMutedPlay){result.waiting++;continue;}
         try{
-          // By default do not change any existing volume or muted setting.
-          // Muting is an opt-in final fallback only after repeated failures.
-          if(autoCfg.muteFallback&&track.tries>=2&&
-             typeof player.isMuted==='function'&&!player.isMuted()){
-            if(typeof vm.setMuted==='function')vm.setMuted(true);
-            else player.mute?.();
+          // Default mode preserves all current audio. An explicitly enabled
+          // mute fallback only affects paused/unstarted cells (never 1/3).
+          const useMute=autoCfg.muteFallback&&
+            (track.blockedAt>0||track.tries>=2);
+          let justMuted=false;
+          if(useMute){
+            const wasMuted=typeof player.isMuted==='function'?
+              !!player.isMuted():!!vm.muted;
+            if(!wasMuted){
+              // Holodex's vm.setMuted() propagates through Vue's watcher,
+              // potentially AFTER a same-tick playVideo(). Send the mute
+              // directly to YouTube and give it time to process before play.
+              if(typeof player.mute==='function')player.mute();
+              if(typeof vm.setMuted==='function')vm.setMuted(true);
+              if(typeof player.mute==='function'||
+                 typeof vm.setMuted==='function'){
+                justMuted=true;track.muteAppliedAt=now;
+              }else{
+                track.lastFailure='播放器不支持静音，无法执行回退';
+              }
+            }
           }
           protectExistingAudio(vm,track);
-          track.lastFailure='';
-          player.playVideo();
-          track.lastTry=now;track.tries++;
-          // playVideo() returning does not mean playback was authorized.
-          // The next state sample and onAutoplayBlocked decide success.
-          const after=getPlaybackState(player);
-          if(after===1){
-            track.lastState=after;
-            track.everPlaying=true;
-            if(!track.playingSince)track.playingSince=now;
-          }else if(after===3)track.lastState=after;
-          result.attempted++;
+          if(track.lastFailure!=='播放器不支持静音，无法执行回退')
+            track.lastFailure='';
+          const issuePlay=()=>{
+            const stateNow=getPlaybackState(player);
+            if(stateNow===1||stateNow===3)return false;
+            player.playVideo();
+            const after=getPlaybackState(player);
+            if(after===1){
+              track.lastState=after;track.everPlaying=true;
+              if(!track.playingSince)track.playingSince=Date.now();
+            }else if(after===3)track.lastState=after;
+            return true;
+          };
+          if(justMuted){
+            track.pendingMutedPlay=true;
+            track.lastTry=now;track.tries++;
+            result.attempted++;result.mutedStart++;
+            win.setTimeout(()=>{
+              track.pendingMutedPlay=false;
+              // The user could have navigated or started this stream meanwhile.
+              if(attempts.get(key)!==track||doc.hidden||
+                 !autoCfg.enabled||!autoCfg.muteFallback||
+                 (autoCfg.respectPause&&manualPauses.has(key))||
+                 (win.location?.pathname &&
+                  !win.location.pathname.startsWith('/multiview')))return;
+              try{
+                if(issuePlay())track.mutedStarts++;
+              }catch(error){
+                track.lastFailure=String(error?.message||
+                  '静音播放被浏览器拒绝').slice(0,100);
+              }
+            },220);
+          }else{
+            const issued=issuePlay();
+            track.lastTry=now;track.tries++;
+            if(issued){result.attempted++;if(useMute){result.mutedStart++;track.mutedStarts++;}}
+          }
         }catch(error){
           track.lastTry=now;track.tries++;
           track.lastFailure=String(error?.message||'播放器拒绝播放').slice(0,100);
@@ -1016,17 +1058,24 @@
           issue=state===1?'正在播放（智能自动播放已关闭）':
             state===3?'正在缓冲（智能自动播放已关闭）':
             '智能自动播放已关闭；此时不会尝试启动';
-        }else if(track?.blockedAt&&Date.now()-track.blockedAt<60000){
-          issue='浏览器已阻止自动播放（可能需要手势或静音）';
+        }else if(state!==1&&state!==3&&
+                 track?.blockedAt&&Date.now()-track.blockedAt<60000){
+          issue=autoCfg.muteFallback?
+            '浏览器拦截了播放；已允许静音回退，正在检查是否启动':
+            '浏览器拦截有声自动播放；可开启静音启动回退';
         }
         rows.push({
           key,title:String(vm.video?.title||vm.video?.id||key).slice(0,48),
           state,description:reasons[String(state)]||'未知状态',
           issue,tries:track?.tries||0,campaigns:track?.campaigns||0,
-          muted:!!vm.muted,playerReady:!!vm.ytPlayer
+          muted:typeof vm.ytPlayer?.isMuted==='function'?
+            !!vm.ytPlayer.isMuted():!!vm.muted,
+          mutedStartAttempts:track?.mutedStarts||0,
+          mutePending:!!track?.pendingMutedPlay,
+          playerReady:!!vm.ytPlayer
         });
       }
-      return {version:'0.5.5',enabled:autoCfg.enabled,
+      return {version:'0.5.6',enabled:autoCfg.enabled,
         onReturn:autoCfg.onReturn,respectPause:autoCfg.respectPause,
         muteFallback:autoCfg.muteFallback,hidden:!!doc.hidden,
         boot:{...agentBoot},detected:rows.length,rows,
@@ -1035,6 +1084,7 @@
 
     function autoConfigure(msg){
       const wasEnabled=autoCfg.enabled;
+      const muteJustEnabled=!autoCfg.muteFallback&&msg.muteFallback===true;
       agentBoot.lastRpcConfigAt=Date.now();
       for(const name of ['enabled','onReturn','respectPause','muteFallback'])
         if(typeof msg[name]==='boolean')autoCfg[name]=msg[name];
@@ -1042,6 +1092,16 @@
       if(!autoCfg.enabled){
         for(const track of attempts.values())restoreFirstPlay(track);
         return {...autoCfg,ready:true};
+      }
+      if(muteJustEnabled&&autoCfg.enabled){
+        // Explicit consent to muting should unblock previously exhausted
+        // audible playback attempts without overriding manual pauses.
+        for(const [key,track] of attempts){
+          if(track.blockedAt>0||track.tries>=2){
+            if(autoCfg.respectPause&&manualPauses.has(key))continue;
+            track.tries=0;track.lastTry=0;track.gestureTries=0;
+          }
+        }
       }
       if(!wasEnabled){
         // An explicit enable is a fresh user-requested playback campaign.
