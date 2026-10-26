@@ -220,7 +220,7 @@
   GM_addStyle(`
   /* Invisible zones occupy twice the v0.3.1 width, and are 78% tall. */
   .hmtc-edge{position:absolute;z-index:45;top:11%;height:78%;width:36%;
-    min-width:46px;max-width:112px;background:transparent;
+    min-width:min(46px,46%);max-width:min(112px,46%);background:transparent;
     box-sizing:border-box;-webkit-user-select:none;user-select:none;
     -webkit-tap-highlight-color:transparent;overscroll-behavior:contain}
   .hmtc-edge--left{left:0;touch-action:pan-y;cursor:pointer}
