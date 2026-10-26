@@ -576,7 +576,8 @@
     function autoScan(mode='tick'){
       const manualRun=mode==='force', gesture=mode==='gesture';
       const result={playing:0,attempted:0,protected:0,blocked:0,waiting:0,ended:0};
-      if(!doc.querySelector('.multiview')||doc.hidden||
+      if((win.location?.pathname&&!/^\/multiview(?:\/|$)/.test(win.location.pathname))||
+         !doc.querySelector('.multiview')||doc.hidden||
          (!autoCfg.enabled&&!manualRun))return result;
       const now=Date.now(),current=new Set();
       const cells=autoplayCells();
