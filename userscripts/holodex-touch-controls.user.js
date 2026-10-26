@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.5.1
-// @description  智能自动播放修复：刷新启动、误判暂停防护、自动播放拦截诊断；保留 PC/安卓播放控制与统计。
+// @version      0.5.2
+// @description  Holodex PC/安卓智能自动播放与触控统计：明确启停开关、一键启用诊断、修复配置同步误读。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -301,7 +301,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.5.1', KEY='hmtc_enabled_v1';
+  const VERSION='0.5.2', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -332,11 +332,21 @@
   };
   const allowsTap=()=>['tap','both'].includes(getStatsMode());
   const allowsHold=()=>['hold','both'].includes(getStatsMode());
+  // ScriptCat and some mobile managers persist GM_setValue asynchronously.
+  // Immediately syncing via GM_getValue may otherwise send stale values to
+  // the player realm. Local overrides cover the current page lifetime only.
+  const autoLocalValues=new Map();
+  const autoValue=(key,fallback)=>autoLocalValues.has(key)?
+    autoLocalValues.get(key):get(key,fallback);
+  const setAutoValue=(key,value)=>{
+    autoLocalValues.set(key,value);
+    return set(key,value);
+  };
   const autoplaySettings=()=>({
-    enabled:!!get(AUTO_ENABLED_KEY,true),
-    onReturn:!!get(AUTO_RETURN_KEY,true),
-    respectPause:!!get(AUTO_PAUSE_KEY,true),
-    muteFallback:!!get(AUTO_MUTE_KEY,false)
+    enabled:!!autoValue(AUTO_ENABLED_KEY,true),
+    onReturn:!!autoValue(AUTO_RETURN_KEY,true),
+    respectPause:!!autoValue(AUTO_PAUSE_KEY,true),
+    muteFallback:!!autoValue(AUTO_MUTE_KEY,false)
   });
   const rowMap=new Map(), pending=new Map();
   const nativePending=new Map(), NATIVE_TAG='hmtc-youtube-stats-v1';
@@ -757,8 +767,15 @@
             track?.tries>=4?'普通自动尝试已用尽，可在页面点一下':
             state===2||state===5||state===-1?'等待下一次自动尝试':
             '播放器状态待确认');
-        if(track?.blockedAt&&Date.now()-track.blockedAt<60000)
+        // Configuration is authoritative. Don't report stale autoplay-blocked
+        // events or "waiting to try" while the feature is explicitly off.
+        if(!autoCfg.enabled){
+          issue=state===1?'正在播放（智能自动播放已关闭）':
+            state===3?'正在缓冲（智能自动播放已关闭）':
+            '智能自动播放已关闭；此时不会尝试启动';
+        }else if(track?.blockedAt&&Date.now()-track.blockedAt<60000){
           issue='浏览器已阻止自动播放（可能需要手势或静音）';
+        }
         rows.push({
           key,title:String(vm.video?.title||vm.video?.id||key).slice(0,48),
           state,description:reasons[String(state)]||'未知状态',
@@ -766,7 +783,7 @@
           muted:!!vm.muted,playerReady:!!vm.ytPlayer
         });
       }
-      return {version:'0.5.1',enabled:autoCfg.enabled,
+      return {version:'0.5.2',enabled:autoCfg.enabled,
         onReturn:autoCfg.onReturn,respectPause:autoCfg.respectPause,
         muteFallback:autoCfg.muteFallback,hidden:!!doc.hidden,
         detected:rows.length,rows,manualPaused:manualPauses.size};
@@ -921,6 +938,15 @@
   function syncAutoSettings(){
     if(!installed||!isMulti())return Promise.resolve(null);
     return rpc('autoConfig',autoplaySettings(),3200);
+  }
+  async function setAutoEnabled(enabled){
+    // This command sets the requested state. It never toggles blindly.
+    await Promise.resolve(setAutoValue(AUTO_ENABLED_KEY,!!enabled));
+    if(!isMulti()||!installed)return {enabled:!!enabled,ready:false};
+    const data=await syncAutoSettings();
+    if(data?.enabled!==!!enabled)
+      throw new Error('播放器返回的自动播放状态与设置不一致');
+    return data;
   }
   function diagnoseAutoPlay(){
     if(!isMulti())return alert('请先进入 Holodex 多视图。');
@@ -1396,13 +1422,15 @@
     ];
     for(const [name,key] of autoInputs){
       settings.querySelector('[data-control="'+name+'"]').addEventListener('change',e=>{
-        set(key,!!e.target.checked);
-        syncAutoSettings().catch(error=>console.warn('[HMTC] 自动播放设置',error));
+        Promise.resolve(setAutoValue(key,!!e.target.checked))
+          .then(()=>syncAutoSettings())
+          .catch(error=>console.warn('[HMTC] 自动播放设置',error));
       });
     }
     settings.querySelector('[data-control="autoMute"]').addEventListener('change',e=>{
-      set(AUTO_MUTE_KEY,e.target.value==='mute');
-      syncAutoSettings().catch(error=>console.warn('[HMTC] 自动播放静音设置',error));
+      Promise.resolve(setAutoValue(AUTO_MUTE_KEY,e.target.value==='mute'))
+        .then(()=>syncAutoSettings())
+        .catch(error=>console.warn('[HMTC] 自动播放静音设置',error));
     });
     settings.querySelector('[data-action="autoNow"]').addEventListener('click',manualAutoPlay);
     settings.querySelector('[data-action="autoDiagnose"]').addEventListener('click',diagnoseAutoPlay);
@@ -1586,13 +1614,15 @@
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
     GM_registerMenuCommand('诊断多视图自动播放状态',diagnoseAutoPlay);
-    GM_registerMenuCommand('开启／关闭智能自动播放',()=>{
-      const next=!get(AUTO_ENABLED_KEY,true);
-      set(AUTO_ENABLED_KEY,next);
-      syncAutoSettings().then(()=>{
-        alert('智能自动播放已'+(next?'启用':'关闭')+
-          '。已在播放的视频不受影响。');
-      }).catch(error=>alert('配置已保存，但播放器尚未同步：'+error.message));
+    GM_registerMenuCommand('▶ 开启智能自动播放（刷新后自动启动）',()=>{
+      setAutoEnabled(true).then(()=>{
+        alert('智能自动播放已开启。进入或刷新多视图会自动尝试启动未播放的视频。');
+      }).catch(error=>alert('启用设置已保存，但播放器同步失败：'+error.message));
+    });
+    GM_registerMenuCommand('⏸ 关闭智能自动播放',()=>{
+      setAutoEnabled(false).then(()=>{
+        alert('智能自动播放已关闭。当前正在播放的视频不受影响。');
+      }).catch(error=>alert('关闭设置已保存，但播放器同步失败：'+error.message));
     });
 
     if(coarse){
