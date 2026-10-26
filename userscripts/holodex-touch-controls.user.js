@@ -1213,8 +1213,34 @@
 
   function syncAutoSettings(){
     if(!installed||!isMulti())return Promise.resolve(null);
-    return autoPrefsReady.then(()=>rpc('autoConfig',autoplaySettings(),3200));
+    return autoPrefsReady.then(async()=>{
+      const expected=autoplaySettings();
+      const actual=await rpc('autoConfig',expected,3200);
+      if(!actual||['enabled','onReturn','respectPause','muteFallback']
+        .some(key=>actual[key]!==expected[key]))
+        throw new Error('Holodex 播放器返回的自动播放设置与 GM 配置不一致');
+      return actual;
+    });
   }
+  let agentHealthBusy=false;
+  let lastAgentHealthCheck=0;
+  async function verifyAgentAutoplayState(){
+    if(agentHealthBusy||!installed||!isMulti()||document.hidden)return;
+    agentHealthBusy=true;
+    try{
+      await autoPrefsReady;
+      const current=autoplaySettings();
+      const state=await rpc('autoStatus',{},2500);
+      if(!state||['enabled','onReturn','respectPause','muteFallback']
+        .some(key=>state[key]!==current[key])){
+        await syncAutoSettings();
+        console.warn('[Holodex Touch Controls] 检测到播放器自动播放状态失同步，已自动恢复设置');
+      }
+    }catch(error){
+      console.warn('[Holodex Touch Controls] 播放器状态校验失败',error);
+    }finally{agentHealthBusy=false;}
+  }
+
   async function setAutoEnabled(enabled){
     // Start player control immediately; persist+verify GM record in parallel.
     const saving=setAutoValue(AUTO_ENABLED_KEY,!!enabled);
@@ -1258,9 +1284,16 @@
       const versionConflict=pref.canonicalValid&&
         pref.gmRecordEnabled!==pref.savedEnabled?
         '（警告：主记录与本页值不同）':'';
+      const agentBoot=data.boot?.received?
+        (data.boot.initialEnabled?'创建时已启用':'创建时已关闭'):
+        '未收到初始配置';
+      const configAgreement=saved.enabled===data.enabled?'一致':'不一致';
       const prefix='智能自动播放 v'+(data.version||'0.5.5')+
         '\n状态：'+(data.enabled?'已启用':'已关闭')+
         '｜识别：'+(data.detected||0)+' 路'+
+        '\n代理启动：'+agentBoot+
+        '｜状态匹配：'+configAgreement+
+        '｜RPC 配置：'+(data.boot?.lastRpcConfigAt?'已收到':'待校验')+
         '\n设置来源：'+pref.source+versionConflict+
         '\nGM 主记录：'+(pref.canonicalValid?
           (pref.gmRecordEnabled?'已启用':'已关闭'):'未找到／读取无效')+
@@ -1281,6 +1314,14 @@
         '没有找到有效的 YouTube 视频格子；请等待布局加载，确认不是 Twitch／聊天格子。';
       const report=prefix+'\n\n'+entries;
       if(!data.enabled){
+        // If the saved preference is ON but the page agent still says OFF,
+        // this is a transport/initialization failure, not a user preference.
+        // Do not ask the user to "enable" something already enabled.
+        if(saved.enabled){
+          alert(report+'\n\n异常：GM 设置已启用，但播放器代理仍关闭。'+
+            '后台核对会尝试恢复。若持续出现，请保留本诊断中的代理启动信息。');
+          return;
+        }
         if(confirm(report+
           '\n\n当前智能自动播放已关闭，因此不会自动启动。'+
           '\n\n点击「确定」立即开启并尝试播放；点击「取消」保持关闭。')){
@@ -2005,6 +2046,14 @@
         else {
           if(coarse)refresh();
           if(!previousMulti)syncAutoSettings().catch(()=>{});
+          // Reconcile rare startup races, Vue app reinitialization or another
+          // extension overwriting the page-agent state. This does not create
+          // playVideo loops: the page agent enforces bounded retries.
+          const now=Date.now();
+          if(now-lastAgentHealthCheck>=6500){
+            lastAgentHealthCheck=now;
+            verifyAgentAutoplayState();
+          }
         }
       }
       previousMulti=nowMulti;
