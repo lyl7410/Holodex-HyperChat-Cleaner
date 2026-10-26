@@ -101,6 +101,304 @@
     return {snapshot,setRate,openQualityMenu,video,getPlayer};
   }
 
+
+  // YouTube's own watch/live/shorts interface: no Holodex Vue bridge and no
+  // persistent floating icon. Invisible edges exist only on touch devices.
+  function youtubeWatchControls(){
+    const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
+    const supported=()=>/^\/(?:watch(?:\/|$)|live\/|shorts\/)/.test(location.pathname);
+    const p=()=>document.querySelector('#movie_player.html5-video-player')||
+      document.querySelector('.html5-video-player');
+    const controls=youtubePlaybackTools(document,p);
+    const coarse=matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>0;
+    const enabledKey='hmtc_youtube_edges_v1';
+    const setting=(key,def)=>GM_getValue(key,def);
+    const mode=()=>setting('hmtc_stats_trigger_v1','tap');
+    const sense=()=>Math.max(.4,Math.min(2.5,Number(setting('hmtc_volume_sensitivity_v1',1))||1));
+    const video=()=>controls.video();
+    let sheet=null,backdrop=null,left=null,right=null,root=null,toast=null,toastTimeout=null;
+    const muted=()=>{
+      try{if(typeof p()?.isMuted==='function')return !!p().isMuted();}catch{}
+      return !!video()?.muted;
+    };
+    const vol=()=>{
+      let n=Number.NaN;
+      try{n=Number(p()?.getVolume?.());}catch{}
+      if(!Number.isFinite(n))n=(Number(video()?.volume)||0)*100;
+      return Math.max(0,Math.min(100,Math.round(n)));
+    };
+    function volume(n){
+      const value=Math.max(0,Math.min(100,Math.round(Number(n)||0)));
+      const player=p(),v=video();
+      if(typeof player?.setVolume==='function')player.setVolume(value);
+      else if(v)v.volume=value/100;
+      if(value>0){if(typeof player?.unMute==='function')player.unMute();else if(v)v.muted=false;}
+      if(value===0){if(typeof player?.mute==='function')player.mute();else if(v)v.muted=true;}
+      return value;
+    }
+    function toggleMute(){
+      const player=p(),v=video();
+      if(muted()){if(typeof player?.unMute==='function')player.unMute();else if(v)v.muted=false;}
+      else if(typeof player?.mute==='function')player.mute();else if(v)v.muted=true;
+    }
+    GM_addStyle([
+      '.hmtc-yt-edge{position:absolute!important;z-index:2150!important;top:11%!important;',
+      'height:78%!important;width:36%!important;max-width:112px!important;background:transparent!important;',
+      'box-sizing:border-box!important;-webkit-tap-highlight-color:transparent!important}',
+      '.hmtc-yt-left{left:0!important;touch-action:pan-y!important}',
+      '.hmtc-yt-right{right:0!important;touch-action:none!important}',
+      'html.hmtc-yt-debug .hmtc-yt-left{background:#328bff33!important;outline:1px dashed #82c5ff}',
+      'html.hmtc-yt-debug .hmtc-yt-right{background:#40cfa533!important;outline:1px dashed #82f5da}',
+      '#hmtc-yt-backdrop{position:fixed;inset:0;z-index:2147482990;background:transparent}',
+      '#hmtc-yt-backdrop[hidden],#hmtc-yt-panel[hidden],#hmtc-yt-toast[hidden]{display:none!important}',
+      '#hmtc-yt-panel{position:fixed;bottom:calc(10px + env(safe-area-inset-bottom,0px));',
+      'left:10px;right:10px;z-index:2147482991;max-width:460px;max-height:82vh;margin:0 auto;',
+      'overflow:auto;padding:16px;border-radius:20px;background:linear-gradient(135deg,#20334b,#131b2a);',
+      'border:1px solid #83ced43d;box-shadow:0 18px 58px #000b;color:#f3f9ff;',
+      'font:14px/1.5 system-ui,-apple-system,sans-serif;box-sizing:border-box;',
+      'touch-action:pan-y;overscroll-behavior:contain}',
+      '#hmtc-yt-panel *{box-sizing:border-box}',
+      '#hmtc-yt-panel button,#hmtc-yt-panel select{border:1px solid #ffffff35;',
+      'border-radius:10px;min-height:42px;padding:7px 9px;background:#36495e;',
+      'color:#f2f9ff;font:650 13px system-ui;touch-action:manipulation}',
+      '#hmtc-yt-panel .head{display:flex;gap:10px;align-items:center}',
+      '#hmtc-yt-panel .head strong{flex:1;min-width:0;white-space:nowrap;',
+      'overflow:hidden;text-overflow:ellipsis;font-size:16px}',
+      '#hmtc-yt-panel .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}',
+      '#hmtc-yt-panel .metric{padding:10px;border-radius:13px;background:#ffffff0b;min-width:0}',
+      '#hmtc-yt-panel .metric label{display:block;font-size:11px;color:#afc2d1}',
+      '#hmtc-yt-panel .metric b{font-size:15px;overflow-wrap:anywhere}',
+      '#hmtc-yt-panel .row{display:flex;gap:7px;align-items:center;margin-top:10px}',
+      '#hmtc-yt-panel .row label{min-width:45px;font-weight:700}',
+      '#hmtc-yt-panel .row select,#hmtc-yt-panel .row input{flex:1;min-width:0}',
+      '#hmtc-yt-panel .row input{height:36px;accent-color:#66dad1;touch-action:pan-x}',
+      '#hmtc-yt-panel .row .quality{flex:1;min-width:0;font-size:12px;color:#9ee3df}',
+      '#hmtc-yt-panel .actions{display:flex;gap:6px;margin:10px 0}',
+      '#hmtc-yt-panel .actions button{flex:1}',
+      '#hmtc-yt-panel .hint{font-size:11px;color:#bdd0db;margin-top:10px}',
+      '#hmtc-yt-toast{position:fixed;z-index:2147482992;pointer-events:none;',
+      'transform:translate(-50%,-50%);background:#1a2c41f5;border-radius:12px;',
+      'padding:11px 15px;color:#eff;font:800 22px system-ui}',
+      '@media(orientation:landscape){#hmtc-yt-panel{left:auto;right:8px;',
+      'max-width:min(385px,69vw);max-height:calc(100vh - 16px)}}'
+    ].join(''));
+    const text=(key,value)=>{const el=sheet?.querySelector('[data-id="'+key+'"]');
+      if(el)el.textContent=String(value);};
+    const clock=n=>{
+      if(!Number.isFinite(n)||n<0)return '—';
+      const a=Math.floor(n);return Math.floor(a/3600)+':'+
+        String(Math.floor(a%3600/60)).padStart(2,'0')+':'+
+        String(a%60).padStart(2,'0');
+    };
+    function refreshSheet(){
+      if(!sheet||sheet.hidden)return;
+      const v=video(),snapshot=controls.snapshot();
+      text('title',(document.querySelector('h1.ytd-watch-metadata')?.textContent||
+        document.querySelector('h1.title')?.textContent||document.title||'YouTube')
+        .replace(/\s*-\s*YouTube\s*$/,'').trim().slice(0,120));
+      text('resolution',snapshot.resolution+' · 实际帧');
+      text('quality',snapshot.resolution);
+      text('time',clock(Number(v?.currentTime))+' / '+
+        (Number.isFinite(v?.duration)?clock(v.duration):'直播'));
+      text('vol',vol()+'%');text('mute',muted()?'🔇':'🔊');
+      const vslider=sheet.querySelector('[data-id="slider"]');
+      if(vslider&&document.activeElement!==vslider)vslider.value=String(vol());
+      const rate=sheet.querySelector('[data-id="rate"]');
+      if(rate&&!rate.disabled){
+        const rates=[...new Set([...snapshot.rates,snapshot.rate])].sort((a,b)=>a-b);
+        if([...rate.options].map(x=>x.value).join(',')!==rates.map(String).join(',')){
+          rate.replaceChildren();
+          rates.forEach(x=>{const opt=document.createElement('option');
+            opt.value=String(x);opt.textContent=x+'×';rate.appendChild(opt);});
+        }
+        rate.value=String(snapshot.rate);
+      }
+      let bandwidth=null;
+      try{
+        const raw=p()?.getStatsForNerdsData?.()||p()?.getStatsForNerds?.();
+        bandwidth=Number(raw?.bandwidth_kbps??raw?.bandwidthKbps??
+          raw?.connection_speed_kbps);
+      }catch{}
+      text('speed',Number.isFinite(bandwidth)&&bandwidth>0?
+        (bandwidth/1000).toFixed(2)+' Mbps':'—');
+      let buffer=NaN;
+      try{
+        const time=Number(v.currentTime),ranges=v.buffered;
+        for(let i=0;i<ranges.length;i++)
+          if(ranges.start(i)<=time&&time<=ranges.end(i))
+            buffer=Math.max(0,ranges.end(i)-time);
+      }catch{}
+      text('buffer',Number.isFinite(buffer)?buffer.toFixed(1)+' s':'—');
+    }
+    function close(){
+      if(sheet)sheet.hidden=true;
+      if(backdrop)backdrop.hidden=true;
+    }
+    function makePanel(){
+      if(sheet?.isConnected)return;
+      backdrop=document.createElement('div');backdrop.id='hmtc-yt-backdrop';
+      backdrop.hidden=true;backdrop.addEventListener('click',close);
+      document.body.appendChild(backdrop);
+      sheet=document.createElement('section');sheet.id='hmtc-yt-panel';
+      sheet.hidden=true;sheet.setAttribute('role','dialog');
+      sheet.setAttribute('aria-label','YouTube 视频音量、倍速、画质和统计');
+      sheet.innerHTML=[
+        '<div class="head"><strong data-id="title">YouTube</strong>',
+        '<button data-action="close" aria-label="关闭面板">✕</button></div>',
+        '<div class="grid">',
+        '<div class="metric"><label>播放时间</label><b data-id="time">—</b></div>',
+        '<div class="metric"><label>实际分辨率</label><b data-id="resolution">—</b></div>',
+        '<div class="metric"><label>连接速度</label><b data-id="speed">—</b></div>',
+        '<div class="metric"><label>已缓冲时长（估计）</label><b data-id="buffer">—</b></div></div>',
+        '<div class="row"><label>倍速</label>',
+        '<button data-action="rateDown">−</button>',
+        '<select data-id="rate" aria-label="播放速度"><option value="1">1×</option></select>',
+        '<button data-action="rateUp">＋</button></div>',
+        '<div class="row"><label>画质</label><span class="quality" data-id="quality">—</span>',
+        '<button data-action="quality">原生画质 ↗</button></div>',
+        '<div class="row"><button data-action="mute" data-id="mute">🔊</button>',
+        '<input type="range" data-id="slider" min="0" max="100" step="1">',
+        '<strong data-id="vol">—</strong></div>',
+        '<div class="actions"><button data-action="minus">−10</button>',
+        '<button data-action="plus">＋10</button><button data-action="full">100%</button></div>',
+        '<div class="hint" data-id="hint">画质通过 YouTube 原生菜单选择；倍速以实际生效值为准。</div>'
+      ].join('');
+      document.body.appendChild(sheet);
+      sheet.querySelector('[data-id="slider"]').addEventListener('input',e=>{
+        try{volume(e.target.value);refreshSheet();}catch(error){text('hint',error.message);}
+      });
+      sheet.querySelector('[data-id="rate"]').addEventListener('change',e=>{
+        try{
+          const value=Number(e.target.value);
+          const actual=controls.setRate(value).rate;
+          text('hint',Math.abs(actual-value)<.001?
+            '倍速已变为 '+actual+'×':'已请求 '+value+'×；播放器实际 '+actual+'×');
+          setTimeout(refreshSheet,400);
+        }catch(error){text('hint','倍速设置失败：'+error.message);}
+      });
+      sheet.addEventListener('click',async e=>{
+        const action=e.target.closest('button[data-action]')?.dataset.action;
+        if(!action)return;
+        if(action==='close'){close();return;}
+        try{
+          if(action==='quality'){
+            const result=await controls.openQualityMenu();
+            close();console.info('[HMTC]',result.message);return;
+          }
+          if(action==='mute')toggleMute();
+          if(action==='minus')volume(vol()-10);
+          if(action==='plus')volume(vol()+10);
+          if(action==='full')volume(100);
+          if(action==='rateDown'||action==='rateUp'){
+            const sel=sheet.querySelector('[data-id="rate"]');
+            const vals=[...sel.options].map(opt=>Number(opt.value));
+            const index=vals.findIndex(x=>Math.abs(x-Number(sel.value))<.001);
+            const next=vals[Math.max(0,Math.min(vals.length-1,
+              Math.max(0,index)+(action==='rateUp'?1:-1)))];
+            if(next!==undefined){sel.value=String(next);
+              sel.dispatchEvent(new Event('change',{bubbles:true}));}
+          }
+          refreshSheet();
+        }catch(error){text('hint',error.message);}
+      });
+      document.addEventListener('keydown',e=>{
+        if(e.key==='Escape'&&sheet&&!sheet.hidden)close();
+      });
+    }
+    function open(){
+      if(!supported()||!p())return;
+      makePanel();sheet.hidden=false;backdrop.hidden=false;refreshSheet();
+    }
+    function toastVolume(n){
+      if(!toast?.isConnected){toast=document.createElement('div');
+        toast.id='hmtc-yt-toast';document.body.appendChild(toast);}
+      const rect=p()?.getBoundingClientRect();
+      toast.style.left=Math.max(58,Math.min(innerWidth-58,
+        (rect?.left||0)+(rect?.width||innerWidth)*.67))+'px';
+      toast.style.top=Math.max(48,Math.min(innerHeight-48,
+        (rect?.top||0)+(rect?.height||innerHeight)*.5))+'px';
+      toast.textContent='🔊 '+n+'%';toast.hidden=false;
+      clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>{toast.hidden=true;},750);
+    }
+    function edge(player,side){
+      const el=document.createElement('div');
+      el.className='hmtc-yt-edge hmtc-yt-'+side;
+      el.setAttribute('aria-label',side==='left'?
+        '轻点打开 YouTube 控制面板':'上下滑动调音量');
+      player.appendChild(el);
+      let gesture=null,lastTap=0;
+      const reset=()=>{if(gesture?.timer)clearTimeout(gesture.timer);gesture=null;};
+      el.addEventListener('touchstart',e=>{
+        reset();if(e.touches.length!==1)return;
+        const t=e.touches[0];
+        gesture={id:t.identifier,x:t.clientX,y:t.clientY,at:Date.now(),
+          base:vol(),moved:false,held:false,
+          range:Math.max(90,player.getBoundingClientRect().height*.65)/sense()};
+        if(['hold','both'].includes(mode()))gesture.timer=setTimeout(()=>{
+          if(gesture&&!gesture.moved){gesture.held=true;lastTap=Date.now();open();}
+        },600);
+        if(side==='right'&&e.cancelable)e.preventDefault();
+      },{passive:side==='left'});
+      el.addEventListener('touchmove',e=>{
+        const g=gesture;if(!g||e.touches.length!==1)return;
+        const t=[...e.touches].find(x=>x.identifier===g.id);if(!t)return;
+        const dx=t.clientX-g.x,dy=g.y-t.clientY;
+        if(Math.abs(dx)>12||Math.abs(dy)>12){
+          g.moved=true;if(g.timer)clearTimeout(g.timer);
+        }
+        if(side==='right'&&!g.held){
+          if(e.cancelable)e.preventDefault();
+          if(Math.abs(dx)>Math.abs(dy)*1.5||Math.abs(dy)<9)return;
+          toastVolume(volume(g.base+dy/g.range*100));
+        }
+      },{passive:side==='left'});
+      el.addEventListener('touchend',e=>{
+        if(!gesture)return;
+        const t=[...e.changedTouches].find(x=>x.identifier===gesture.id);
+        const g=gesture;reset();if(!t)return;
+        if(side==='right'){
+          if(e.cancelable)e.preventDefault();
+          if(g.moved&&Math.abs(t.clientX-g.x)<=Math.abs(t.clientY-g.y)*1.5)
+            toastVolume(volume(g.base+(g.y-t.clientY)/g.range*100));
+        }else if(!g.held&&!g.moved&&['tap','both'].includes(mode())&&
+          Date.now()-g.at<=550&&Math.abs(t.clientX-g.x)<18&&
+          Math.abs(t.clientY-g.y)<18){
+          if(e.cancelable)e.preventDefault();lastTap=Date.now();open();
+        }
+      },{passive:false});
+      el.addEventListener('touchcancel',reset,{passive:true});
+      el.addEventListener('click',e=>{
+        if(side==='left'&&['tap','both'].includes(mode())&&Date.now()-lastTap>650){
+          e.preventDefault();e.stopPropagation();lastTap=Date.now();open();
+        }
+      });
+      return el;
+    }
+    function refresh(){
+      if(!document.body)return;
+      const player=supported()?p():null;
+      if(!player||!coarse||!setting(enabledKey,true)){
+        left?.remove();right?.remove();left=right=root=null;
+        if(!player)close();
+      }else if(root!==player||!left?.isConnected||!right?.isConnected){
+        left?.remove();right?.remove();root=player;
+        if(getComputedStyle(player).position==='static')
+          player.style.position='relative';
+        left=edge(player,'left');right=edge(player,'right');
+      }
+      if(sheet&&!sheet.hidden){if(!player)close();else refreshSheet();}
+    }
+    GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
+    GM_registerMenuCommand('YouTube：启用／禁用透明触控区',()=>{
+      const next=!setting(enabledKey,true);GM_setValue(enabledKey,next);refresh();
+      alert('YouTube 边缘触控区已'+(next?'启用':'关闭'));
+    });
+    GM_registerMenuCommand('YouTube：显示／隐藏手势区（调试）',()=>{
+      document.documentElement.classList.toggle('hmtc-yt-debug');
+    });
+    setInterval(refresh,1250);refresh();
+  }
+
   // Run a minimal, read-only stats bridge inside YouTube's actual embedded iframe.
   // The Holodex UI remains in the top page. No extra downloads or network tests.
   function youtubeFrameBridge(videoId) {
