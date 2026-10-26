@@ -687,6 +687,7 @@
     min-width:min(46px,46%);max-width:min(112px,46%);background:transparent;
     box-sizing:border-box;-webkit-user-select:none;user-select:none;
     -webkit-tap-highlight-color:transparent;overscroll-behavior:contain}
+  .mv-frame.hmtc-native-menu .hmtc-edge{pointer-events:none!important}
   .hmtc-edge--left{left:0;touch-action:pan-y;cursor:pointer}
   .hmtc-edge--right{right:0;touch-action:none;cursor:ns-resize}
   html.hmtc-debug .hmtc-edge--left{background:#37aaff33;outline:1px dashed #73c9ff}
@@ -747,6 +748,15 @@
     background:rgba(255,255,255,.065);border:1px solid #ffffff16;min-width:0}
   #hmtc-sheet .metric label{display:block;font-size:11px;color:#b8c7d7;margin-bottom:5px}
   #hmtc-sheet .metric strong{font-size:16px;font-weight:700;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+  #hmtc-sheet .hmtc-play-controls{margin-top:13px;padding:10px 12px;border-radius:15px;
+    background:#243549b8;border:1px solid #ffffff22}
+  #hmtc-sheet .hmtc-play-row{display:flex;gap:6px;align-items:center;margin:5px 0}
+  #hmtc-sheet .hmtc-play-row label{color:#cbd8e6;font-size:12px;min-width:64px;font-weight:650}
+  #hmtc-sheet .hmtc-play-row select{color:#f1f9ff;background:#17283b;border:1px solid #8296a64a;
+    min-height:42px;min-width:75px;flex:1;border-radius:10px;padding:8px;font:650 13px system-ui}
+  #hmtc-sheet .hmtc-play-row .hmtc-quality-current{flex:1;min-width:0;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#8bdedb}
+  #hmtc-sheet .hmtc-play-help{font-size:10px;color:#a5bace;line-height:1.5;margin-top:4px}
   #hmtc-sheet .volume{display:flex;gap:9px;align-items:center;margin:14px 0 11px}
   #hmtc-sheet .volume input{flex:1;width:100%;min-width:0;height:40px;accent-color:#61d7d1;touch-action:pan-x}
   #hmtc-sheet .value{min-width:50px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
@@ -1873,6 +1883,16 @@
       '<div class="metric"><label>播放时间</label><strong data-field="position">—</strong></div>',
       '<div class="metric"><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
       '</div></div>',
+      '<div class="hmtc-play-controls">',
+      '<div class="hmtc-play-row"><label>播放速度</label>',
+      '<select data-field="rate" aria-label="播放速度"><option value="1">1×</option></select>',
+      '<button type="button" data-action="rateDown" title="减速">−</button>',
+      '<button type="button" data-action="rateUp" title="加速">＋</button></div>',
+      '<div class="hmtc-play-row"><label>分辨率 / 画质</label>',
+      '<span class="hmtc-quality-current" data-field="qualityStatus">读取中…</span>',
+      '<button type="button" data-action="qualityMenu">画质选择 ↗</button></div>',
+      '<div class="hmtc-play-help">倍速从当前视频可用选项中选择；画质通过 YouTube 原生菜单调整。</div>',
+      '</div>',
       '<div class="volume"><button type="button" data-action="mute" aria-label="静音">🔊</button>',
       '<input type="range" data-field="slider" aria-label="当前视频音量" min="0" max="100" step="1">',
       '<span class="value" data-field="volume">—</span></div>',
@@ -1887,6 +1907,24 @@
       '连接速度与直播延迟来自 YouTube 内部统计，字段缺失时显示 —，不是 0。</div>'
     ].join('');
     document.body.appendChild(sheet);
+    const rateSelect=sheet.querySelector('[data-field="rate"]');
+    rateSelect.addEventListener('change',async()=>{
+      const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
+      if(!row)return;
+      rateSelect.disabled=true;
+      try{
+        const selected=Number(rateSelect.value);
+        const result=await rpc('setPlaybackRate',{
+          layoutId:row.layoutId,videoId:row.videoId,rate:selected
+        },3200);
+        field('note',result.confirmed?
+          '播放速度已设置为 '+result.rate+'×':
+          'YouTube 已收到变速请求，正在确认实际速度…');
+        updateSheetRate(result);
+        setTimeout(()=>{if(active&&active.videoId===row.videoId)stats();},450);
+      }catch(error){field('note','变速失败：'+error.message);stats();}
+      finally{rateSelect.disabled=false;}
+    });
     const slider=sheet.querySelector('[data-field="slider"]');
     slider.addEventListener('input',()=>{
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
@@ -1903,6 +1941,38 @@
       if(action==='settings'){openSettings();return;}
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
       if(!row)return;
+      if(action==='qualityMenu'){
+        btn.disabled=true;
+        try{
+          const result=await nativeRequest(row,'qualityMenu',3000);
+          const roots=[...document.querySelectorAll('.multiview .mv-cell > .cell-content')];
+          const frame=roots[row.index]?.querySelector('.mv-frame');
+          // Native YouTube submenus extend upward into the touch edge zones.
+          // Temporarily allow touches through while choosing quality.
+          if(frame){
+            frame.classList.add('hmtc-native-menu');
+            setTimeout(()=>frame.classList.remove('hmtc-native-menu'),20000);
+          }
+          closeSheet();
+          // The quality must be selected from the *real* YouTube options.
+          // Unsupported legacy setPlaybackQuality would be a silent no-op.
+          console.info('[HMTC]',result?.message||'请在 YouTube 设置中选择画质');
+        }catch(error){field('note','画质菜单不可用：'+error.message);}
+        finally{btn.disabled=false;}
+        return;
+      }
+      if(action==='rateDown'||action==='rateUp'){
+        const select=sheet.querySelector('[data-field="rate"]');
+        const values=[...select.options].map(x=>Number(x.value)).filter(Number.isFinite);
+        const current=Number(select.value);
+        const step=action==='rateUp'?1:-1;
+        const idx=values.findIndex(x=>Math.abs(x-current)<.001);
+        const next=values[Math.max(0,Math.min(values.length-1,(idx<0?values.indexOf(1):idx)+step))];
+        if(next!==undefined&&next!==current){
+          select.value=String(next);select.dispatchEvent(new Event('change',{bubbles:true}));
+        }
+        return;
+      }
       if(action==='minus')volume(row,row.volume-10);
       if(action==='plus')volume(row,row.volume+10);
       if(action==='full')volume(row,100);
@@ -2101,9 +2171,31 @@
     field('health',typeof data?.bufferSeconds==='number'
       ? data.bufferSeconds.toFixed(1)+' s':'—');
     field('resolution',data?.resolution||'—');
+    field('qualityStatus','当前：'+(data?.resolution||'—'));
     field('latency',Number.isFinite(data?.liveLatencySeconds)
       ? data.liveLatencySeconds.toFixed(2)+' s':'—');
   }
+  function updateSheetRate(data){
+    const select=sheet?.querySelector('[data-field="rate"]');
+    if(!select||sheet.hidden||!data)return;
+    const supported=[...new Set((data.rates||[.5,1,1.5,2])
+      .map(Number).filter(n=>Number.isFinite(n)&&n>0&&n<=4))].sort((a,b)=>a-b);
+    const actual=Number(data.rate)||1;
+    if(!supported.some(n=>Math.abs(n-actual)<.001))supported.push(actual);
+    supported.sort((a,b)=>a-b);
+    const before=[...select.options].map(o=>o.value).join(',');
+    const after=supported.map(String).join(',');
+    if(before!==after){
+      select.replaceChildren();
+      for(const rate of supported){
+        const option=document.createElement('option');
+        option.value=String(rate);option.textContent=rate+'×';
+        select.appendChild(option);
+      }
+    }
+    if(!select.disabled)select.value=String(actual);
+  }
+
   function timestamp(n){
     if(!Number.isFinite(Number(n))||Number(n)<0)return '—';
     n=Math.floor(Number(n));
@@ -2129,6 +2221,13 @@
     }).catch(error=>{
       if(stillActive())field('position','暂时无法读取');
     });
+    const rate=rpc('playback',{
+      layoutId:row.layoutId,videoId:row.videoId
+    },2600).then(data=>{
+      if(stillActive())updateSheetRate(data);
+    }).catch(error=>{
+      if(stillActive())field('note','播放速度暂不可用：'+error.message);
+    });
     const native=ensureNativeCollector(row).then(()=>{
       if(!stillActive())return;
       return nativeRequest(row,'stats',1750);
@@ -2137,7 +2236,7 @@
     }).catch(error=>{
       if(stillActive())renderYouTubeStats(null,error.message||'YouTube iframe 未响应');
     });
-    try {await Promise.allSettled([playback,native]);}
+    try {await Promise.allSettled([playback,rate,native]);}
     finally {statsBusy=false;}
   }
   function openSheet(row){
@@ -2150,6 +2249,8 @@
     field('title',row.title||row.videoId);
     renderVolume(row);
     renderYouTubeStats(null,'正在读取 YouTube 嵌入播放器…');
+    field('qualityStatus','当前：待读取');
+    updateSheetRate({rate:1,rates:[.5,1,1.5,2]});
     field('position','读取中…');
     stats();
     clearInterval(statsInterval);statsInterval=setInterval(stats,1800);
