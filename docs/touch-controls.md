@@ -1,15 +1,51 @@
-# Holodex Touch Controls — v0.5.6 浏览器拦截后静音启动修复
+# Holodex / YouTube Touch Controls — v0.6.0 倍速、原生画质及 YouTube 手势
 
-针对 **Holodex Multiview 内的 YouTube 小播放器** 的独立油猴脚本。v0.5.6 针对用户安卓篡改猴的最新截图：**自动播放开关正常启用、识别到两路视频、代理配置一致，但两路均被浏览器阻止有声自动播放**。本版修正静音回退的执行顺序，提供诊断及菜单一键选择静音重试，不影响已经播放中的视频。保留安卓手势及原生直播统计。
+独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.0 新增播放速度快捷控制与画质菜单，保留原生直播统计、音量手势、灵敏度与 Holodex 智能自动播放；不增加第二个重复脚本。
 
-**[安装 / 更新 v0.5.6](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装 / 更新 v0.6.0](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
 1. 在 PC 或安卓浏览器的 ScriptCat / Tampermonkey 中更新原有 **Holodex Touch Controls** 脚本，**不要同时启用两个版本**。
-2. 刷新整个 `holodex.net/multiview` 页面。**自动播放支持 PC 与安卓**；左右音量手势和视频统计面板继续只在触摸设备上启用。功能只处理 Holodex 的 YouTube 视频格子，不针对普通 YouTube 观看网页、Twitch 或聊天格子。
+2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.0：新增播放速度、真实画质选项及 YouTube 页面快捷操作
+
+### Holodex 统计面板
+
+轻点视频左侧透明触控区域打开现有统计面板。保持 Connection Speed、缓冲健康度、直播延迟、播放时间、分辨率与音量快捷键不变，新增：
+
+- **播放速度**：直接读取这一格 YouTube 视频支持的 `getAvailablePlaybackRates()`；下拉选择或点击「− / ＋」切换。通过 Holodex 原生 `ytPlayer.setPlaybackRate()` 设置，并读取 `getPlaybackRate()` 的实际返回值，不能确认时不声称已经生效。直播不一定支持多种倍速。
+- **画质选择**：显示当前实际视频帧分辨率。可点击「原生菜单 ↗」进入此格嵌入视频的 YouTube 画质选项；如果脚本能够从 YouTube 原生 DOM 读到真实清晰度，会在面板的「画质选择」下拉框里列出，点击「应用」通过原生菜单操作。**不会伪造 4K/1080p 等选项**，也不会声称已立即切换到该分辨率。
+- **失败回退**：YouTube iframe 不允许脚本注入、DOM 改版或隐藏了画质菜单时，下拉框标明不可读取；原生菜单入口会提示错误。控制倍速的 Holodex 页面代理与 iframe 统计桥接是分开的，iframe 未授权时倍速仍可能正常使用。
+- **手势冲突**：打开原生画质菜单后，Holodex 左右边缘触控区会暂时让出触摸区域以便直接操作 YouTube 菜单，约 20 秒后自动恢复。无需常驻控制按钮。
+
+### 普通 YouTube 视频页
+
+同一脚本在 `www.youtube.com`、`youtube.com` 和 `m.youtube.com` 上的普通视频页、直播页及 Shorts 页运行（页面内部跳转也会自动检测），**不修改 Holodex 的自动播放策略**。
+
+| 操作 | 行为 |
+| --- | --- |
+| 手机视频左侧轻点 | 打开快捷统计与控制面板（可选择长按 600ms 或两者同时） |
+| 手机视频右侧纵向滑动 | 调节当前视频音量，屏幕中央附近短暂提示百分比 |
+| 面板里选择倍速 / 点击 − / ＋ | 当前视频变速，并显示实际播放器返回的倍速 |
+| 面板里「画质选择」或「原生菜单 ↗」 | 读取当前真正存在的 YouTube 画质选项，并通过原生设置选择 |
+| 面板里点击音量条、±10、100%、静音 | 操作当前视频音量 |
+| 面板上部统计数字或标题、面板外任意区域 | 收起面板 |
+| 右下方「⚙ 手势设置」 | 选择轻点、长按或同时触发；调节 0.4×–2.5× 灵敏度 |
+| 油猴菜单「YouTube：打开快捷控制面板」 | 不依赖手机触摸，PC 也可打开 |
+| 油猴菜单「YouTube：启用／禁用透明触控区」 | 不影响面板或 YouTube 原生播放器功能，仅启停透明覆盖区域 |
+| 油猴菜单「YouTube：显示／隐藏手势区（调试）」 | 半透明显示当前左蓝、右绿边缘范围 |
+
+YouTube 普通页面的网络速度只在播放器真实提供 `bandwidth_kbps` 时显示；缓冲秒数来自 HTML5 视频缓冲区估算，不等于 Holodex iframe 内的原生「Buffer Health」。实际分辨率来自视频元素的 `videoWidth × videoHeight`；不能读取时显示「—」。
+
+### YouTube 官方画质 API 的限制（重要）
+
+Google 官方 [YouTube IFrame Player API 修订历史](https://developers.google.com/youtube/iframe_api_revision_history) 明确指出，自 **2019 年 10 月 24 日** 起 `getPlaybackQuality()`、`setPlaybackQuality()` 和 `getAvailableQualityLevels()` 不再受支持；尤其 `setPlaybackQuality()` 成为**无实际效果的 no-op**。因此脚本**不会**提供依赖这个失效接口的所谓「一键锁定最高画质」功能。
+
+本方案仅在 YouTube 真实原生画质菜单可访问时，读取其中的可用选项并模拟选择；这是对 YouTube 当前网页 DOM 的适配，不属于稳定的官方画质控制 API。YouTube 可能随时调整 DOM、菜单语言、播放器版式或访问权限；操作了菜单也不意味着实际解码分辨率已经变化，可能需要等待自适应码流切换。**已实现功能需要在你的安卓 Tampermonkey + 具体 YouTube/Holodex 页面进一步实机验证。**
 
 ## v0.5.6：已启用但所有视频被浏览器阻止播放
 
@@ -289,4 +325,4 @@ Connection Speed 与 Live Latency 并不是 YouTube 官方公开的稳定 IFrame
 
 已完成 JavaScript 语法检查及独立模拟测试：左右轻点/滑动、双倍区域、不误触、长按 600ms 与移动取消、三种统计触发模式、灵敏度倍率、多指取消、旧视频保护、YouTube 原生速率/缓冲/直播延迟解析及来源校验。
 
-**v0.5.6 的静音回退修复仍需在你的安卓真实浏览器中回归**。已用带浏览器拦截事件的模拟播放器验证：先原生静音、后更新 Vue、延时播放；原本已播放的视频保持不变；即使静音仍被拦截也有限次重试。目前只通过模拟篡改猴 GM 记录、网站存储不可用、延迟异步读写、刷新及跨标签事件的验证。已针对 v0.5.1 的刷新初始 `-1` / `5`、浏览器拦截、错误暂停缓存、播放后误静音其他格子、逐路诊断进行模拟测试；已用模拟播放器验证动态带宽值变化、隐藏式采集的启停与原版统计恢复、标题/画面外部区域快速关闭；不同 Android 浏览器可能限制嵌入播放器音量软件调节，所有跨域原生数据也仍有兼容性限制。
+**v0.6.0 新增的倍速、原生画质菜单及 YouTube 触控仍需要你的安卓真实浏览器回归**。此前 v0.5.6 静音回退修复也仍需要实测。已用带浏览器拦截事件的模拟播放器验证：先原生静音、后更新 Vue、延时播放；原本已播放的视频保持不变；即使静音仍被拦截也有限次重试。目前只通过模拟篡改猴 GM 记录、网站存储不可用、延迟异步读写、刷新及跨标签事件的验证。已针对 v0.5.1 的刷新初始 `-1` / `5`、浏览器拦截、错误暂停缓存、播放后误静音其他格子、逐路诊断进行模拟测试；已用模拟播放器验证动态带宽值变化、隐藏式采集的启停与原版统计恢复、标题/画面外部区域快速关闭；不同 Android 浏览器可能限制嵌入播放器音量软件调节，所有跨域原生数据也仍有兼容性限制。
