@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.5.4
-// @description  Holodex 智能自动播放：针对 Tampermonkey 强化跨刷新持久化校验、启动状态恢复和逐路诊断；保留音量手势与统计。
+// @version      0.5.5
+// @description  Holodex 多视图智能自动播放：修复已启用 GM 设置却在刷新后显示已关闭；初始化直接携带配置并自动恢复。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -304,7 +304,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.5.4', KEY='hmtc_enabled_v1';
+  const VERSION='0.5.5', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -690,7 +690,7 @@
 
   // This function is serialized into the real Holodex page world.
   // It only interacts with the already present Vue VideoCell / YoutubePlayer.
-  function pageAgent(channel,win) {
+  function pageAgent(channel,win,bootConfig) {
     const doc=win.document;
     if(win.__hmtcAgentChannel===channel)return;
     win.__hmtcAgentChannel=channel;
@@ -758,8 +758,19 @@
 
     // Multiview-wide autoplay runs in the site realm so it can call the
     // existing YouTube IFrame API without crossing an iframe touch boundary.
-    // Configure it from the userscript; do not start any video until configured.
-    const autoCfg={enabled:false,onReturn:true,respectPause:true,muteFallback:false};
+    // The agent must NOT start from hard-coded "disabled" when Tampermonkey's
+    // persisted preference says enabled. The saved config is passed at agent
+    // creation time, after the userscript's GM hydration has completed.
+    // Subsequent RPC updates remain supported but are no longer required for
+    // the first autoplay attempt after page refresh.
+    const autoCfg={
+      enabled:bootConfig?.enabled===true,
+      onReturn:bootConfig?.onReturn!==false,
+      respectPause:bootConfig?.respectPause!==false,
+      muteFallback:bootConfig?.muteFallback===true
+    };
+    const agentBoot={received:!!bootConfig,initialEnabled:autoCfg.enabled,
+      configuredAt:Date.now(),lastRpcConfigAt:0,lastRpcEnabled:null};
     // v2 deliberately ignores v0.5.0's stored false-positive pause markers.
     const AUTO_MANUAL_KEY='hmtc_autoplay_manual_pause_v2';
     const AUTO_MANUAL_AGE=12*60*60*1000;
@@ -1015,16 +1026,19 @@
           muted:!!vm.muted,playerReady:!!vm.ytPlayer
         });
       }
-      return {version:'0.5.4',enabled:autoCfg.enabled,
+      return {version:'0.5.5',enabled:autoCfg.enabled,
         onReturn:autoCfg.onReturn,respectPause:autoCfg.respectPause,
         muteFallback:autoCfg.muteFallback,hidden:!!doc.hidden,
-        detected:rows.length,rows,manualPaused:manualPauses.size};
+        boot:{...agentBoot},detected:rows.length,rows,
+        manualPaused:manualPauses.size};
     }
 
     function autoConfigure(msg){
       const wasEnabled=autoCfg.enabled;
+      agentBoot.lastRpcConfigAt=Date.now();
       for(const name of ['enabled','onReturn','respectPause','muteFallback'])
         if(typeof msg[name]==='boolean')autoCfg[name]=msg[name];
+      agentBoot.lastRpcEnabled=autoCfg.enabled;
       if(!autoCfg.enabled){
         for(const track of attempts.values())restoreFirstPlay(track);
         return {...autoCfg,ready:true};
@@ -1131,6 +1145,9 @@
         return reply({ok:false,error:'操作不支持'});
       }catch(error){return reply({ok:false,error:String(error?.message||error).slice(0,140)});}
     });
+    // A correctly hydrated "enabled" setting initiates autoplay at creation.
+    // Normal scans continue to catch videos whose iframe is not ready yet.
+    if(autoCfg.enabled)autoScan('boot');
     doc.dispatchEvent(new win.CustomEvent(channel+':ready'));
   }
 
@@ -1224,7 +1241,7 @@
       const versionConflict=pref.canonicalValid&&
         pref.gmRecordEnabled!==pref.savedEnabled?
         '（警告：主记录与本页值不同）':'';
-      const prefix='智能自动播放 v'+(data.version||'0.5.4')+
+      const prefix='智能自动播放 v'+(data.version||'0.5.5')+
         '\n状态：'+(data.enabled?'已启用':'已关闭')+
         '｜识别：'+(data.detected||0)+' 路'+
         '\n设置来源：'+pref.source+versionConflict+
@@ -1954,8 +1971,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.5.4 说明',()=>
-      alert('v0.5.4：针对 Tampermonkey 使用主设置记录及同步/异步双重读写校验。开启后刷新先恢复主记录，再自动尝试播放；诊断显示设置来源及存储验证状态。浏览器仍可能禁止无交互有声播放，其他触控及统计功能保留。'));
+    GM_registerMenuCommand('Touch Controls v0.5.5 说明',()=>
+      alert('v0.5.5：修复已启用 Tampermonkey GM 主记录但播放器代理刷新后仍处于关闭。新版完成设置读取后再创建播放器代理，启动时直接带入自动播放状态；并提供主动状态校验。手机触控和原生统计不变。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
