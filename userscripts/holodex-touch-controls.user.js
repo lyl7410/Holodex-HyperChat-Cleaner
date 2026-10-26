@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.5.2
-// @description  Holodex PC/安卓智能自动播放与触控统计：明确启停开关、一键启用诊断、修复配置同步误读。
+// @version      0.5.3
+// @description  Holodex 自动播放跨刷新状态持久化：Holodex 本地同步备份＋脚本管理器存储双保险；安卓手势及统计保留。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -301,7 +301,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.5.2', KEY='hmtc_enabled_v1';
+  const VERSION='0.5.3', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -332,21 +332,102 @@
   };
   const allowsTap=()=>['tap','both'].includes(getStatsMode());
   const allowsHold=()=>['hold','both'].includes(getStatsMode());
-  // ScriptCat and some mobile managers persist GM_setValue asynchronously.
-  // Immediately syncing via GM_getValue may otherwise send stale values to
-  // the player realm. Local overrides cover the current page lifetime only.
+  // ScriptCat's GM_setValue may be queued in its extension context. A quick
+  // reload can discard an uncommitted write. The v0.5.2 in-memory Map only
+  // covered the current document, causing "enabled" to revert after refresh.
+  //
+  // Persist EXPLICIT user preferences synchronously on the Holodex origin
+  // before mirroring to GM storage. A page reload restores those selections
+  // even if GM's background write is still pending. No preference is created
+  // here unless a user actually changes a setting.
+  const AUTO_BACKUP_KEY='hmtc.touch-controls.autoplay-preferences.v1';
+  const AUTO_KEYS=[AUTO_ENABLED_KEY,AUTO_RETURN_KEY,AUTO_PAUSE_KEY,AUTO_MUTE_KEY];
   const autoLocalValues=new Map();
+  let autoStorageAvailable=true,autoLastWriteError='';
+  function readAutoBackup(){
+    try{
+      const text=window.localStorage.getItem(AUTO_BACKUP_KEY);
+      if(!text)return {};
+      const obj=JSON.parse(text);
+      if(obj?.schema!==1||!obj.values||typeof obj.values!=='object')return {};
+      const clean={};
+      for(const key of AUTO_KEYS)
+        if(typeof obj.values[key]==='boolean')clean[key]=obj.values[key];
+      return clean;
+    }catch(error){
+      autoStorageAvailable=false;
+      autoLastWriteError=String(error?.message||error).slice(0,100);
+      return {};
+    }
+  }
+  const initialAutoBackup=readAutoBackup();
+  for(const key of AUTO_KEYS)
+    if(typeof initialAutoBackup[key]==='boolean')
+      autoLocalValues.set(key,initialAutoBackup[key]);
+  function saveAutoBackup(){
+    const values=readAutoBackup();
+    for(const key of AUTO_KEYS)
+      if(autoLocalValues.has(key))values[key]=autoLocalValues.get(key);
+    try{
+      window.localStorage.setItem(AUTO_BACKUP_KEY,
+        JSON.stringify({schema:1,updatedAt:Date.now(),values}));
+      autoStorageAvailable=true;
+      autoLastWriteError='';
+      return true;
+    }catch(error){
+      autoStorageAvailable=false;
+      autoLastWriteError=String(error?.message||error).slice(0,100);
+      return false;
+    }
+  }
   const autoValue=(key,fallback)=>autoLocalValues.has(key)?
     autoLocalValues.get(key):get(key,fallback);
-  const setAutoValue=(key,value)=>{
+  async function mirrorAutoToGM(key,value){
+    // Prefer ScriptCat's awaitable modern API; fall back to classic GM_setValue.
+    if(typeof GM!=='undefined'&&GM&&typeof GM.setValue==='function'){
+      await GM.setValue(key,value);
+    }else{
+      await Promise.resolve(set(key,value));
+    }
+  }
+  function setAutoValue(key,value){
+    if(!AUTO_KEYS.includes(key)||typeof value!=='boolean')
+      return Promise.reject(new TypeError('不支持的自动播放设置'));
     autoLocalValues.set(key,value);
-    return set(key,value);
-  };
+    saveAutoBackup(); // Synchronous persistent commit first.
+    // The page realm sees the new value immediately; GM mirrors it for
+    // compatibility with existing versions and cross-origin script storage.
+    return mirrorAutoToGM(key,value);
+  }
   const autoplaySettings=()=>({
     enabled:!!autoValue(AUTO_ENABLED_KEY,true),
     onReturn:!!autoValue(AUTO_RETURN_KEY,true),
     respectPause:!!autoValue(AUTO_PAUSE_KEY,true),
     muteFallback:!!autoValue(AUTO_MUTE_KEY,false)
+  });
+  function autoPreferenceSource(){
+    const backed=readAutoBackup();
+    return {
+      enabledBacked:typeof backed[AUTO_ENABLED_KEY]==='boolean',
+      backupAvailable:autoStorageAvailable,
+      gmEnabled:get(AUTO_ENABLED_KEY,null),
+      savedEnabled:autoplaySettings().enabled,
+      backupError:autoLastWriteError
+    };
+  }
+  // Keep open Holodex tabs in sync when the persistent preference is changed.
+  window.addEventListener('storage',event=>{
+    if(event.key!==AUTO_BACKUP_KEY||!event.newValue)return;
+    const latest=readAutoBackup();
+    let changed=false;
+    for(const key of AUTO_KEYS){
+      if(typeof latest[key]==='boolean'&&
+         autoLocalValues.get(key)!==latest[key]){
+        autoLocalValues.set(key,latest[key]);changed=true;
+      }
+    }
+    if(changed&&typeof syncAutoSettings==='function')
+      syncAutoSettings().catch(()=>{});
   });
   const rowMap=new Map(), pending=new Map();
   const nativePending=new Map(), NATIVE_TAG='hmtc-youtube-stats-v1';
@@ -783,7 +864,7 @@
           muted:!!vm.muted,playerReady:!!vm.ytPlayer
         });
       }
-      return {version:'0.5.2',enabled:autoCfg.enabled,
+      return {version:'0.5.3',enabled:autoCfg.enabled,
         onReturn:autoCfg.onReturn,respectPause:autoCfg.respectPause,
         muteFallback:autoCfg.muteFallback,hidden:!!doc.hidden,
         detected:rows.length,rows,manualPaused:manualPauses.size};
@@ -978,7 +1059,7 @@
         return;
       }
       const rows=data.rows||[];
-      const prefix='智能自动播放 v'+(data.version||'0.5.2')+
+      const prefix='智能自动播放 v'+(data.version||'0.5.3')+
         '\n状态：'+(data.enabled?'已启用':'已关闭')+
         '｜识别：'+(data.detected||0)+' 路'+
         '\n声音策略：'+(data.muteFallback?'失败后允许静音':'保留原有音量（静音回退关闭）');
@@ -1693,8 +1774,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.5.2 说明',()=>
-      alert('v0.5.2：进入／刷新多视图时自动播放已启用的未播放视频。若诊断显示「状态：已关闭」，可从「▶ 开启智能自动播放」启用，或从诊断确认开启；「⏸ 关闭智能自动播放」仅用于手动停用。默认保留声音，不重启已在播放的视频；安卓保留原来的音量手势与统计。'));
+    GM_registerMenuCommand('Touch Controls v0.5.3 说明',()=>
+      alert('v0.5.3：修复开启自动播放后刷新又变为关闭的问题。明确选择会在 Holodex 本地同步备份，同时保存到脚本管理器；刷新后恢复最后一次明确设置。仍须符合浏览器有声自动播放政策。正在播放的视频不受影响，安卓触控与统计保留。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
