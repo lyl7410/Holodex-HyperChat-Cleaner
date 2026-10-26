@@ -348,7 +348,7 @@
           'ytm-menu-item','[role="dialog"] [role="menuitem"]',
           '.bottom-sheet-container [role="button"]'
         ].join(',');
-        const qualityTitle=/(?:^|[\s·:])(?:quality|画质|畫質|清晰度|品質|解像度)(?:\b|[\s·:])/i;
+        const qualityTitle=/(?:^|[\s·:])(?:quality|画质|畫質|清晰度|品質|解像度)(?:$|\b|[\s·:])/i;
         for(const el of d.querySelectorAll(itemSelector)){
           const raw=String(el.getAttribute?.('aria-label')||el.textContent||'')
             .replace(/\s+/g,' ').trim();
