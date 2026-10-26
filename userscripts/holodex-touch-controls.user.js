@@ -1,12 +1,18 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.5.6
-// @description  Holodex PC/安卓多视图智能自动播放：浏览器拦截后可选静音再尝试启动，保留已播放视频音量及触控统计。
+// @version      0.6.0
+// @description  Holodex / YouTube 触控快捷操作：音量、统计、倍速及画质；PC/安卓智能自动播放，画质通过 YouTube 原生菜单。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
 // @match        https://youtube.com/embed/*
+// @match        https://www.youtube.com/watch*
+// @match        https://youtube.com/watch*
+// @match        https://m.youtube.com/watch*
+// @match        https://www.youtube.com/live/*
+// @match        https://youtube.com/live/*
+// @match        https://m.youtube.com/live/*
 // @match        https://www.youtube-nocookie.com/embed/*
 // @run-at       document-idle
 // @grant        unsafeWindow
@@ -23,6 +29,77 @@
 
 (function HolodexTouchControls() {
   'use strict';
+  // Shared with embedded YouTube players and ordinary YouTube watch pages.
+  // YouTube removed setPlaybackQuality/getAvailableQualityLevels support in
+  // 2019: NEVER call them or claim that a requested quality was applied.
+  // Quality changes use the real, visible YouTube settings menu instead.
+  function youtubePlaybackTools(pageDoc,getPlayer){
+    const rates=[.25,.5,.75,1,1.25,1.5,1.75,2];
+    const video=()=>pageDoc.querySelector('video.html5-main-video')||
+      getPlayer()?.querySelector?.('video')||pageDoc.querySelector('video');
+    const allowedRates=()=>{
+      const p=getPlayer();
+      let options=[];
+      try{
+        if(typeof p?.getAvailablePlaybackRates==='function')
+          options=p.getAvailablePlaybackRates()||[];
+      }catch{}
+      options=options.filter(v=>Number.isFinite(Number(v))&&Number(v)>.1&&Number(v)<=4)
+        .map(Number);
+      return options.length?[...new Set(options)].sort((a,b)=>a-b):rates;
+    };
+    function snapshot(){
+      const p=getPlayer(),v=video();
+      let rate=Number.NaN;
+      try{rate=Number(p?.getPlaybackRate?.());}catch{}
+      if(!Number.isFinite(rate)||rate<=0)rate=Number(v?.playbackRate)||1;
+      const w=Number(v?.videoWidth)||0,h=Number(v?.videoHeight)||0;
+      return {ready:!!(p||v),rate,rates:allowedRates(),
+        resolution:w&&h?w+'×'+h:'—',
+        nativeQualityAvailable:!!p?.querySelector?.('.ytp-settings-button')};
+    }
+    function setRate(value){
+      const wanted=Number(value),available=allowedRates();
+      if(!Number.isFinite(wanted)||!available.some(n=>Math.abs(n-wanted)<.001))
+        throw Error('此视频不支持所选倍速');
+      const p=getPlayer(),v=video();
+      if(typeof p?.setPlaybackRate==='function')p.setPlaybackRate(wanted);
+      else if(v)v.playbackRate=wanted;
+      else throw Error('YouTube 播放器尚未就绪');
+      return snapshot();
+    }
+    // Open the quality submenu through YouTube's *real* UI. No fake 1080p
+    // choices and no deprecated IFrame quality API; the user chooses a
+    // resolution from the native choices actually offered by this video.
+    function openQualityMenu(){
+      const p=getPlayer();
+      const setting=p?.querySelector?.('.ytp-settings-button');
+      if(!setting||typeof setting.click!=='function')
+        throw Error('当前 YouTube 播放器未提供可操作的原生画质菜单');
+      const visible=el=>!!el&&!!el.getClientRects?.().length&&
+        pageDoc.defaultView?.getComputedStyle?.(el)?.visibility!=='hidden';
+      const menu=()=>p.querySelector('.ytp-settings-menu');
+      if(!visible(menu()))setting.click();
+      const pickQuality=()=>{
+        const options=[...p.querySelectorAll('.ytp-settings-menu .ytp-menuitem')];
+        const label=x=>String(x?.getAttribute('aria-label')||'')+' '+
+          String(x?.textContent||'');
+        const quality=options.find(x=>
+          /(?:quality|画质|畫質|清晰度|解像度|品質|画質設定)/i.test(label(x)));
+        if(quality&&typeof quality.click==='function'){
+          quality.click();
+          return {opened:true,submenu:true,
+            message:'已打开 YouTube 原生画质选项，请直接选择清晰度'};
+        }
+        if(visible(menu()))return {opened:true,submenu:false,
+          message:'已打开 YouTube 设置，请点「画质 / Quality」选择清晰度'};
+        throw Error('YouTube 原生设置菜单未能打开');
+      };
+      return pickQuality();
+    }
+    return {snapshot,setRate,openQualityMenu,video,getPlayer};
+  }
+
   // Run a minimal, read-only stats bridge inside YouTube's actual embedded iframe.
   // The Holodex UI remains in the top page. No extra downloads or network tests.
   function youtubeFrameBridge(videoId) {
@@ -304,7 +381,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.5.6', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.0', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
