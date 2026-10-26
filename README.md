@@ -35,12 +35,12 @@
 
 ## 使用说明
 
-### Holodex Touch Controls v0.2.0（Android 触摸屏）
+### Holodex Touch Controls v0.3.0（Android 触摸屏）
 
-- 在 Holodex 多视图的 **YouTube 视频画面右侧中段**上下滑动，调节当前这一路视频音量；轻点 🔊 打开大滑块、±10、静音和播放统计。
-- **已取消无参考意义的设备网速估算**：改为通过 YouTube 嵌入 iframe 内的 `getStatsForNerds()` 读取**该视频原生 Connection Speed（连接带宽估计）**、Buffer Health（缓冲健康度）、分辨率、丢帧、编解码器和直播延迟（可用时）；也可手动切换 YouTube 原版详细统计。内部接口属于实验性功能，缺失时显示不可用。
-- 只占视频中间右侧的一部分，不遮挡 YouTube 底部的原生操作栏；纯 PC 鼠标环境不启用手势区。
-- [安装与触控/统计说明](docs/touch-controls.md)。注意脚本现在也需要在 YouTube 嵌入 iframe（`www.youtube.com/embed/*`）中运行；更新后要刷新 Holodex 页面。
+- **取消常驻 🔊 图标及透明覆盖层**：YouTube iframe 内直接识别视频画面右侧中部的上下滑动，调节当前这一路音量；**轻点左侧中部**打开精简统计和音量面板。正常观看不显示附加控件。
+- 精简面板重点显示 **YouTube Connection Speed（当前视频连接带宽估计）**、Buffer Health、**播放时间**和**分辨率**，保留静音、音量滑块与 ±10。没有使用设备网速代替视频连接速度，原生内部接口不可用时显示「—」。
+- 不占用视频上的持久可视区域；触摸位置限定在左右边缘中部。右侧轻点和横向滑动不接管。纯 PC 鼠标环境不启用手势。
+- [安装与手势/统计说明](docs/touch-controls.md)。仍需允许在 YouTube 嵌入 iframe（`www.youtube.com/embed/*`）中运行脚本；如浏览器无法捕获 iframe 触摸事件，可从油猴菜单「选择视频查看统计（备用入口）」打开统计。
 
 
 ### Quick Add 通用版 v0.3.0（PC / Android）
@@ -86,6 +86,8 @@ README.md
 ```
 
 ## 版本记录
+
+- **2026-10-26 — Touch Controls v0.3.0**：移除右侧常驻音量图标及其触摸覆盖层；经 iframe 握手后直接识别右侧纵向滑动调音量、左侧轻点打开精简统计。统计重点为 YouTube Connection Speed、Buffer Health、播放时间、分辨率；新增油猴菜单备用统计入口。模拟测试通过，安卓实机仍待验证。
 
 - **2026-10-26 — Touch Controls v0.2.0**：参考 Tweaks for YouTube 的交互思想，替换设备网速估算为每路 YouTube 自己的 Stats for nerds（非公开接口），新增 iframe 双端安全通信、原版统计切换入口、缓冲健康度及分辨率等数据；静态和模拟测试通过，手机实机仍待验证。
 
