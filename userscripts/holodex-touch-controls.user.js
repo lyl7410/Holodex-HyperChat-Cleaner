@@ -90,8 +90,10 @@
       try{actualId=p.getVideoData?.()?.video_id||null;}catch{}
       if(actualId&&actualId!==videoId)
         return {available:false,reason:'播放视频已切换'};
-      let raw=null,source='none';
-      // Some YouTube builds use getStatsForNerdsData rather than getStatsForNerds.
+      let source='none';
+      const data=parse(null);
+      // Combine compatible fields instead of stopping at an API which happens
+      // to return resolution but not the more important Connection Speed.
       for(const [name,args] of [
         ['getStatsForNerdsData',[]],
         ['getStatsForNerds',[]],
@@ -100,17 +102,27 @@
       ]) {
         if(typeof p[name]!=='function')continue;
         try{
-          const result=p[name](...args);
-          if(result && (typeof result==='string'||typeof result==='object')){
-            const parsed=parse(result);
-            if(parsed.bandwidthKbps!=null||parsed.bufferSeconds!=null||
-               parsed.resolution||parsed.codecs){
-              raw=result;source=name;break;
-            }
+          const raw=p[name](...args);
+          if(!raw || (typeof raw!=='string'&&typeof raw!=='object'))continue;
+          const sample=parse(raw);
+          if(sample.bandwidthKbps!=null && data.bandwidthKbps==null){
+            data.bandwidthKbps=sample.bandwidthKbps;
+            source=name;
           }
+          if(sample.bufferSeconds!=null && data.bufferSeconds==null)
+            data.bufferSeconds=sample.bufferSeconds;
+          for(const field of ['resolution','codecs','viewportFrames']){
+            if(!data[field] && sample[field])data[field]=sample[field];
+          }
+          for(const field of ['dropped','liveLatencySeconds']){
+            if(data[field]==null && sample[field]!=null)data[field]=sample[field];
+          }
+          if(source==='none' && (sample.resolution||sample.bufferSeconds!=null))
+            source=name;
+          if(data.bandwidthKbps!=null&&data.bufferSeconds!=null&&data.resolution)
+            break;
         }catch{}
       }
-      const data=parse(raw);
       if(!data.resolution) {
         // HTMLVideoElement intrinsic dimensions reflect the decoded video
         // frame; label them explicitly rather than inventing optimal resolution.
