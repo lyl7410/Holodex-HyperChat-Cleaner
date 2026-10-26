@@ -1217,6 +1217,17 @@
     background:#243549b8;border:1px solid #ffffff22}
   #hmtc-sheet .hmtc-play-row{display:flex;gap:6px;align-items:center;margin:5px 0}
   #hmtc-sheet .hmtc-play-row label{color:#cbd8e6;font-size:12px;min-width:64px;font-weight:650}
+  #hmtc-sheet .hmtc-rate-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:7px;margin:8px 0 12px}
+  #hmtc-sheet .hmtc-rate-presets button{min-width:0;min-height:44px;padding:6px 3px;
+    font-size:13px;white-space:nowrap}
+  #hmtc-sheet .hmtc-rate-presets button.hmtc-rate-selected{
+    background:#15796f!important;border-color:#80e8d2!important;
+    color:#fff!important;box-shadow:inset 0 0 0 1px #a1eee766}
+  #hmtc-sheet .hmtc-youtube-quality-link{display:block;width:100%;
+    border:1px solid #63d8c763;background:#225065b0;color:#dbfdfa;
+    text-decoration:none;text-align:center;border-radius:11px;
+    padding:11px 8px;font:700 12px system-ui}
   #hmtc-sheet .hmtc-play-row select{color:#f1f9ff;background:#17283b;border:1px solid #8296a64a;
     min-height:42px;min-width:75px;flex:1;border-radius:10px;padding:8px;font:650 13px system-ui}
   #hmtc-sheet .hmtc-play-row .hmtc-quality-current{flex:1;min-width:0;overflow:hidden;
@@ -2352,18 +2363,22 @@
       '<div class="metric"><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
       '</div></div>',
       '<div class="hmtc-play-controls">',
-      '<div class="hmtc-play-row"><label>播放速度</label>',
-      '<select data-field="rate" aria-label="播放速度"><option value="1">1×</option></select>',
-      '<button type="button" data-action="rateDown" title="减速">−</button>',
-      '<button type="button" data-action="rateUp" title="加速">＋</button></div>',
+      '<div class="hmtc-play-row"><label>播放速度</label></div>',
+      '<div class="hmtc-rate-presets" role="group" aria-label="常用播放速度">',
+      '<button type="button" data-action="ratePreset" data-rate="0.5">0.5×</button>',
+      '<button type="button" data-action="ratePreset" data-rate="0.75">0.75×</button>',
+      '<button type="button" data-action="ratePreset" data-rate="1">1×</button>',
+      '<button type="button" data-action="ratePreset" data-rate="1.25">1.25×</button>',
+      '<button type="button" data-action="ratePreset" data-rate="1.5">1.5×</button>',
+      '<button type="button" data-action="ratePreset" data-rate="1.75">1.75×</button>',
+      '<button type="button" data-action="ratePreset" data-rate="2">2×</button></div>',
       '<div class="hmtc-play-row"><label>当前画质</label>',
-      '<span class="hmtc-quality-current" data-field="qualityStatus">读取中…</span>',
-      '<button type="button" data-action="qualityMenu">原生菜单 ↗</button></div>',
-      '<div class="hmtc-play-row"><label>画质选择</label>',
-      '<select data-field="qualityList" aria-label="当前视频可用清晰度">',
-      '<option value="">读取原生选项…</option></select>',
-      '<button type="button" data-action="applyQuality">应用</button></div>',
-      '<div class="hmtc-play-help">倍速从当前视频可用选项中选择；画质通过 YouTube 原生菜单调整。</div>',
+      '<span class="hmtc-quality-current" data-field="qualityStatus">读取中…</span></div>',
+      '<div class="hmtc-play-row"><a class="hmtc-youtube-quality-link"',
+      ' data-field="youtubeQualityLink" target="_blank" rel="noopener noreferrer"',
+      ' href="https://www.youtube.com/">在 YouTube 打开视频并调整画质 ↗</a></div>',
+      '<div class="hmtc-play-help">嵌入播放器未提供可用画质菜单；',
+      '跳转 YouTube 原站可选择该视频真实支持的画质。不会在 Holodex 内伪装切换。</div>',
       '</div>',
       '<div class="volume"><button type="button" data-action="mute" aria-label="静音">🔊</button>',
       '<input type="range" data-field="slider" aria-label="当前视频音量" min="0" max="100" step="1">',
@@ -2379,24 +2394,6 @@
       '连接速度与直播延迟来自 YouTube 内部统计，字段缺失时显示 —，不是 0。</div>'
     ].join('');
     document.body.appendChild(sheet);
-    const rateSelect=sheet.querySelector('[data-field="rate"]');
-    rateSelect.addEventListener('change',async()=>{
-      const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
-      if(!row)return;
-      rateSelect.disabled=true;
-      try{
-        const selected=Number(rateSelect.value);
-        const result=await rpc('setPlaybackRate',{
-          layoutId:row.layoutId,videoId:row.videoId,rate:selected
-        },3200);
-        field('note',result.confirmed?
-          '播放速度已设置为 '+result.rate+'×':
-          'YouTube 已收到变速请求，正在确认实际速度…');
-        updateSheetRate(result);
-        setTimeout(()=>{if(active&&active.videoId===row.videoId)stats();},450);
-      }catch(error){field('note','变速失败：'+error.message);stats();}
-      finally{rateSelect.disabled=false;}
-    });
     const slider=sheet.querySelector('[data-field="slider"]');
     slider.addEventListener('input',()=>{
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
@@ -2413,51 +2410,23 @@
       if(action==='settings'){openSettings();return;}
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
       if(!row)return;
-      if(action==='applyQuality'){
-        const selected=sheet.querySelector('[data-field="qualityList"]');
-        if(!selected?.value)return field('note','当前没有可用的原生画质选项');
+      if(action==='ratePreset'){
+        const requested=Number(btn.dataset.rate);
+        if(!COMMON_RATES.includes(requested))return;
         btn.disabled=true;
         try{
-          const result=await nativeRequest(row,'selectQuality',3000,
-            {quality:selected.value});
-          field('note',result.selectedInNativeMenu?
-            '已在原生菜单选择 '+result.requested+'，等待实际画质变化…':
-            '画质请求未得到确认');
-          setTimeout(()=>{if(active?.videoId===row.videoId)stats();},650);
-        }catch(error){field('note','画质切换不可用：'+error.message);}
+          const result=await rpc('setPlaybackRate',{
+            layoutId:row.layoutId,videoId:row.videoId,rate:requested
+          },3200);
+          updateSheetRate(result);
+          field('note',result.confirmed?
+            '播放速度已切换为 '+result.rate+'×':
+            '已请求 '+requested+'×，但当前实际倍速仍为 '+result.rate+'×');
+          setTimeout(()=>{
+            if(active?.layoutId===row.layoutId&&active?.videoId===row.videoId)stats();
+          },450);
+        }catch(error){field('note','倍速暂不可用：'+error.message);}
         finally{btn.disabled=false;}
-        return;
-      }
-      if(action==='qualityMenu'){
-        btn.disabled=true;
-        try{
-          const result=await nativeRequest(row,'qualityMenu',3000);
-          const roots=[...document.querySelectorAll('.multiview .mv-cell > .cell-content')];
-          const frame=roots[row.index]?.querySelector('.mv-frame');
-          // Native YouTube submenus extend upward into the touch edge zones.
-          // Temporarily allow touches through while choosing quality.
-          if(frame){
-            frame.classList.add('hmtc-native-menu');
-            setTimeout(()=>frame.classList.remove('hmtc-native-menu'),20000);
-          }
-          closeSheet();
-          // The quality must be selected from the *real* YouTube options.
-          // Unsupported legacy setPlaybackQuality would be a silent no-op.
-          console.info('[HMTC]',result?.message||'请在 YouTube 设置中选择画质');
-        }catch(error){field('note','画质菜单不可用：'+error.message);}
-        finally{btn.disabled=false;}
-        return;
-      }
-      if(action==='rateDown'||action==='rateUp'){
-        const select=sheet.querySelector('[data-field="rate"]');
-        const values=[...select.options].map(x=>Number(x.value)).filter(Number.isFinite);
-        const current=Number(select.value);
-        const step=action==='rateUp'?1:-1;
-        const idx=values.findIndex(x=>Math.abs(x-current)<.001);
-        const next=values[Math.max(0,Math.min(values.length-1,(idx<0?values.indexOf(1):idx)+step))];
-        if(next!==undefined&&next!==current){
-          select.value=String(next);select.dispatchEvent(new Event('change',{bubbles:true}));
-        }
         return;
       }
       if(action==='minus')volume(row,row.volume-10);
@@ -2663,24 +2632,13 @@
       ? data.liveLatencySeconds.toFixed(2)+' s':'—');
   }
   function updateSheetRate(data){
-    const select=sheet?.querySelector('[data-field="rate"]');
-    if(!select||sheet.hidden||!data)return;
-    const supported=[...new Set((data.rates||[.5,1,1.5,2])
-      .map(Number).filter(n=>Number.isFinite(n)&&n>0&&n<=4))].sort((a,b)=>a-b);
+    if(!sheet||sheet.hidden||!data)return;
     const actual=Number(data.rate)||1;
-    if(!supported.some(n=>Math.abs(n-actual)<.001))supported.push(actual);
-    supported.sort((a,b)=>a-b);
-    const before=[...select.options].map(o=>o.value).join(',');
-    const after=supported.map(String).join(',');
-    if(before!==after){
-      select.replaceChildren();
-      for(const rate of supported){
-        const option=document.createElement('option');
-        option.value=String(rate);option.textContent=rate+'×';
-        select.appendChild(option);
-      }
+    for(const btn of sheet.querySelectorAll('[data-action="ratePreset"]')){
+      const selected=Math.abs(Number(btn.dataset.rate)-actual)<.001;
+      btn.classList.toggle('hmtc-rate-selected',selected);
+      btn.setAttribute('aria-pressed',selected?'true':'false');
     }
-    if(!select.disabled)select.value=String(actual);
   }
 
   function timestamp(n){
@@ -2726,40 +2684,6 @@
     try {await Promise.allSettled([playback,rate,native]);}
     finally {statsBusy=false;}
   }
-  async function loadHolodexQuality(row){
-    const select=sheet?.querySelector('[data-field="qualityList"]');
-    if(!select||!active||active.videoId!==row.videoId||
-       active.layoutId!==row.layoutId)return;
-    select.replaceChildren();
-    const item=document.createElement('option');
-    item.value='';item.textContent='正在读取…';select.appendChild(item);
-    select.disabled=true;
-    try{
-      const data=await nativeRequest(row,'qualityOptions',3000);
-      if(!active||active.videoId!==row.videoId||
-         active.layoutId!==row.layoutId||sheet.hidden)return;
-      select.replaceChildren();
-      const choices=(data?.choices||[]).filter(x=>typeof x==='string'&&x.length<90);
-      if(choices.length){
-        for(const option of choices){
-          const el=document.createElement('option');
-          el.value=option;el.textContent=option;select.appendChild(el);
-        }
-        select.disabled=false;
-      }else{
-        const el=document.createElement('option');el.value='';
-        el.textContent='请使用右上方原生菜单';
-        select.appendChild(el);
-      }
-    }catch(error){
-      if(!active||active.videoId!==row.videoId||
-         active.layoutId!==row.layoutId||sheet.hidden)return;
-      select.replaceChildren();
-      const el=document.createElement('option');el.value='';
-      el.textContent='原生画质列表不可读取';select.appendChild(el);
-    }
-  }
-
   function openSheet(row){
     makeSheet();
     if(active&&(active.layoutId!==row.layoutId||active.videoId!==row.videoId))
@@ -2773,8 +2697,11 @@
     field('qualityStatus','当前：待读取');
     updateSheetRate({rate:1,rates:[.5,1,1.5,2]});
     field('position','读取中…');
+    const qualityLink=sheet.querySelector('[data-field="youtubeQualityLink"]');
+    if(qualityLink&&/^[\w-]{11}$/.test(row.videoId||'')){
+      qualityLink.href='https://www.youtube.com/watch?v='+encodeURIComponent(row.videoId);
+    }
     stats();
-    loadHolodexQuality(row);
     clearInterval(statsInterval);statsInterval=setInterval(stats,1800);
   }
   function closeSheet(){
