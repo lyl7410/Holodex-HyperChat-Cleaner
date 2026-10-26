@@ -212,6 +212,12 @@
       '#hmtc-yt-panel .row{display:flex;gap:7px;align-items:center;margin-top:10px}',
       '#hmtc-yt-panel .row label{min-width:45px;font-weight:700}',
       '#hmtc-yt-panel .row select,#hmtc-yt-panel .row input{flex:1;min-width:0}',
+      '#hmtc-yt-panel .hmtc-yt-rates{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));',
+      'gap:7px;margin:7px 0 12px}',
+      '#hmtc-yt-panel .hmtc-yt-rates button{min-width:0;min-height:44px;',
+      'padding:6px 2px;white-space:nowrap;font-size:12px}',
+      '#hmtc-yt-panel .hmtc-yt-rates button.hmtc-yt-rate-active{',
+      'background:#12766c!important;border-color:#78ead5!important;color:white!important}',
       '#hmtc-yt-panel .row input{height:36px;accent-color:#66dad1;touch-action:pan-x}',
       '#hmtc-yt-panel .row .quality{flex:1;min-width:0;font-size:12px;color:#9ee3df}',
       '#hmtc-yt-panel .actions{display:flex;gap:6px;margin:10px 0}',
@@ -247,15 +253,10 @@
       text('vol',vol()+'%');text('mute',muted()?'🔇':'🔊');
       const vslider=sheet.querySelector('[data-id="slider"]');
       if(vslider&&document.activeElement!==vslider)vslider.value=String(vol());
-      const rate=sheet.querySelector('[data-id="rate"]');
-      if(rate&&!rate.disabled){
-        const rates=[...new Set([...snapshot.rates,snapshot.rate])].sort((a,b)=>a-b);
-        if([...rate.options].map(x=>x.value).join(',')!==rates.map(String).join(',')){
-          rate.replaceChildren();
-          rates.forEach(x=>{const opt=document.createElement('option');
-            opt.value=String(x);opt.textContent=x+'×';rate.appendChild(opt);});
-        }
-        rate.value=String(snapshot.rate);
+      for(const btn of sheet.querySelectorAll('[data-action="ratePreset"]')){
+        const active=Math.abs(Number(btn.dataset.rate)-snapshot.rate)<.001;
+        btn.classList.toggle('hmtc-yt-rate-active',active);
+        btn.setAttribute('aria-pressed',active?'true':'false');
       }
       let bandwidth=null;
       try{
@@ -294,10 +295,15 @@
         '<div class="metric"><label>实际分辨率</label><b data-id="resolution">—</b></div>',
         '<div class="metric"><label>连接速度</label><b data-id="speed">—</b></div>',
         '<div class="metric"><label>已缓冲时长（估计）</label><b data-id="buffer">—</b></div></div>',
-        '<div class="row"><label>倍速</label>',
-        '<button data-action="rateDown">−</button>',
-        '<select data-id="rate" aria-label="播放速度"><option value="1">1×</option></select>',
-        '<button data-action="rateUp">＋</button></div>',
+        '<div class="row"><label>播放速度</label></div>',
+        '<div class="hmtc-yt-rates" role="group" aria-label="常用播放倍速">',
+        '<button type="button" data-action="ratePreset" data-rate="0.5">0.5×</button>',
+        '<button type="button" data-action="ratePreset" data-rate="0.75">0.75×</button>',
+        '<button type="button" data-action="ratePreset" data-rate="1">1×</button>',
+        '<button type="button" data-action="ratePreset" data-rate="1.25">1.25×</button>',
+        '<button type="button" data-action="ratePreset" data-rate="1.5">1.5×</button>',
+        '<button type="button" data-action="ratePreset" data-rate="1.75">1.75×</button>',
+        '<button type="button" data-action="ratePreset" data-rate="2">2×</button></div>',
         '<div class="row"><label>画质</label><span class="quality" data-id="quality">—</span>',
         '<button data-action="quality">原生菜单 ↗</button></div>',
         '<div class="row"><label>选择</label>',
@@ -338,15 +344,6 @@
       sheet.querySelector('[data-id="slider"]').addEventListener('input',e=>{
         try{volume(e.target.value);refreshSheet();}catch(error){text('hint',error.message);}
       });
-      sheet.querySelector('[data-id="rate"]').addEventListener('change',e=>{
-        try{
-          const value=Number(e.target.value);
-          const actual=controls.setRate(value).rate;
-          text('hint',Math.abs(actual-value)<.001?
-            '倍速已变为 '+actual+'×':'已请求 '+value+'×；播放器实际 '+actual+'×');
-          setTimeout(refreshSheet,400);
-        }catch(error){text('hint','倍速设置失败：'+error.message);}
-      });
       sheet.addEventListener('click',async e=>{
         if(e.target.closest('.metric')||e.target.closest('.head strong')){
           close();return;
@@ -381,14 +378,16 @@
           if(action==='minus')volume(vol()-10);
           if(action==='plus')volume(vol()+10);
           if(action==='full')volume(100);
-          if(action==='rateDown'||action==='rateUp'){
-            const sel=sheet.querySelector('[data-id="rate"]');
-            const vals=[...sel.options].map(opt=>Number(opt.value));
-            const index=vals.findIndex(x=>Math.abs(x-Number(sel.value))<.001);
-            const next=vals[Math.max(0,Math.min(vals.length-1,
-              Math.max(0,index)+(action==='rateUp'?1:-1)))];
-            if(next!==undefined){sel.value=String(next);
-              sel.dispatchEvent(new Event('change',{bubbles:true}));}
+          if(action==='ratePreset'){
+            const wanted=Number(e.target.closest('button[data-action]').dataset.rate);
+            if(!COMMON_RATES.includes(wanted))return;
+            const actual=controls.setRate(wanted).rate;
+            text('hint',Math.abs(actual-wanted)<.001?
+              '播放速度已设置为 '+actual+'×':
+              '已请求 '+wanted+'×，实际仍为 '+actual+'×');
+            refreshSheet();
+            setTimeout(refreshSheet,450);
+            return;
           }
           refreshSheet();
         }catch(error){text('hint',error.message);}
