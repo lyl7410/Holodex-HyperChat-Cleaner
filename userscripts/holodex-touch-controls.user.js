@@ -93,7 +93,9 @@
       if(!visible(settingMenu()))throw Error('YouTube 原生设置菜单没有打开');
       const choices=[...(p.querySelectorAll('.ytp-settings-menu .ytp-menuitem')||[])]
         .map(el=>({name:menuLabel(el),element:el}))
-        .filter(x=>qualityOption.test(x.name)&&x.name.length<=90);
+        .filter(x=>qualityOption.test(x.name)&&x.name.length<=90&&
+          // Root "Quality Auto" is a submenu launcher, not a resolution.
+          !qualityTitle.test(x.name));
       return {choices,submenu:!!item};
     }
     function closeQualityMenu(){
@@ -2632,14 +2634,16 @@
   }
   async function loadHolodexQuality(row){
     const select=sheet?.querySelector('[data-field="qualityList"]');
-    if(!select||!active||active.videoId!==row.videoId)return;
+    if(!select||!active||active.videoId!==row.videoId||
+       active.layoutId!==row.layoutId)return;
     select.replaceChildren();
     const item=document.createElement('option');
     item.value='';item.textContent='正在读取…';select.appendChild(item);
     select.disabled=true;
     try{
       const data=await nativeRequest(row,'qualityOptions',3000);
-      if(!active||active.videoId!==row.videoId||sheet.hidden)return;
+      if(!active||active.videoId!==row.videoId||
+         active.layoutId!==row.layoutId||sheet.hidden)return;
       select.replaceChildren();
       const choices=(data?.choices||[]).filter(x=>typeof x==='string'&&x.length<90);
       if(choices.length){
@@ -2654,7 +2658,8 @@
         select.appendChild(el);
       }
     }catch(error){
-      if(!active||active.videoId!==row.videoId||sheet.hidden)return;
+      if(!active||active.videoId!==row.videoId||
+         active.layoutId!==row.layoutId||sheet.hidden)return;
       select.replaceChildren();
       const el=document.createElement('option');el.value='';
       el.textContent='原生画质列表不可读取';select.appendChild(el);
