@@ -1133,8 +1133,10 @@
       installed=true;installing=false;
       document.removeEventListener(token+':ready',ready);
       refresh();
-      syncAutoSettings().catch(error=>
-        console.warn('[Holodex Touch Controls] 自动播放设置同步失败',error));
+      // Wait for Tampermonkey's async GM.getValue to finish before the first
+      // page-agent autoConfig. Otherwise an old false value can win on reload.
+      autoPrefsReady.then(()=>syncAutoSettings()).catch(error=>
+        console.warn('[Holodex Touch Controls] 自动播放初始配置同步失败',error));
     };
     document.addEventListener(token+':ready',ready);
     const tag=document.createElement('script');
@@ -1153,15 +1155,11 @@
 
   function syncAutoSettings(){
     if(!installed||!isMulti())return Promise.resolve(null);
-    return rpc('autoConfig',autoplaySettings(),3200);
+    return autoPrefsReady.then(()=>rpc('autoConfig',autoplaySettings(),3200));
   }
   async function setAutoEnabled(enabled){
-    // This command sets the requested state. It never toggles blindly.
-    const writing=setAutoValue(AUTO_ENABLED_KEY,!!enabled);
-    // A slow userscript-manager write must not block an explicit gesture.
-    // The same-origin backup was written synchronously.
-    Promise.resolve(writing).catch(error=>
-      console.warn('[HMTC] GM 自动播放设置镜像写入失败',error));
+    // Start player control immediately; persist+verify GM record in parallel.
+    const saving=setAutoValue(AUTO_ENABLED_KEY,!!enabled);
     if(settings?.isConnected){
       settings.querySelector('[data-control="autoEnabled"]').checked=!!enabled;
       const indicator=settings.querySelector('[data-field="autoState"]');
@@ -1169,16 +1167,24 @@
         '当前已开启：进入／刷新多视图会自动尝试播放':
         '当前已关闭：刷新后不会自动尝试播放';
     }
-    if(!isMulti()||!installed)return {enabled:!!enabled,ready:false};
-    const data=await syncAutoSettings();
-    if(data?.enabled!==!!enabled)
+    const tasks=[
+      (!isMulti()||!installed?
+        Promise.resolve({enabled:!!enabled,ready:false}):syncAutoSettings()),
+      Promise.resolve(saving)
+    ];
+    const [synced,persisted]=await Promise.allSettled(tasks);
+    if(synced.status==='rejected')
+      throw new Error('播放器同步失败：'+synced.reason?.message);
+    if(synced.value?.enabled!==!!enabled)
       throw new Error('播放器返回的自动播放状态与设置不一致');
-    return data;
+    if(persisted.status==='rejected')
+      throw new Error('已应用到播放器，但未能确认跨刷新保存：'+persisted.reason?.message);
+    return {...synced.value,persistence:persisted.value};
   }
   function diagnoseAutoPlay(resynced=false){
     if(!isMulti())return alert('请先进入 Holodex 多视图。');
     if(!installed)return alert('播放器页面桥接尚未就绪。请确认脚本启用并完整刷新多视图页面。');
-    rpc('autoDiagnose',{},4200).then(data=>{
+    autoPrefsReady.then(()=>rpc('autoDiagnose',{},4200)).then(data=>{
       const saved=autoplaySettings();
       if(saved.enabled!==data.enabled&&!resynced){
         // A delayed GM write or page bridge startup may leave the in-page
@@ -1191,16 +1197,22 @@
       }
       const rows=data.rows||[];
       const pref=autoPreferenceSource();
-      const source=pref.enabledBacked?'Holodex 本地持久备份':
-        '脚本管理器原有存储';
-      const outOfSync=typeof pref.gmEnabled==='boolean'&&
-        pref.gmEnabled!==pref.savedEnabled?
-        '（脚本管理器镜像值与本地设置暂不一致）':'';
+      const versionConflict=pref.canonicalValid&&
+        pref.gmRecordEnabled!==pref.savedEnabled?
+        '（警告：主记录与本页值不同）':'';
       const prefix='智能自动播放 v'+(data.version||'0.5.4')+
         '\n状态：'+(data.enabled?'已启用':'已关闭')+
         '｜识别：'+(data.detected||0)+' 路'+
-        '\n设置来源：'+source+outOfSync+
-        (!pref.backupAvailable?'\n注意：Holodex 同源持久存储当前不可用':'')+
+        '\n设置来源：'+pref.source+versionConflict+
+        '\nGM 主记录：'+(pref.canonicalValid?
+          (pref.gmRecordEnabled?'已启用':'已关闭'):'未找到／读取无效')+
+        '｜GM 旧键：'+(pref.gmEnabled===null?'未知':
+          pref.gmEnabled?'已启用':'已关闭')+
+        '\n存储校验：同步 '+(pref.syncVerified?'通过':'未验证')+
+        '／异步 '+(pref.asyncVerified?'通过':'未验证')+
+        '／初始化 '+(pref.hydrationComplete?'完成':'进行中')+
+        (!pref.backupAvailable?'\n注意：Holodex 网站存储不可用':'')+
+        (pref.backupError?'\n存储提示：'+pref.backupError.slice(0,120):'')+
         '\n声音策略：'+(data.muteFallback?'失败后允许静音':'保留原有音量（静音回退关闭）');
       const lines=rows.slice(0,16).map((row,i)=>
         (i+1)+'. '+row.title.slice(0,30)+
@@ -1878,14 +1890,17 @@
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
     GM_registerMenuCommand('诊断多视图自动播放状态',diagnoseAutoPlay);
     GM_registerMenuCommand('▶ 开启智能自动播放（刷新后自动启动）',()=>{
-      setAutoEnabled(true).then(()=>{
-        alert('智能自动播放已开启。进入或刷新多视图会自动尝试启动未播放的视频。');
-      }).catch(error=>alert('启用设置已保存，但播放器同步失败：'+error.message));
+      setAutoEnabled(true).then(data=>{
+        alert('智能自动播放已开启；'+
+          (data.persistence?.canonicalSyncOk||data.persistence?.verifiedAsync?
+            '篡改猴主记录已校验。':'已写入可用的备份。')+
+          '进入或刷新多视图会尝试播放未播放的视频。');
+      }).catch(error=>alert('自动播放保存/启用未完全成功：'+error.message));
     });
     GM_registerMenuCommand('⏸ 关闭智能自动播放',()=>{
       setAutoEnabled(false).then(()=>{
-        alert('智能自动播放已关闭。当前正在播放的视频不受影响。');
-      }).catch(error=>alert('关闭设置已保存，但播放器同步失败：'+error.message));
+        alert('智能自动播放已关闭，已检查存储。当前正在播放的视频不受影响。');
+      }).catch(error=>alert('关闭设置未完全成功：'+error.message));
     });
 
     if(coarse){
