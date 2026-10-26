@@ -797,7 +797,15 @@
         for(const track of attempts.values())restoreFirstPlay(track);
         return {...autoCfg,ready:true};
       }
-      if(!wasEnabled)nextRetryCampaign();
+      if(!wasEnabled){
+        // An explicit enable is a fresh user-requested playback campaign.
+        // Clear attempts made by the manual command while auto mode was off,
+        // so a just-enabled player isn't stuck waiting on old cooldowns.
+        for(const track of attempts.values()){
+          track.tries=0;track.gestureTries=0;track.lastTry=0;
+          track.campaigns=0;track.blockedAt=0;track.lastFailure='';
+        }
+      }
       autoScan('config');
       return {...autoCfg,ready:true};
     }
