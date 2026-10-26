@@ -488,16 +488,23 @@
       '<span class="value" data-field="volume">—</span></div>',
       '<div class="actions"><button data-action="minus">−10</button>',
       '<button data-action="plus">＋10</button><button data-action="full">100%</button></div>',
-      '<div class="net"><div class="sub">设备网络速度估算 · 非此视频的实际连接速度</div>',
+      '<div class="net"><div class="sub">YouTube 原生连接速度估计 · 当前视频</div>',
       '<div class="speed" data-field="speed">—</div>',
-      '<div class="sub" data-field="network">读取浏览器网络信息…</div></div>',
+      '<div class="sub" data-field="network">正在读取 YouTube 嵌入播放器…</div></div>',
       '<div class="grid">',
       '<div><label>播放状态</label><strong data-field="state">—</strong></div>',
       '<div><label>录播缓冲比例</label><strong data-field="buffer">—</strong></div>',
       '<div><label>播放时间</label><strong data-field="position">—</strong></div>',
       '<div><label>倍速</label><strong data-field="rate">—</strong></div>',
-      '</div><div class="note" data-field="note">',
-      'YouTube IFrame API 不提供稳定的每路 CDN 连接速度；不进行额外下载测速。</div>'
+      '<div><label>缓冲健康度</label><strong data-field="health">—</strong></div>',
+      '<div><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
+      '<div><label>丢帧</label><strong data-field="dropped">—</strong></div>',
+      '<div><label>视频 / 音频编码</label><strong data-field="codecs">—</strong></div>',
+      '<div><label>直播延迟</label><strong data-field="latency">—</strong></div>',
+      '</div><div class="actions" style="margin-top:10px">',
+      '<button data-action="native">切换 YouTube 原版统计</button></div>',
+      '<div class="note" data-field="note">',
+      'Connection Speed 是 YouTube 对当前播放连接的带宽估计，非瞬时下载流量。内部接口可能随播放器更新而失效。</div>'
     ].join('');
     document.body.appendChild(sheet);
     const slider=sheet.querySelector('[data-field="slider"]');
@@ -521,18 +528,37 @@
           row.muted=!!result.muted;renderVolume(row);
         }catch(error){field('note',error.message);}
       }
+      if(action==='native'){
+        try{
+          const result=await nativeRequest(row,'nativeToggle',2000);
+          field('note',result.visible
+            ? '已请求显示 YouTube 原版统计，它会覆盖在当前小播放器画面内。'
+            : '已请求隐藏 YouTube 原版统计。');
+          stats();
+        }catch(error){field('note',error.message);}
+      }
     });
     document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!sheet.hidden)closeSheet();});
   }
-  function network(){
-    const c=navigator.connection||navigator.mozConnection||navigator.webkitConnection;
-    const speed=Number(c?.downlink);
-    field('speed',Number.isFinite(speed)&&speed>0?'≈ '+speed.toFixed(2)+' Mbps':'—');
-    if(!c){field('network','此浏览器不支持 Network Information API');return;}
-    const rtt=Number(c.rtt);
-    field('network',(c.type||c.effectiveType||'网络类型未知')+
-      (Number.isFinite(rtt)&&rtt>=0?' · 估算延迟 '+rtt+' ms':'')+
-      (c.saveData?' · 节省流量':''));
+  function renderYouTubeStats(data,reason) {
+    if(!data?.available){
+      field('speed','—');
+      field('network',reason||data?.reason||'YouTube 原生连接统计不可用');
+    }else {
+      const kbps=data.bandwidthKbps;
+      field('speed',typeof kbps==='number'&&Number.isFinite(kbps)&&kbps>0
+        ? '≈ '+(kbps/1000).toFixed(2)+' Mbps':'—');
+      field('network',kbps!=null
+        ? '当前视频 · YouTube '+(data.source||'原生统计')
+        : '已连接 YouTube，但本播放器未提供带宽数值');
+    }
+    field('health',typeof data?.bufferSeconds==='number'
+      ? data.bufferSeconds.toFixed(1)+' s':'—');
+    field('resolution',data?.resolution||'—');
+    field('codecs',data?.codecs||'—');
+    field('dropped',Number.isFinite(data?.dropped)?String(data.dropped):'—');
+    field('latency',Number.isFinite(data?.liveLatencySeconds)
+      ? data.liveLatencySeconds.toFixed(2)+' s':'—');
   }
   const status={'-1':'未开始','0':'结束','1':'播放中','2':'已暂停','3':'缓冲中','5':'待播放'};
   function timestamp(n){
@@ -543,26 +569,37 @@
   }
   async function stats(){
     if(statsBusy||!active||sheet.hidden)return;
-    statsBusy=true;
     const key=active.layoutId+':'+active.videoId;
-    network();
-    try{
-      const v=await rpc('stats',{layoutId:active.layoutId,videoId:active.videoId},4000);
+    const row=rowMap.get(key);
+    if(!row){closeSheet();return;}
+    statsBusy=true;
+    try {
+      const [basic,yt]=await Promise.allSettled([
+        rpc('stats',{layoutId:row.layoutId,videoId:row.videoId},4000),
+        nativeRequest(row,'stats',1900)
+      ]);
+      // Responses from an old or replaced cell must not update a newer panel.
       if(sheet.hidden||!active||active.layoutId+':'+active.videoId!==key)return;
-      field('state',!v.ready?'播放器尚未就绪':status[String(v.state)]||'未知');
-      field('buffer',v.live?'直播：不可用':
-        Number.isFinite(v.fraction)?(Math.min(100,v.fraction*100).toFixed(1)+'%'):'—');
-      field('position',timestamp(v.position)+(v.live?'（直播）':' / '+timestamp(v.duration)));
-      field('rate',Number.isFinite(v.rate)?v.rate+'×':'—');
-    }catch{field('state','无法读取播放器状态');}
-    finally{statsBusy=false;}
+      if(basic.status==='fulfilled'){
+        const v=basic.value;
+        field('state',!v.ready?'播放器尚未就绪':status[String(v.state)]||'未知');
+        field('buffer',v.live?'直播：不可用':
+          Number.isFinite(v.fraction)?(Math.min(100,v.fraction*100).toFixed(1)+'%'):'—');
+        field('position',timestamp(v.position)+(v.live?'（直播）':' / '+timestamp(v.duration)));
+        field('rate',Number.isFinite(v.rate)?v.rate+'×':'—');
+      }else field('state','暂时无法读取播放器状态');
+      if(yt.status==='fulfilled')renderYouTubeStats(yt.value);
+      else renderYouTubeStats(null,yt.reason?.message||'YouTube iframe 未响应');
+    }finally{statsBusy=false;}
   }
   function openSheet(row){
     makeSheet();
     active={layoutId:row.layoutId,videoId:row.videoId};
     sheet.hidden=false;
     field('title',row.title||row.videoId);
-    renderVolume(row);network();stats();
+    renderVolume(row);
+    renderYouTubeStats(null,'正在读取 YouTube 嵌入播放器…');
+    stats();
     clearInterval(statsInterval);statsInterval=setInterval(stats,2400);
   }
   function closeSheet(){
@@ -612,7 +649,7 @@
       if(isMulti()){if(!installed)installBridge();else refresh();}
     },1700);
     document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
-    GM_registerMenuCommand('Touch Controls 操作说明',()=>alert('Holodex 多视图中，在 YouTube 视频右侧中段上下滑动调音量，轻点 🔊 打开控制/统计面板。网络速度是设备连接估算，非 YouTube 单路 CDN 实际速率。'));
+    GM_registerMenuCommand('Touch Controls 操作说明',()=>alert('Holodex 多视图 YouTube 视频右侧上下滑动调音量。轻点 🔊 查看 YouTube 原生 Stats for nerds 的 Connection Speed、缓冲健康度、分辨率等。原生接口属于实验性，嵌入 iframe 脚本必须获得网站权限。'));
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});
   else init();
