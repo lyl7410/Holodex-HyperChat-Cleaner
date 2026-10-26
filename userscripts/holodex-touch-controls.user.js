@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.0
-// @description  Holodex / YouTube 触控快捷操作：音量、统计、倍速及画质；PC/安卓智能自动播放，画质通过 YouTube 原生菜单。
+// @version      0.6.1
+// @description  Holodex／YouTube 固定倍速快捷键、画质可用性判断与原站入口、手势音量和智能自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -29,6 +29,8 @@
 
 (function HolodexTouchControls() {
   'use strict';
+  // Common touch-sized, fixed rate presets shown on Holodex and YouTube.
+  const COMMON_RATES=[0.5,0.75,1,1.25,1.5,1.75,2];
   // Shared with embedded YouTube players and ordinary YouTube watch pages.
   // YouTube removed setPlaybackQuality/getAvailableQualityLevels support in
   // 2019: NEVER call them or claim that a requested quality was applied.
@@ -60,8 +62,8 @@
     }
     function setRate(value){
       const wanted=Number(value),available=allowedRates();
-      if(!Number.isFinite(wanted)||!available.some(n=>Math.abs(n-wanted)<.001))
-        throw Error('此视频不支持所选倍速');
+      if(!Number.isFinite(wanted)||!COMMON_RATES.some(n=>Math.abs(n-wanted)<.001))
+        throw Error('播放速度不在允许的快捷档位内');
       const p=getPlayer(),v=video();
       if(typeof p?.setPlaybackRate==='function')p.setPlaybackRate(wanted);
       else if(v)v.playbackRate=wanted;
@@ -820,7 +822,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.0', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.1', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -1743,13 +1745,15 @@
           const p=vm.ytPlayer,r=Number(msg.rate);
           if(!p||typeof p.setPlaybackRate!=='function')
             throw Error('此视频播放器不支持变速');
-          const supported=p.getAvailablePlaybackRates?.()||[1];
-          if(!Number.isFinite(r)||!supported.some(x=>Math.abs(Number(x)-r)<.001))
-            throw Error('当前视频不支持所选倍速');
+          // An embed can temporarily report only [1] while still loading.
+          // Accept a bounded fixed preset; confirm actual application by
+          // reading getPlaybackRate() instead of trusting a stale list.
+          if(!Number.isFinite(r)||!COMMON_RATES.some(x=>Math.abs(x-r)<.001))
+            throw Error('无效的播放速度快捷档位');
           p.setPlaybackRate(r);
           const applied=Number(p.getPlaybackRate?.());
-          return reply({ok:true,data:{rate:Number.isFinite(applied)?applied:r,
-            requested:r,confirmed:Math.abs(applied-r)<.001}});
+          return reply({ok:true,data:{rate:Number.isFinite(applied)?applied:1,
+            requested:r,confirmed:Number.isFinite(applied)&&Math.abs(applied-r)<.001}});
         }
         return reply({ok:false,error:'操作不支持'});
       }catch(error){return reply({ok:false,error:String(error?.message||error).slice(0,140)});}
