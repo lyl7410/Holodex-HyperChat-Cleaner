@@ -358,6 +358,11 @@
   #hmtc-volume-toast .hmtc-toast-label{font:600 11px/1.2 system-ui,sans-serif;color:#b9d2dd;letter-spacing:.1em}
   #hmtc-volume-toast .hmtc-toast-track{height:5px;background:#ffffff24;border-radius:100px;overflow:hidden}
   #hmtc-volume-toast .hmtc-toast-fill{height:100%;width:0;background:linear-gradient(90deg,#50d6d0,#7ebdff);border-radius:100px;transition:width 70ms linear}
+  /* Only while the stats sheet is open: intercept taps even above YouTube
+     cross-origin iframes. Hidden otherwise, so normal video touches are free. */
+  #hmtc-backdrop{position:fixed;inset:0;z-index:2147482998;background:transparent;
+    touch-action:manipulation}
+  #hmtc-backdrop[hidden]{display:none!important}
   #hmtc-sheet,#hmtc-settings{
     position:fixed;z-index:2147483000;left:10px;right:10px;
     bottom:calc(10px + env(safe-area-inset-bottom,0px));
@@ -846,8 +851,18 @@
     }
   }
 
+  let backdrop=null;
   function makeSheet(){
     if(sheet?.isConnected)return;
+    backdrop=document.createElement('div');
+    backdrop.id='hmtc-backdrop';
+    backdrop.hidden=true;
+    backdrop.setAttribute('aria-hidden','true');
+    backdrop.addEventListener('click',()=>{
+      if(settings?.hidden===false)closeSettings();
+      else closeSheet();
+    });
+    document.body.appendChild(backdrop);
     sheet=document.createElement('section');
     sheet.id='hmtc-sheet';sheet.hidden=true;
     sheet.setAttribute('role','dialog');
@@ -920,17 +935,8 @@
       if(settings?.hidden===false)closeSettings();
       else if(!sheet.hidden)closeSheet();
     });
-    // Tapping exposed space ABOVE the sheet dismisses it, without requiring
-    // the tiny X in the upper-right. Never swallow slider/button interactions.
-    document.addEventListener('pointerdown',event=>{
-      if(settings?.hidden===false){
-        if(!settings.contains(event.target))closeSettings();
-        return;
-      }
-      if(!sheet.hidden && !sheet.contains(event.target) &&
-         event.clientY < sheet.getBoundingClientRect().top)
-        closeSheet();
-    },true);
+    // Full-screen transparent backdrop captures taps above the sheet even
+    // when the underlying content is a cross-origin YouTube iframe.
   }
   let settings=null;
   function makeSettings(){
@@ -1094,6 +1100,7 @@
       stopNativeCollector();
     active={layoutId:row.layoutId,videoId:row.videoId};
     sheet.hidden=false;
+    if(backdrop)backdrop.hidden=false;
     field('title',row.title||row.videoId);
     renderVolume(row);
     renderYouTubeStats(null,'正在读取 YouTube 嵌入播放器…');
@@ -1104,6 +1111,8 @@
   function closeSheet(){
     active=null;
     if(sheet)sheet.hidden=true;
+    if(backdrop)backdrop.hidden=true;
+    if(settings?.hidden===false)closeSettings();
     clearInterval(statsInterval);statsInterval=null;
     stopNativeCollector();
   }
