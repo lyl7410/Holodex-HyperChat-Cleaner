@@ -1325,6 +1325,29 @@
       throw new Error('已应用到播放器，但未能确认跨刷新保存：'+persisted.reason?.message);
     return {...synced.value,persistence:persisted.value};
   }
+  async function enableMutedRecovery(){
+    if(!isMulti()||!installed)
+      throw new Error('请先打开 Holodex 多视图并确认播放器已就绪');
+    if(!autoplaySettings().enabled)
+      throw new Error('请先开启智能自动播放总开关');
+    // Explicit user opt-in: all currently PLAYING cells are skipped by the
+    // page agent. Only a still-paused/blocked stream may be newly muted.
+    const saving=setAutoValue(AUTO_MUTE_KEY,true);
+    if(settings?.isConnected)
+      settings.querySelector('[data-control="autoMute"]').value='mute';
+    const [synced,persisted]=await Promise.allSettled([
+      syncAutoSettings(),Promise.resolve(saving)
+    ]);
+    if(synced.status==='rejected')
+      throw new Error('播放器设置同步失败：'+synced.reason?.message);
+    if(synced.value?.muteFallback!==true)
+      throw new Error('播放器未确认启用静音回退');
+    if(persisted.status==='rejected')
+      throw new Error('当前已开启静音回退，但保存失败：'+
+        persisted.reason?.message);
+    return synced.value;
+  }
+
   function diagnoseAutoPlay(resynced=false){
     if(!isMulti())return alert('请先进入 Holodex 多视图。');
     if(!installed)return alert('播放器页面桥接尚未就绪。请确认脚本启用并完整刷新多视图页面。');
@@ -1348,7 +1371,7 @@
         (data.boot.initialEnabled?'创建时已启用':'创建时已关闭'):
         '未收到初始配置';
       const configAgreement=saved.enabled===data.enabled?'一致':'不一致';
-      const prefix='智能自动播放 v'+(data.version||'0.5.5')+
+      const prefix='智能自动播放 v'+(data.version||'0.5.6')+
         '\n状态：'+(data.enabled?'已启用':'已关闭')+
         '｜识别：'+(data.detected||0)+' 路'+
         '\n代理启动：'+agentBoot+
@@ -1368,7 +1391,9 @@
       const lines=rows.slice(0,16).map((row,i)=>
         (i+1)+'. '+row.title.slice(0,30)+
         '\n   '+row.description+'｜'+row.issue+
-        '｜尝试 '+row.tries+' 次');
+        '｜尝试 '+row.tries+' 次'+
+        (row.mutePending?'｜静音指令已发出，等待播放':'')+
+        (row.mutedStartAttempts?'｜静音回退请求 '+row.mutedStartAttempts+' 次':''));
       const entries=rows.length?lines.join('\n')+
         (rows.length>16?'\n……另有 '+(rows.length-16)+' 路':''):
         '没有找到有效的 YouTube 视频格子；请等待布局加载，确认不是 Twitch／聊天格子。';
@@ -1391,8 +1416,22 @@
         }
         return;
       }
-      alert(report+'\n\n如果显示浏览器阻止有声自动播放，请在多视图页面点一下再重试，'+
-        '或在设置中主动开启“多次失败后静音启动”。');
+      const hasBlocked=rows.some(row=>
+        /浏览器拦截|浏览器拒绝|阻止自动播放|浏览器已阻止/.test(row.issue));
+      if(hasBlocked&&!data.muteFallback){
+        if(confirm(report+
+          '\n\n两路或更多视频可能都被浏览器的有声自动播放策略阻止。'+
+          '点击「确定」允许【仅对未播放的视频】静音后再次尝试；'+
+          '已经正常播放的视频不会被静音或重启。'+
+          '\n点击「取消」保留当前声音策略。')){
+          enableMutedRecovery()
+            .then(()=>setTimeout(()=>diagnoseAutoPlay(true),650))
+            .catch(error=>alert('静音回退启用失败：'+error.message));
+        }
+        return;
+      }
+      alert(report+'\n\n如果仍显示浏览器拦截，即使静音后也无法自动播放，'+
+        '需要浏览器许可或在页面内直接操作播放器。');
     }).catch(error=>alert('播放诊断未完成：'+error.message));
   }
   function manualAutoPlay(){
@@ -1813,9 +1852,9 @@
       '<label for="hmtc-auto-mute" style="margin-top:12px">播放被限制时的声音策略</label>',
       '<select id="hmtc-auto-mute" data-control="autoMute">',
       '<option value="keep">保持原有静音和音量（默认）</option>',
-      '<option value="mute">多次播放失败后才尝试静音启动</option>',
+      '<option value="mute">检测到浏览器拦截后，先静音再重试（推荐）</option>',
       '</select>',
-      '<div class="setting-summary">自动播放仅有限次重试，不会持续点击视频或修改正在播放的音量。</div>',
+      '<div class="setting-summary">仅未播放的格子可静音回退；先向 YouTube 发送静音，再延时播放，避免静音尚未生效就重试。已在播放的格子不会更改音量。</div>',
       '<button type="button" data-action="autoNow" style="width:100%;margin-top:12px">立即尝试播放未播放视频</button>',
       '<button type="button" data-action="autoDiagnose" style="width:100%;margin-top:7px">查看每路自动播放状态与失败原因</button>',
       '</div>',
@@ -2048,6 +2087,15 @@
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
     GM_registerMenuCommand('诊断多视图自动播放状态',diagnoseAutoPlay);
+    GM_registerMenuCommand('▶ 允许被拦截的视频静音启动',()=>{
+      if(confirm('允许尚未播放的视频在被浏览器拦截后静音重试？\n'+
+        '已经正常播放的视频不会被静音或重启。')){
+        enableMutedRecovery()
+          .then(()=>alert('已允许对被拦截的视频静音后重试。'+
+            '\n设置已保存；目前正在播放的视频音量不受影响。'))
+          .catch(error=>alert('静音启动设置失败：'+error.message));
+      }
+    });
     GM_registerMenuCommand('▶ 开启智能自动播放（刷新后自动启动）',()=>{
       setAutoEnabled(true).then(data=>{
         alert('智能自动播放已开启；'+
@@ -2089,8 +2137,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.5.5 说明',()=>
-      alert('v0.5.5：修复已启用 Tampermonkey GM 主记录但播放器代理刷新后仍处于关闭。新版完成设置读取后再创建播放器代理，启动时直接带入自动播放状态；并提供主动状态校验。手机触控和原生统计不变。'));
+    GM_registerMenuCommand('Touch Controls v0.5.6 说明',()=>
+      alert('v0.5.6：修复浏览器拦截时静音回退发送顺序：先直接给 YouTube 静音，稍后播放，避免同一时刻发出播放请求而被判有声自动播放。诊断可一键允许静音回退，不改变正在播放视频的音量；安卓触控与统计不变。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
