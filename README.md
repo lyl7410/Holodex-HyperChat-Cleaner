@@ -35,12 +35,12 @@
 
 ## 使用说明
 
-### Holodex Touch Controls v0.1.0（Android 触摸屏）
+### Holodex Touch Controls v0.2.0（Android 触摸屏）
 
 - 在 Holodex 多视图的 **YouTube 视频画面右侧中段**上下滑动，调节当前这一路视频音量；轻点 🔊 打开大滑块、±10、静音和播放统计。
-- 自定义统计优先显示浏览器 `navigator.connection.downlink` 的**设备网络速度估算（Mbps）**及网络 RTT、播放状态、录播缓冲比例。**不是单路 YouTube 视频的实际 CDN 连接速度**；浏览器不支持会显示不可用。
+- **已取消无参考意义的设备网速估算**：改为通过 YouTube 嵌入 iframe 内的 `getStatsForNerds()` 读取**该视频原生 Connection Speed（连接带宽估计）**、Buffer Health（缓冲健康度）、分辨率、丢帧、编解码器和直播延迟（可用时）；也可手动切换 YouTube 原版详细统计。内部接口属于实验性功能，缺失时显示不可用。
 - 只占视频中间右侧的一部分，不遮挡 YouTube 底部的原生操作栏；纯 PC 鼠标环境不启用手势区。
-- [安装与触控/统计说明](docs/touch-controls.md)。
+- [安装与触控/统计说明](docs/touch-controls.md)。注意脚本现在也需要在 YouTube 嵌入 iframe（`www.youtube.com/embed/*`）中运行；更新后要刷新 Holodex 页面。
 
 
 ### Quick Add 通用版 v0.3.0（PC / Android）
@@ -86,6 +86,8 @@ README.md
 ```
 
 ## 版本记录
+
+- **2026-10-26 — Touch Controls v0.2.0**：参考 Tweaks for YouTube 的交互思想，替换设备网速估算为每路 YouTube 自己的 Stats for nerds（非公开接口），新增 iframe 双端安全通信、原版统计切换入口、缓冲健康度及分辨率等数据；静态和模拟测试通过，手机实机仍待验证。
 
 - **2026-10-26 — Touch Controls v0.1.0**：独立脚本支持 Holodex 视频画面右侧上下滑动控制逐路音量、轻点打开大音量滑块与设备网络速度估算/播放状态面板；不干预 YouTube iframe 内部。语法和模拟测试通过，手机真机待验证。
 
