@@ -1,15 +1,15 @@
 # Holodex HyperChat Cleaner
 
-面向 **YouTube、Holodex Watch / Multiview** 的轻量级用户脚本，包含聊天清理、频道资料修复、PC / Android 一键添加视频，以及 **Holodex 多视图 PC／安卓智能自动播放、手机手势音量与播放统计**。
+面向 **YouTube、Holodex Watch / Multiview** 的轻量级用户脚本，包含聊天清理、频道资料修复、PC / Android 一键添加视频，以及 **Holodex 多视图 PC／安卓智能自动播放、Holodex／YouTube 通用手机手势、音量、播放速度及真实画质控制**。
 
 ## 安装
 
 1. [HyperChat Cleaner](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/hyperchat-cleaner.user.js)
 2. [Channel Name Fix](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/channel-name-fix.user.js)
 3. [Holodex Quick Add（PC + Android）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-mobile-quick-add.user.js)
-4. [Holodex Touch Controls（PC／安卓自动播放＋手机手势音量与统计）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)
+4. [Holodex Touch Controls（Holodex／YouTube 手势、倍速、画质＋多视图自动播放）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)
 
-四个脚本可独立安装。Quick Add 不要求安装另外三个脚本；Touch Controls 独立提供 PC／安卓智能自动播放，并在手机提供触控音量和统计，其他功能按需安装。更新时覆盖同名脚本并刷新相关页面，不要同时启用多份旧版。
+四个脚本可独立安装。Quick Add 不要求安装另外三个脚本；Touch Controls 独立提供 Holodex 多视图 PC／安卓智能自动播放，也在 Holodex 和普通 YouTube 播放页提供手机触控、统计、倍速与原生画质控制；其他功能按需安装。更新时覆盖同名脚本并刷新相关页面，不要同时启用多份旧版。
 
 ## 功能
 
@@ -35,8 +35,11 @@
 
 ## 使用说明
 
-### Holodex Touch Controls v0.5.6（PC／Android 智能自动播放与安卓触摸控制）
+### Holodex / YouTube Touch Controls v0.6.0（自动播放、倍速、画质与手机手势）
 
+- **v0.6.0 · Holodex 面板增强**：原本的直播延迟、Connection Speed、缓冲、当前分辨率与音量保持不变；新增从当前视频播放器读取的**可用倍速下拉框与 ± 倍速按钮**（设置后读取实际速度）。画质新增 **原生可用清晰度列表**（能读取时）和「原生菜单」入口，支持在 YouTube 真正的设置菜单中更改，不伪造不支持的画质。
+- **v0.6.0 · 普通 YouTube 页支持**：`www.youtube.com` / `m.youtube.com` 的 `watch`、`live`、`shorts` 页面提供**右侧上下滑动调音量、左侧轻点/长按打开控制面板**，可查看实际解码分辨率、时间、缓冲信息及有条件的连接速度，设置倍速和原生画质。支持手机页面内跳转自动识别、临时音量提示、手势灵敏度和触发模式设置，**没有常驻浮动图标**；PC 可从脚本菜单打开快捷面板。
+- **画质 API 兼容性**：YouTube 官方 IFrame API 自 2019 年起不支持 `setPlaybackQuality()`；因此脚本只尝试操作 YouTube **原生画质菜单**并读取它确实列出的选项。成功点击不等于解码画质即时变化；若 YouTube 更改了 DOM 或禁用 iframe 原生菜单，则会明确提示不可用，不会虚报切换成功。面板显示的是实际视频帧尺寸，可能与选择的目标画质不同。
 - **智能自动播放 v0.5.0（PC／安卓）**：首次进入、刷新、Quick Add / Holodex 添加视频、切回多视图时，识别并尝试启动未播放的视频。**播放中与缓冲中的视频绝不重启**，已结束录像不自动重播。
 - **刷新后误暂停修复 v0.5.1**：首次初始化 `-1` 状态先等待约 3.2 秒，媒体进入 `5`（已加载待播放）后立即尝试；YouTube 自动播放受浏览器拦截而迅速暂停时，不再轻易误记为用户手动暂停。旧版可疑缓存不继承，仍保留稳定播放后手动暂停的会话保护。
 - **浏览器拦截与静音回退修复 v0.5.6**：安卓实际截图确认 GM 与页面代理都处于**已启用**，但两路视频都被浏览器拒绝有声自动播放。新版对**用户明确允许**的静音回退改为先执行 YouTube `mute()`、再同步 Holodex 的 Vue 静音属性、延时约 220ms 才调用 `playVideo()`；避免播放早于静音生效。诊断及菜单可一键询问是否启用，仅处理未播放的格子；已经播放、缓冲或手动暂停保护的视频不被重启或改音量。静音模式仍可能被浏览器拒绝，重试有次数上限。
@@ -88,6 +91,8 @@ README.md
 ```
 
 ## 版本记录
+
+- **2026-10-27 — Touch Controls v0.6.0**：在独立脚本中加入 Holodex 控制面板可用倍速与 ± 切换、画质原生菜单和原生可选清晰度；同一套快捷操作扩展到普通 YouTube watch / live / shorts 视频页，提供透明左右手势、音量、播放数据、倍速、原生画质、灵敏度与轻点/长按模式。官方不再支持的画质 API 不使用。语法与模拟播放器/跨域 iframe/YouTube 手势测试通过，PC/安卓真实页面待回归。
 
 - **2026-10-27 — Touch Controls v0.5.6**：针对两路视频状态正常、却均触发 YouTube `onAutoplayBlocked` 的安卓实测，修复静音回退的 Vue/YouTube 消息时序问题；新增菜单和诊断确认后一键开启静音回退，给被阻止视频即时有限重试。默认保留原音量，正在播放的格子不受影响。模拟测试涵盖先静音后播放、异步等待、双路不互扰以及持续被拦截的重试上限；安卓真机仍待验证。
 
