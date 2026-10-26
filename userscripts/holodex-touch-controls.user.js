@@ -566,6 +566,22 @@
         return Number.isFinite(state)?state:null;
       }catch{return null;}
     }
+    // Holodex VideoCell.updatePausedState() calls muteOthers() on first play.
+    // For an automatic startup, prevent a newly started cell from muting
+    // streams that the user was already watching. Restore the native flag if
+    // autoplay never starts, so later explicit native playback works as usual.
+    function protectExistingAudio(vm,track){
+      if(vm?.firstPlay===true&&typeof vm.muteOthers==='function'){
+        vm.firstPlay=false;
+        track.firstPlayGuarded=true;
+        track.vm=vm;
+      }
+    }
+    function restoreFirstPlay(track){
+      if(track?.firstPlayGuarded&&!track.everPlaying&&track.vm?.firstPlay===false)
+        track.vm.firstPlay=true;
+      if(track)track.firstPlayGuarded=false;
+    }
     // YouTube's documented onAutoplayBlocked event may identify policy denial.
     // The IFrame API requires a globally named callback string, not a function.
     function subscribeAutoplayBlocked(key,player,track){
@@ -621,7 +637,7 @@
         if(state===null){result.waiting++;continue;}
         let track=attempts.get(key);
         if(!track||track.player!==player){
-          if(track)removeAutoplayListener(key);
+          if(track){restoreFirstPlay(track);removeAutoplayListener(key);}
           track={player,lastState:null,lastTry:0,tries:0,gestureTries:0,
             returned:false,suppressed:false,everPlaying:false,campaigns:0,
             playingSince:0,blockedAt:0,lastFailure:'',firstSeen:now};
@@ -637,10 +653,12 @@
           }
           track.lastState=state;track.tries=0;track.gestureTries=0;
           track.returned=false;track.suppressed=false;
+          // First play has succeeded: native muteOthers() must remain skipped.
+          track.firstPlayGuarded=false;
           unmarkManual(key);
           continue;
         }
-        if(state===0){track.lastState=state;result.ended++;continue;}
+        if(state===0){restoreFirstPlay(track);track.lastState=state;result.ended++;continue;}
         // Do not persist autoplay denial as a user pause. YouTube may report
         // PLAYING fleetingly, then pause because the browser blocks sound.
         // Only a sufficiently established playback followed by pause can be
@@ -666,10 +684,12 @@
         }
         if(track.suppressed&&!manualRun){result.protected++;continue;}
         if(autoCfg.respectPause&&manualPauses.has(key)&&!manualRun){
+          restoreFirstPlay(track);
           result.protected++;continue;
         }
         if(!manualRun&&track.tries>=4){
           if(!gesture||track.gestureTries>=2||now-track.lastTry<1600){
+            if(track.campaigns>=2&&track.gestureTries>=2)restoreFirstPlay(track);
             result.blocked++;continue;
           }
           track.gestureTries++;
@@ -686,6 +706,7 @@
             if(typeof vm.setMuted==='function')vm.setMuted(true);
             else player.mute?.();
           }
+          protectExistingAudio(vm,track);
           track.lastFailure='';
           player.playVideo();
           track.lastTry=now;track.tries++;
@@ -707,6 +728,7 @@
       // Do not reuse an old attempt record if Holodex removed/replaced its cell.
       for(const key of attempts.keys()){
         if(!current.has(key)){
+          restoreFirstPlay(attempts.get(key));
           removeAutoplayListener(key);
           attempts.delete(key);unmarkManual(key);
         }
@@ -754,7 +776,10 @@
       const wasEnabled=autoCfg.enabled;
       for(const name of ['enabled','onReturn','respectPause','muteFallback'])
         if(typeof msg[name]==='boolean')autoCfg[name]=msg[name];
-      if(!autoCfg.enabled)return {...autoCfg,ready:true};
+      if(!autoCfg.enabled){
+        for(const track of attempts.values())restoreFirstPlay(track);
+        return {...autoCfg,ready:true};
+      }
       if(!wasEnabled)nextRetryCampaign();
       autoScan('config');
       return {...autoCfg,ready:true};
