@@ -686,7 +686,7 @@
     doc.addEventListener('touchend',gestureRetry,{passive:true});
     // Observe user pauses and newly added videos. Bounded retries per video.
     const autoTimer=win.setInterval(()=>autoScan(),1050);
-    win.addEventListener('pagehide',()=>win.clearInterval(autoTimer));
+    // Page teardown releases its interval; BFCache restores it on pageshow.
 
     doc.addEventListener(channel+':request',async ev=>{
       let msg;try{msg=JSON.parse(ev.detail);}catch{return;}
@@ -1406,45 +1406,74 @@
   }
   function init(){
     if(!document.body)return;
-    if(!coarse){
-      GM_registerMenuCommand('Touch Controls 说明',()=>alert('未检测到触摸屏；此独立脚本只对触控设备显示视频手势控制。'));
-      return;
+
+    // PC and mobile both get the autonomous playback engine. Touch-only UI
+    // remains gated to coarse pointers and is never inserted on a mouse PC.
+    GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
+    GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
+    GM_registerMenuCommand('开启／关闭智能自动播放',()=>{
+      const next=!get(AUTO_ENABLED_KEY,true);
+      set(AUTO_ENABLED_KEY,next);
+      syncAutoSettings().then(()=>{
+        alert('智能自动播放已'+(next?'启用':'关闭')+
+          '。已在播放的视频不受影响。');
+      }).catch(error=>alert('配置已保存，但播放器尚未同步：'+error.message));
+    });
+
+    if(coarse){
+      makeSheet();
+      document.documentElement.classList.toggle('hmtc-debug',!!get(DEBUG_KEY,false));
+      GM_registerMenuCommand('启用/禁用透明边缘手势',()=>{
+        const next=!get(EDGE_KEY,true);
+        set(EDGE_KEY,next);
+        if(!next)document.querySelectorAll('.hmtc-edge').forEach(e=>e.remove());
+        else refresh();
+        alert('触摸手势已'+(next?'启用':'禁用')+'；播放统计仍可通过脚本菜单查看。');
+      });
+      GM_registerMenuCommand('触控手势设置（灵敏度／长按）',openSettings);
+      GM_registerMenuCommand('显示/隐藏边缘触控区域（调试）',()=>{
+        const next=!get(DEBUG_KEY,false);
+        set(DEBUG_KEY,next);
+        document.documentElement.classList.toggle('hmtc-debug',next);
+      });
+      GM_registerMenuCommand('选择视频查看统计（备用入口）',()=>{
+        const rows=[...rowMap.values()];
+        if(!rows.length)return alert('当前没有已识别的 YouTube 视频格子。');
+        if(rows.length===1){openSheet(rows[0]);return;}
+        const choice=prompt('选择要查看统计的序号：\n'+
+          rows.map((r,i)=>(i+1)+'. '+(r.title||r.videoId).slice(0,36)).join('\n'),'1');
+        if(choice===null)return;
+        const n=Number(choice);
+        if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
+      });
     }
-    makeSheet();
-    document.documentElement.classList.toggle('hmtc-debug',!!get(DEBUG_KEY,false));
-    GM_registerMenuCommand('启用/禁用透明边缘手势',()=>{
-      const next=!get(EDGE_KEY,true);
-      set(EDGE_KEY,next);
-      if(!next)document.querySelectorAll('.hmtc-edge').forEach(e=>e.remove());
-      else refresh();
-      alert('触摸手势已'+(next?'启用':'禁用')+'；播放统计仍可通过脚本菜单查看。');
-    });
-    GM_registerMenuCommand('触控手势设置（灵敏度／长按）',openSettings);
-    GM_registerMenuCommand('显示/隐藏边缘触控区域（调试）',()=>{
-      const next=!get(DEBUG_KEY,false);
-      set(DEBUG_KEY,next);
-      document.documentElement.classList.toggle('hmtc-debug',next);
-    });
+    GM_registerMenuCommand('Touch Controls v0.5.0 说明',()=>
+      alert('自动播放支持 PC/安卓：进入、刷新、添加视频或切回多视图时，尝试启动未播放的视频；不重启正在播放的视频，默认尊重观察到的手动暂停、保留声音。浏览器可能禁止有声自动播放。安卓额外提供透明边缘音量手势和统计。'));
+
     installBridge();
-    let last=location.href;
+    let last=location.href,previousMulti=isMulti();
     setInterval(()=>{
       if(!document.body)return;
-      if(location.href!==last){last=location.href;if(!isMulti()){closeSheet();rowMap.clear();}}
-      if(isMulti()){if(!installed)installBridge();else refresh();}
+      const nowMulti=isMulti();
+      if(location.href!==last){
+        last=location.href;
+        if(!nowMulti&&coarse){closeSheet();rowMap.clear();}
+      }
+      if(nowMulti){
+        if(!installed)installBridge();
+        else {
+          if(coarse)refresh();
+          if(!previousMulti)syncAutoSettings().catch(()=>{});
+        }
+      }
+      previousMulti=nowMulti;
     },1700);
-    document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
-    GM_registerMenuCommand('Touch Controls 操作说明',()=>alert('v0.4.0：左右两侧各宽 36%、高 78% 的透明控制区。右侧上下滑调节音量，左侧轻点打开统计。通过「触控手势设置」配置 0.4–2.5× 灵敏度或左右长按 600ms 查看统计；YouTube 原生连接速度和直播延迟依赖第三方 iframe 读取。')); 
-    GM_registerMenuCommand('选择视频查看统计（备用入口）',()=>{
-      const rows=[...rowMap.values()];
-      if(!rows.length)return alert('当前没有已识别的 YouTube 视频格子。');
-      if(rows.length===1){openSheet(rows[0]);return;}
-      const choice=prompt('选择要查看统计的序号：\n'+
-        rows.map((r,i)=>(i+1)+'. '+(r.title||r.videoId).slice(0,36)).join('\n'),'1');
-      if(choice===null)return;
-      const n=Number(choice);
-      if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
+    document.addEventListener('visibilitychange',()=>{
+      if(!document.hidden&&coarse)refresh();
+      // The player-world agent independently handles return-to-tab autoplay.
     });
   }
+
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});
   else init();
 })();
