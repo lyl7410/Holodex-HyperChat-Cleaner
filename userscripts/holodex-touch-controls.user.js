@@ -692,13 +692,15 @@
         catch(err){respond({ok:false,error:String(err?.message||err).slice(0,120)});}
         return;
       }
-      if(['playbackInfo','playbackRate','qualityMenu'].includes(message.action)){
+      if(['playbackInfo','playbackRate','qualityMenu','qualityOptions','selectQuality'].includes(message.action)){
         try{
           if(!player())throw Error('YouTube 播放器尚未就绪');
           let info;
           if(message.action==='playbackInfo')info=controls.snapshot();
           if(message.action==='playbackRate')info=controls.setRate(message.rate);
           if(message.action==='qualityMenu')info=await controls.openQualityMenu();
+          if(message.action==='qualityOptions')info=await controls.qualityOptions();
+          if(message.action==='selectQuality')info=await controls.setQuality(message.quality);
           respond({ok:true,data:info});
         }catch(error){
           respond({ok:false,error:String(error?.message||error).slice(0,150)});
@@ -1912,7 +1914,8 @@
   }
   function nativeRequest(row,action,timeout=1800,extra={}) {
     if(!['stats','nativeToggle','monitorStart','monitorStop',
-          'playbackInfo','playbackRate','qualityMenu'].includes(action))
+          'playbackInfo','playbackRate','qualityMenu',
+          'qualityOptions','selectQuality'].includes(action))
       return Promise.reject(new Error('不支持的 YouTube 指令'));
     const target=nativeFrame(row);
     if(!target)return Promise.reject(new Error('未找到当前视频的 YouTube 嵌入播放器'));
@@ -2211,9 +2214,13 @@
       '<select data-field="rate" aria-label="播放速度"><option value="1">1×</option></select>',
       '<button type="button" data-action="rateDown" title="减速">−</button>',
       '<button type="button" data-action="rateUp" title="加速">＋</button></div>',
-      '<div class="hmtc-play-row"><label>分辨率 / 画质</label>',
+      '<div class="hmtc-play-row"><label>当前画质</label>',
       '<span class="hmtc-quality-current" data-field="qualityStatus">读取中…</span>',
-      '<button type="button" data-action="qualityMenu">画质选择 ↗</button></div>',
+      '<button type="button" data-action="qualityMenu">原生菜单 ↗</button></div>',
+      '<div class="hmtc-play-row"><label>画质选择</label>',
+      '<select data-field="qualityList" aria-label="当前视频可用清晰度">',
+      '<option value="">读取原生选项…</option></select>',
+      '<button type="button" data-action="applyQuality">应用</button></div>',
       '<div class="hmtc-play-help">倍速从当前视频可用选项中选择；画质通过 YouTube 原生菜单调整。</div>',
       '</div>',
       '<div class="volume"><button type="button" data-action="mute" aria-label="静音">🔊</button>',
@@ -2264,6 +2271,21 @@
       if(action==='settings'){openSettings();return;}
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
       if(!row)return;
+      if(action==='applyQuality'){
+        const selected=sheet.querySelector('[data-field="qualityList"]');
+        if(!selected?.value)return field('note','当前没有可用的原生画质选项');
+        btn.disabled=true;
+        try{
+          const result=await nativeRequest(row,'selectQuality',3000,
+            {quality:selected.value});
+          field('note',result.selectedInNativeMenu?
+            '已在原生菜单选择 '+result.requested+'，等待实际画质变化…':
+            '画质请求未得到确认');
+          setTimeout(()=>{if(active?.videoId===row.videoId)stats();},650);
+        }catch(error){field('note','画质切换不可用：'+error.message);}
+        finally{btn.disabled=false;}
+        return;
+      }
       if(action==='qualityMenu'){
         btn.disabled=true;
         try{
@@ -2562,6 +2584,37 @@
     try {await Promise.allSettled([playback,rate,native]);}
     finally {statsBusy=false;}
   }
+  async function loadHolodexQuality(row){
+    const select=sheet?.querySelector('[data-field="qualityList"]');
+    if(!select||!active||active.videoId!==row.videoId)return;
+    select.replaceChildren();
+    const item=document.createElement('option');
+    item.value='';item.textContent='正在读取…';select.appendChild(item);
+    select.disabled=true;
+    try{
+      const data=await nativeRequest(row,'qualityOptions',3000);
+      if(!active||active.videoId!==row.videoId||sheet.hidden)return;
+      select.replaceChildren();
+      const choices=(data?.choices||[]).filter(x=>typeof x==='string'&&x.length<90);
+      if(choices.length){
+        for(const option of choices){
+          const el=document.createElement('option');
+          el.value=option;el.textContent=option;select.appendChild(el);
+        }
+        select.disabled=false;
+      }else{
+        const el=document.createElement('option');el.value='';
+        el.textContent='请使用右上方原生菜单';
+        select.appendChild(el);
+      }
+    }catch(error){
+      if(!active||active.videoId!==row.videoId||sheet.hidden)return;
+      select.replaceChildren();
+      const el=document.createElement('option');el.value='';
+      el.textContent='原生画质列表不可读取';select.appendChild(el);
+    }
+  }
+
   function openSheet(row){
     makeSheet();
     if(active&&(active.layoutId!==row.layoutId||active.videoId!==row.videoId))
@@ -2576,6 +2629,7 @@
     updateSheetRate({rate:1,rates:[.5,1,1.5,2]});
     field('position','读取中…');
     stats();
+    loadHolodexQuality(row);
     clearInterval(statsInterval);statsInterval=setInterval(stats,1800);
   }
   function closeSheet(){
