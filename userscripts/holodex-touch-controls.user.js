@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.1
-// @description  Holodex／YouTube 固定倍速快捷键、画质可用性判断与原站入口、手势音量和智能自动播放。
+// @version      0.6.2
+// @description  Holodex／YouTube 五档一排倍速、手机播放器画质入口修复、统计和手势音量、智能自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -30,7 +30,7 @@
 (function HolodexTouchControls() {
   'use strict';
   // Common touch-sized, fixed rate presets shown on Holodex and YouTube.
-  const COMMON_RATES=[0.5,0.75,1,1.25,1.5,1.75,2];
+  const COMMON_RATES=[1,1.25,1.5,1.75,2];
   // Shared with embedded YouTube players and ordinary YouTube watch pages.
   // YouTube removed setPlaybackQuality/getAvailableQualityLevels support in
   // 2019: NEVER call them or claim that a requested quality was applied.
@@ -212,10 +212,10 @@
       '#hmtc-yt-panel .row{display:flex;gap:7px;align-items:center;margin-top:10px}',
       '#hmtc-yt-panel .row label{min-width:45px;font-weight:700}',
       '#hmtc-yt-panel .row select,#hmtc-yt-panel .row input{flex:1;min-width:0}',
-      '#hmtc-yt-panel .hmtc-yt-rates{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));',
-      'gap:7px;margin:7px 0 12px}',
+      '#hmtc-yt-panel .hmtc-yt-rates{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));',
+      'gap:5px;margin:7px 0 12px}',
       '#hmtc-yt-panel .hmtc-yt-rates button{min-width:0;min-height:44px;',
-      'padding:6px 2px;white-space:nowrap;font-size:12px}',
+      'padding:6px 1px;white-space:nowrap;font-size:clamp(10px,2.6vw,12px)}',
       '#hmtc-yt-panel .hmtc-yt-rates button.hmtc-yt-rate-active{',
       'background:#12766c!important;border-color:#78ead5!important;color:white!important}',
       '#hmtc-yt-panel .row input{height:36px;accent-color:#66dad1;touch-action:pan-x}',
@@ -297,8 +297,6 @@
         '<div class="metric"><label>已缓冲时长（估计）</label><b data-id="buffer">—</b></div></div>',
         '<div class="row"><label>播放速度</label></div>',
         '<div class="hmtc-yt-rates" role="group" aria-label="常用播放倍速">',
-        '<button type="button" data-action="ratePreset" data-rate="0.5">0.5×</button>',
-        '<button type="button" data-action="ratePreset" data-rate="0.75">0.75×</button>',
         '<button type="button" data-action="ratePreset" data-rate="1">1×</button>',
         '<button type="button" data-action="ratePreset" data-rate="1.25">1.25×</button>',
         '<button type="button" data-action="ratePreset" data-rate="1.5">1.5×</button>',
@@ -860,7 +858,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.1', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.2', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -1216,10 +1214,10 @@
     background:#243549b8;border:1px solid #ffffff22}
   #hmtc-sheet .hmtc-play-row{display:flex;gap:6px;align-items:center;margin:5px 0}
   #hmtc-sheet .hmtc-play-row label{color:#cbd8e6;font-size:12px;min-width:64px;font-weight:650}
-  #hmtc-sheet .hmtc-rate-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
-    gap:7px;margin:8px 0 12px}
+  #hmtc-sheet .hmtc-rate-presets{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
+    gap:5px;margin:8px 0 12px}
   #hmtc-sheet .hmtc-rate-presets button{min-width:0;min-height:44px;padding:6px 3px;
-    font-size:13px;white-space:nowrap}
+    font-size:clamp(10px,2.6vw,13px);white-space:nowrap}
   #hmtc-sheet .hmtc-rate-presets button.hmtc-rate-selected{
     background:#15796f!important;border-color:#80e8d2!important;
     color:#fff!important;box-shadow:inset 0 0 0 1px #a1eee766}
@@ -1797,7 +1795,7 @@
           // An embed can temporarily report only [1] while still loading.
           // Accept a bounded fixed preset; confirm actual application by
           // reading getPlaybackRate() instead of trusting a stale list.
-          if(!Number.isFinite(r)||![.5,.75,1,1.25,1.5,1.75,2].some(x=>Math.abs(x-r)<.001))
+          if(!Number.isFinite(r)||![1,1.25,1.5,1.75,2].some(x=>Math.abs(x-r)<.001))
             throw Error('无效的播放速度快捷档位');
           p.setPlaybackRate(r);
           const applied=Number(p.getPlaybackRate?.());
@@ -2364,8 +2362,6 @@
       '<div class="hmtc-play-controls">',
       '<div class="hmtc-play-row"><label>播放速度</label></div>',
       '<div class="hmtc-rate-presets" role="group" aria-label="常用播放速度">',
-      '<button type="button" data-action="ratePreset" data-rate="0.5">0.5×</button>',
-      '<button type="button" data-action="ratePreset" data-rate="0.75">0.75×</button>',
       '<button type="button" data-action="ratePreset" data-rate="1">1×</button>',
       '<button type="button" data-action="ratePreset" data-rate="1.25">1.25×</button>',
       '<button type="button" data-action="ratePreset" data-rate="1.5">1.5×</button>',
