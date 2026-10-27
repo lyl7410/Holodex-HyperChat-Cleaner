@@ -338,3 +338,61 @@ test('parent replies to validated iframe readiness without depending on list ref
   ctx.receiveDesktopFrameMessage({origin,source:win,data:{tag:'hmtc-desktop-panel-v1',type:'ready',videoId:row.videoId}});
   assert.equal(config[0].m.action,'desktopPanelConfig');assert.equal(config[0].m.enabled,true);assert.equal(config[0].o,origin);
 });
+
+const metricHelpers=section('  function currentResolution(value){','  const HUD_KEY=');
+test('current resolution displays one value with frame rate, including different optimal resolution',()=>{
+  const ctx=vm.createContext({});vm.runInContext(metricHelpers,ctx);
+  assert.equal(ctx.currentResolution('1280x720@60 / 1280x720@60'),'1280×720@60');
+  assert.equal(ctx.currentResolution('1280x720@59.94 / 1920x1080@60'),'1280×720@59.94');
+  assert.equal(ctx.currentResolution('1920 × 1080'),'1920×1080');
+  assert.equal(ctx.currentResolution(null),'');assert.equal(ctx.currentResolution('auto'),'');
+});
+test('latency reads explicit seconds, milliseconds and nested JSON; never infers generic latency or buffer',()=>{
+  const ctx=vm.createContext({});vm.runInContext(metricHelpers,ctx);
+  for(const [value,want] of [[{liveLatencySeconds:0},0],[{live_latency_ms:1250},1.25],
+    [{diagnostics:{live_latency_seconds:'2.50'}},2.5],['{"stats":{"liveLatencyMs":2500}}',2.5],
+    ['Live Latency 1500 ms',1.5],['Live Latency (ms): 1250',1.25],['直播延迟 3.25 秒',3.25],
+    [{latency:9,buffer_health_seconds:3},null],[{liveLatencySeconds:null},null],
+    [{liveLatencySeconds:-1},null],['Live Latency 123',null]])
+    assert.equal(ctx.nativeLatencySeconds(value),want,JSON.stringify(value));
+});
+function frameStatsContext(p,live=true){
+  const doc={querySelector:()=>null};
+  const ctx=vm.createContext({document:doc,page:{document:doc},player:()=>p,videoId:'abcdefghijk',
+    controls:{video:()=>null},monitor:{active:false,forced:false,manual:false},isNativeVisible:()=>false,
+    youtubeWatchLiveState:()=>({live})});
+  vm.runInContext(metricHelpers+section('    const number = value => {','    // YouTube sometimes computes')+
+    section('    function readStats() {',"    window.addEventListener('message',async event"),ctx);
+  return ctx;
+}
+test('complete early metrics do not skip a later API carrying live latency',()=>{
+  let lateCalls=0;
+  const p={getStatsForNerdsData:()=>({bandwidth_kbps:42000,buffer_health_seconds:2.6,
+    resolution:'1280x720@60 / 1280x720@60'}),getVideoStats:()=>{lateCalls++;return {liveLatencyMs:1750};}};
+  const ctx=frameStatsContext(p);const result=ctx.readStats();
+  assert.equal(result.liveLatencySeconds,1.75);assert.ok(lateCalls>0);assert.equal(result.resolution,'1280×720@60');
+});
+test('live getter fills missing latency, while unavailable and VOD remain explicit without invented zero',()=>{
+  let calls=0;const p={getLiveLatency:()=>{calls++;return 1.25;}};
+  assert.equal(frameStatsContext(p).readStats().liveLatencySeconds,1.25);
+  p.getLiveLatency=()=>null;const missing=frameStatsContext(p).readStats();
+  assert.equal(missing.liveLatencySeconds,null);assert.equal(missing.latencyReason,'未提供');
+  p.getLiveLatency=()=>{calls++;return 5;};const before=calls;
+  const vod=frameStatsContext(p,false).readStats();assert.equal(vod.liveLatencySeconds,null);
+  assert.equal(vod.latencyReason,'非直播');assert.equal(calls,before);
+});
+test('normal desktop right-click inside panel closes without reaching video opener or native menu',()=>{
+  let touch=false,closed=0,handler;
+  const ctx=vm.createContext({touchZonesAllowed:()=>touch});vm.runInContext(metricHelpers,ctx);
+  ctx.bindPanelRightClose({addEventListener:(name,fn)=>{assert.equal(name,'contextmenu');handler=fn;}},()=>closed++);
+  const right=contextEvent();handler(right);assert.equal(closed,1);assert.equal(right.prevented,true);assert.equal(right.stopped,true);
+  handler(contextEvent(0,0,{ctrlKey:true}));assert.equal(closed,1);
+  touch=true;handler(contextEvent());assert.equal(closed,1);
+});
+test('sheet renders a single current resolution and explicit missing-latency reason',()=>{
+  const fields={};const ctx=vm.createContext({active:null,field:(k,v)=>fields[k]=v,Date});
+  vm.runInContext(metricHelpers+section('  let lastHolodexSpeed=null;','  function updateSheetRate(data){'),ctx);
+  ctx.renderYouTubeStats({resolution:'1280x720@60 / 1280x720@60',liveLatencySeconds:null,latencyReason:'未提供'});
+  assert.equal(fields.resolution,'1280×720@60');assert.equal(fields.latency,'未提供');
+  ctx.renderYouTubeStats({liveLatencySeconds:1.25});assert.equal(fields.latency,'1.25 s');
+});

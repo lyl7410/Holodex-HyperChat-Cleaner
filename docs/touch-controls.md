@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.15 多视图右键恢复与视频居中面板
+# Holodex / YouTube Touch Controls — v0.6.16 延迟补查、单项分辨率与右键收起
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 v0.6.15](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装／更新 v0.6.16](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,16 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.16：直播延迟、单项分辨率与面板右键收起
+
+- **分辨率只留当前值**：YouTube 的 Current / Optimal Res. 分别表示当前视频分辨率与理想分辨率。此前直接展示整段文本，二者相同时出现重复。现在只显示第一项当前分辨率，优先使用明确的 current_resolution 字段，保留帧率，例如 1280×720@60；理想分辨率即使不同也不再拼接。
+- **补查直播延迟**：之前网速／缓冲／分辨率齐全后就停止遍历，可能漏掉其他接口中的延迟。现在继续读取后续统计接口（含 getVideoStats），兼容明确秒／毫秒字段、嵌套 JSON 和带单位原生文字；直播缺少延迟时尝试 getLiveLatency 的秒值。缺失、空值、非法值不当成 0；不使用缓冲长度、观看时长或 seekable 范围推算延迟。
+- **缺失原因明确**：直播没有提供该数值时显示「未提供」，已识别为点播时显示「非直播」。播放器未公开延迟接口时不能保证显示数字，也不会为读取延迟改变原生统计的显示开关。
+- **面板内右键直接关闭**：PC 在统计／控制面板任意子元素上普通右键，关闭该面板并阻止弹出原生菜单或再次打开视频面板。普通 YouTube、Holodex 统计和设置面板均支持；设置面板仅收起自身。带修饰键的右键与手机触屏行为保留。
+- **验证**：语法与 33 项 Node 回归测试通过，新增重复／不同理想分辨率、帧率、秒／毫秒／嵌套 JSON、后续接口延迟、直播 getter 与点播／缺失状态、面板右键关闭和显示结果检查。本地双端口模拟播放器已验证多视图后续接口的 1.75s 测试延迟、单项分辨率，以及多视图／普通页在面板子元素上右键关闭。测试数值为夹具提供，不是实测直播延迟；真实视频仍需安装验证。
+
+安装 **v0.6.16** 后完整刷新多视图和 YouTube 页面，再检查当前直播。如果延迟显示「未提供」，表示本次采集仍没有获得播放器公开的实际数值；不要把它当成 0 秒。
 
 ## v0.6.15：多视图右键恢复与视频居中
 

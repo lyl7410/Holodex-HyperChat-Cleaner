@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.15
-// @description  PC 视频中央右键打开居中紧凑面板，修复内嵌控制层与配对恢复；保留触屏手势、画质、HUD 与自动播放。
+// @version      0.6.16
+// @description  PC 视频居中紧凑面板，单项当前分辨率、直播延迟补查与面板右键收起；保留触屏手势、HUD 与自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -239,6 +239,47 @@
       config={origin:event.origin,enabled:message.enabled,until:Date.now()+5000};
       return true;
     }};
+  }
+  function currentResolution(value){
+    if(typeof value!=='string')return '';
+    const m=value.match(/(\d{2,5})\s*[x×]\s*(\d{2,5})(?:\s*@\s*(\d+(?:\.\d+)?))?/i);
+    return m?m[1]+'×'+m[2]+(m[3]?'@'+m[3]:''):'';
+  }
+  function nativeLatencySeconds(raw){
+    const numeric=value=>{
+      if(value==null||typeof value==='boolean'||typeof value==='object'||
+         typeof value==='string'&&!value.trim())return null;
+      const n=Number(typeof value==='string'?value.replace(/,/g,''):value);
+      return Number.isFinite(n)&&n>=0?n:null;
+    };
+    const seconds=new Set(['live_latency_seconds','liveLatencySeconds','live_latency_sec',
+      'latency_to_live_seconds','latencyToLiveEdgeSeconds']);
+    const millis=new Set(['live_latency_ms','liveLatencyMs','latency_to_live_ms']);
+    let decoded=raw;
+    if(typeof raw==='string')try{decoded=JSON.parse(raw);}catch{}
+    const queue=[{value:decoded,depth:0}],seen=new Set();let visited=0;
+    while(queue.length&&visited++<80){
+      const {value,depth}=queue.shift();
+      if(!value||typeof value!=='object'||seen.has(value))continue;
+      seen.add(value);
+      for(const [key,v] of Object.entries(value)){
+        if(seconds.has(key)||millis.has(key)){
+          const n=numeric(v);if(n!=null)return millis.has(key)?n/1000:n;
+        }
+        if(v&&typeof v==='object'&&depth<4)queue.push({value:v,depth:depth+1});
+      }
+    }
+    if(typeof raw==='string'){
+      const m=raw.match(/(?:Live Latency|Latency to Live Edge|直播延迟|直播延遲|ライブ遅延)\s*(?:\((s|ms)\))?\s*[:：]?\s*([\d,.]+)\s*(milliseconds?|ms|毫秒|seconds?|secs?|s|秒)?(?![a-z])/i);
+      if(m&&(m[1]||m[3])){const n=numeric(m[2]);if(n!=null)return /^(?:ms|millisecond|毫秒)/i.test(m[3]||m[1])?n/1000:n;}
+    }
+    return null;
+  }
+  function bindPanelRightClose(panel,close){
+    panel.addEventListener('contextmenu',event=>{
+      if(touchZonesAllowed()||event.button!==2||event.ctrlKey||event.altKey||event.shiftKey||event.metaKey)return;
+      event.preventDefault();event.stopPropagation();close();
+    },{capture:true});
   }
   const HUD_KEY='hmtc_corner_hud_mode_v1';
   const HUD_MODES=['time','speed','both','off'];
@@ -1176,6 +1217,7 @@
       backdrop.hidden=true;backdrop.addEventListener('click',close);
       document.body.appendChild(backdrop);
       sheet=document.createElement('section');sheet.id='hmtc-yt-panel';
+      bindPanelRightClose(sheet,close);
       sheet.hidden=true;sheet.setAttribute('role','dialog');
       sheet.setAttribute('aria-label','YouTube 视频音量、倍速、画质和统计');
       sheet.innerHTML=[
@@ -1493,26 +1535,18 @@
         s.buffer_health_seconds, s.bufferHealthSeconds,
         metric(/(?:Buffer Health|缓冲健康度|緩衝健康度)\s*[:：]?\s*([\d,.]+)\s*s/i)
       );
-      const sourceResolution = s.resolution || s.current_resolution ||
-        s.currentResolution || s.current_optimal_resolution || '';
+      const sourceResolution = s.current_resolution || s.currentResolution ||
+        s.resolution || s.current_optimal_resolution || '';
       const fromStatsText = body.match(
         /(?:Current\s*\/\s*Optimal\s*Res|当前\s*\/\s*最佳分辨率|当前.*分辨率)\s*[:：]?\s*(\d{3,5}\s*[x×]\s*\d{3,5}(?:@\d+)?(?:\s*\/\s*\d{3,5}\s*[x×]\s*\d{3,5}(?:@\d+)?)?)/i
       )?.[1] || '';
-      const resolution = (typeof sourceResolution==='string' && sourceResolution
-        ? sourceResolution : fromStatsText).slice(0,90);
+      const resolution = currentResolution(sourceResolution)||currentResolution(fromStatsText);
       const sourceCodecs = s.codecs || '';
       const codecs = typeof sourceCodecs === 'string' ? sourceCodecs.slice(0,120) : '';
       const viewportFrames = String(s.viewport || s.frames || '').slice(0,100);
       const dropped = getNumber(s.dropped_frames, s.droppedFrames,
         metric(/(\d+)\s+dropped\s+of\s+\d+/i));
-      // Interpret only fields whose units are explicit. Do not infer latency
-      // from an ambiguous generic "latency" or DVR seekable window.
-      const latencyMs=getNumber(s.live_latency_ms,s.liveLatencyMs);
-      const liveLatencySeconds = getNumber(
-        s.live_latency_seconds, s.liveLatencySeconds,
-        s.live_latency_sec, s.latency_to_live_seconds,
-        metric(/(?:Live Latency|Latency to Live Edge|直播延迟|直播延遲)\s*[:：]?\s*([\d,.]+)\s*(?:s|sec|秒)?/i)
-      ) ?? (latencyMs!=null ? latencyMs/1000 : null);
+      const liveLatencySeconds=nativeLatencySeconds(raw)??nativeLatencySeconds(body);
       return {
         bandwidthKbps: bandwidthKbps!=null&&bandwidthKbps>0?bandwidthKbps:null,
         bufferSeconds:bufferSeconds!=null&&bufferSeconds>=0?bufferSeconds:null,
@@ -1645,7 +1679,8 @@
         ['getStatsForNerdsData',[]],
         ['getStatsForNerds',[]],
         ['getStatsForNerds',[0]],
-        ['getDebugText',[]]
+        ['getDebugText',[]],
+        ['getVideoStats',[]]
       ]) {
         if(typeof p[name]!=='function')continue;
         try{
@@ -1666,8 +1701,7 @@
           }
           if(source==='none' && (sample.resolution||sample.bufferSeconds!=null))
             source=name;
-          if(data.bandwidthKbps!=null&&data.bufferSeconds!=null&&data.resolution)
-            break;
+          // Continue: later APIs may expose latency even when other metrics are complete.
         }catch{}
       }
       // DOM is used only as a fallback, and only while YouTube says its
@@ -1683,6 +1717,17 @@
         if(fromPanel.bufferSeconds!=null)data.bufferSeconds=fromPanel.bufferSeconds;
         if(!data.resolution) data.resolution=fromPanel.resolution;
         if(fromPanel.liveLatencySeconds!=null)data.liveLatencySeconds=fromPanel.liveLatencySeconds;
+      }
+      const liveState=youtubeWatchLiveState(page.document,player,controls.video,page);
+      data.live=liveState.live;
+      if(!data.live){data.liveLatencySeconds=null;data.latencyReason='非直播';}
+      else {
+        // YouTube's explicit live-latency getter reports seconds. Missing/null
+        // must not become a misleading zero, and buffer length is not latency.
+        if(data.liveLatencySeconds==null&&typeof p.getLiveLatency==='function'){
+          try{data.liveLatencySeconds=nativeLatencySeconds({liveLatencySeconds:p.getLiveLatency()});}catch{}
+        }
+        data.latencyReason=data.liveLatencySeconds==null?'未提供':'';
       }
       if(!data.resolution) {
         // HTMLVideoElement intrinsic dimensions reflect the decoded video
@@ -1710,7 +1755,7 @@
         );
       };
       if(message.action==='desktopPanelStatus'){
-        respond({ok:true,data:{version:'0.6.15',...desktopBridge.status()}});return;
+        respond({ok:true,data:{version:'0.6.16',...desktopBridge.status()}});return;
       }
       if(message.action==='desktopPanelConfig'){
         desktopBridge.configure(event,message);return;
@@ -1767,7 +1812,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.15', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.16', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -3298,6 +3343,7 @@
     document.body.appendChild(backdrop);
     sheet=document.createElement('section');
     sheet.id='hmtc-sheet';sheet.hidden=true;
+    bindPanelRightClose(sheet,closeSheet);
     sheet.setAttribute('role','dialog');
     sheet.setAttribute('aria-label','YouTube 当前视频控制和详细统计');
     sheet.innerHTML=[
@@ -3413,6 +3459,7 @@
     if(settings?.isConnected)return settings;
     settings=document.createElement('section');
     settings.id='hmtc-settings';settings.hidden=true;
+    bindPanelRightClose(settings,closeSettings);
     settings.setAttribute('role','dialog');
     settings.setAttribute('aria-label','Holodex 触控手势设置');
     settings.innerHTML=[
@@ -3589,9 +3636,9 @@
     }
     field('health',typeof data?.bufferSeconds==='number'
       ? data.bufferSeconds.toFixed(1)+' s':'—');
-    field('resolution',data?.resolution||'—');
+    field('resolution',currentResolution(data?.resolution)||'—');
     field('latency',Number.isFinite(data?.liveLatencySeconds)
-      ? data.liveLatencySeconds.toFixed(2)+' s':'—');
+      ? data.liveLatencySeconds.toFixed(2)+' s':data?.latencyReason||'未提供');
   }
   function updateSheetRate(data){
     if(!sheet||sheet.hidden||!data)return;
@@ -3942,7 +3989,7 @@
             '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
         }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
       }));
-      alert('右键面板诊断 · v0.6.15\n'+reports.join('\n'));
+      alert('右键面板诊断 · v0.6.16\n'+reports.join('\n'));
     });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
@@ -4007,8 +4054,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.15 说明',()=>
-      alert('v0.6.15：修复内嵌播放器控制层的右键识别与配对续期；PC 面板在当前视频中央打开。新增多视图右键诊断菜单。'));
+    GM_registerMenuCommand('Touch Controls v0.6.16 说明',()=>
+      alert('v0.6.16：只显示当前分辨率；补查直播延迟，未提供时明确标注；PC 面板内右键直接关闭。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
