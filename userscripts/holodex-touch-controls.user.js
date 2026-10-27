@@ -294,6 +294,7 @@
       })||visible[0]||primary||null;
     };
     const controls=youtubePlaybackTools(page.document,p);
+    const bandwidth=youtubeWatchBandwidth(page.document,p);
     const coarse=matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>0;
     const enabledKey='hmtc_youtube_edges_v1';
     const setting=(key,def)=>GM_getValue(key,def);
@@ -405,14 +406,15 @@
         btn.classList.toggle('hmtc-yt-rate-active',active);
         btn.setAttribute('aria-pressed',active?'true':'false');
       }
-      let bandwidth=null;
-      try{
-        const raw=p()?.getStatsForNerdsData?.()||p()?.getStatsForNerds?.();
-        bandwidth=Number(raw?.bandwidth_kbps??raw?.bandwidthKbps??
-          raw?.connection_speed_kbps);
-      }catch{}
-      text('speed',Number.isFinite(bandwidth)&&bandwidth>0?
-        (bandwidth/1000).toFixed(2)+' Mbps':'—');
+      // Reuse the proven Holodex native collector strategy. The old watch
+      // view read only a few object keys and never enabled the underlying
+      // Stats-for-nerds engine, so speed stayed "—" while time/buffer worked.
+      const net=bandwidth.read();
+      text('speed',net.available?
+        (net.bandwidthKbps/1000).toFixed(2)+' Mbps':'—');
+      const speedValue=sheet.querySelector('[data-id="speed"]');
+      if(speedValue)speedValue.title=net.available?
+        '实时连接速度 · YouTube '+net.source:net.reason;
       let buffer=NaN;
       try{
         const time=Number(v.currentTime),ranges=v.buffered;
@@ -510,6 +512,7 @@
     }
 
     function close(){
+      bandwidth.stop();
       if(sheet)sheet.hidden=true;
       if(backdrop)backdrop.hidden=true;
     }
@@ -623,7 +626,9 @@
     }
     function open(){
       if(!supported()||!p())return;
-      makePanel();sheet.hidden=false;backdrop.hidden=false;refreshSheet();
+      makePanel();sheet.hidden=false;backdrop.hidden=false;
+      bandwidth.start();
+      refreshSheet();
     }
     function toastVolume(n){
       if(!toast?.isConnected){toast=document.createElement('div');
@@ -733,7 +738,13 @@
         placeEdge(left,rect,'left');
         placeEdge(right,rect,'right');
       }
-      if(sheet&&!sheet.hidden){if(!player)close();else refreshSheet();}
+      if(sheet&&!sheet.hidden){
+        if(!player)close();
+        else {
+          bandwidth.start();
+          refreshSheet();
+        }
+      }
     }
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
     GM_registerMenuCommand('YouTube：启用／禁用透明触控区',()=>{
@@ -753,6 +764,7 @@
     window.addEventListener('resize',refresh,{passive:true});
     document.addEventListener('fullscreenchange',refresh);
     window.addEventListener('orientationchange',refresh,{passive:true});
+    window.addEventListener('pagehide',()=>bandwidth.stop(),{passive:true});
     refresh();
   }
 
