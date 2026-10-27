@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.13 多视图时间与 PC 统计按钮
+# Holodex / YouTube Touch Controls — v0.6.14 PC 中央右键与紧凑浮动面板
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 v0.6.13](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装／更新 v0.6.14](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,38 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.14：PC 中央右键与紧凑浮动面板
+
+### 怎么打开
+
+1. 更新到 **0.6.14**，只启用一份 Touch Controls，刷新 Holodex 多视图和 YouTube 页面。
+2. 在 Tweaks for YouTube 中关闭原来占用同一右键动作的设置，避免两个扩展同时处理。
+3. **普通右键点击视频中央宽度 66.7% 的区域即可打开**：横向为 1/6 到 5/6，纵向为整个视频高度。适用于 Holodex 多视图与普通 YouTube watch/live/shorts；PC 不再显示常驻「统计」按钮，原有时间／速度 HUD 保留。
+4. 原生控制按钮、进度条、设置菜单、链接、输入框、原生详细统计及左右两侧保留原右键行为；Ctrl、Alt、Shift、Meta 加右键也不接管。键盘菜单键不接管。这里的纵向全高不包括这些被排除的交互控件。
+
+### 小面板怎么用
+
+- PC 面板宽 320 CSS 像素、内边距 10 像素、正文 12 像素、常用按钮 28 像素高。全部信息和控制保留，网速不再占大卡片；画质与倍速仍为五列。浏览器缩放会影响屏幕上看到的物理大小。
+- 打开时位于右键位置右下方 10 像素，空间不够时翻到左侧／上方，并保留至少 8 像素视口边距。打开后固定，不随鼠标追逐；右键另一视频切换目标并重新定位。
+- 最大高度为 520 像素与视口高度减 16 像素中的较小者，超出时内部滚动。内容变化、窗口尺寸与全屏变化后重新定位。
+- 点击关闭、Escape 或面板外左键收起；面板外点击继续执行原操作，无透明背景层。桌面点击统计数字不会像触屏点按那样收起，便于查看／选择文字。
+- 手机仍使用原来的触屏布局和手势。脚本菜单作为后备入口保留；菜单打开时使用最近鼠标位置，未记录位置则居中。
+
+### 内嵌视频与兼容
+
+- 无新增覆盖层、权限、网络请求或存储迁移。右键在视频自身的文档中处理；Holodex 定期向当前匹配的视频 iframe 发送配置，iframe 仅在来自受信任 Holodex 父页面、视频身份匹配且 5 秒配置租约有效时接管右键。
+- iframe 发送视频 ID、归一化指针坐标及打开／关闭／Escape 消息；父页面验证 YouTube 来源、当前 iframe 窗口、视频身份和有限坐标，换算位置后打开正确格子的面板。原统计 RPC 响应通道保持独立。
+- 需要允许脚本在 YouTube embed／youtube-nocookie iframe 内运行。没有 iframe 注入、没有配对、配置过期或视频已替换时不吞右键，继续使用原生行为；可从脚本菜单打开。
+- 普通 YouTube 与 Holodex 容器全屏时将面板挂到可见的全屏容器。独立 iframe 全屏／原生 VIDEO 全屏无法绘制父页面板时保留原生右键。
+- 延续 v0.6.13 时间读取修复及桌面被动读取原生统计策略；不会为采集速度重新隐藏 Tweaks 的原生统计。
+
+### 验证结果与实机清单
+
+- 脚本语法、差异空白检查和 **23 项 Node 回归测试通过**。新增中央边界／全高度、控件及修饰键排除、四角定位、窗口变化、全屏挂载、无常驻按钮、点击穿透、iframe 配对与租约、身份／来源／坐标验证和缩放坐标转换。
+- 本地浏览器模拟播放器：多视图中央右键、切换目标、倍速控制、面板外点击继续进入容器全屏、全屏内打开／Escape、普通页画质与音量控制通过；1280×720 和 640×420 视口布局通过，展开设置能限制高度并内部滚动。另观察到 392 像素宽窗口下的边缘避让正常。
+- 本地跨源 iframe 夹具可加载，但浏览器自动化接口未能完成 iframe 内的右键点击；跨源打开／关闭消息路径已由 Node 模拟事件验证。**真实 YouTube iframe、浏览器缩放、第三方扩展组合和手机触屏仍待安装版验证**，不将本地模拟播放器当成实机验收。
+- 实机请逐项检查：左右边缘和控制条原生右键、中央最上／最下位置、不同视频连续右键、四角避让、浏览器缩放与窗口调整、普通页／容器／独立 iframe 全屏、视频删除或替换、面板所有控制，以及原生详细统计显示。
 
 ## v0.6.13：多视图时间与 PC 快捷入口
 

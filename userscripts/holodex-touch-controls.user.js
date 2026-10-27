@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.13
-// @description  修复 PC 统计入口与透明手势层鼠标冲突；保留触屏手势、画质、HUD 与自动播放。
+// @version      0.6.14
+// @description  PC 视频中央右键打开鼠标旁紧凑面板，无常驻统计按钮；保留触屏手势、画质、HUD 与自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -58,6 +58,158 @@
   // Shared and persisted by YouTube and Holodex. Tapping the HUD cycles
   // time → native speed → both → compact (off). The compact control can
   // restore the display without opening the settings sheet.
+  const DESKTOP_TAG='hmtc-desktop-panel-v1';
+  const DESKTOP_EXCLUDE='button,a,input,select,textarea,[contenteditable]:not([contenteditable="false"]),'+
+    '[role="button"],[role="slider"],.ytp-chrome-top,.ytp-chrome-bottom,.ytp-popup,'+
+    '.ytp-settings-menu,.ytp-contextmenu,.ytp-panel,.ytp-ce-element,.ytp-progress-bar-container,'+
+    '.html5-video-info-panel,.html5-video-info-panel-content,.ytp-stats-for-nerds,'+
+    '.hmtc-corner-hud,#hmtc-sheet,#hmtc-settings,#hmtc-yt-panel';
+  let desktopLastPoint=null;
+  const desktopPanels=new Map();
+  function desktopMountAllowed(){
+    return !['IFRAME','VIDEO'].includes(document.fullscreenElement?.tagName);
+  }
+  function desktopContextPoint(event,player){
+    if(touchZonesAllowed()||event.button!==2||event.ctrlKey||event.altKey||
+       event.shiftKey||event.metaKey||!player||!desktopMountAllowed()||
+       event.target?.closest?.(DESKTOP_EXCLUDE)||!player.contains(event.target))return null;
+    const r=player.getBoundingClientRect();
+    if(!(r.width>0&&r.height>0))return null;
+    const x=(event.clientX-r.left)/r.width,y=(event.clientY-r.top)/r.height;
+    return x>=1/6&&x<=5/6&&y>=0&&y<=1?
+      {x:event.clientX,y:event.clientY}:null;
+  }
+  function desktopPanelCoordinates(anchor,width,height,viewportWidth,viewportHeight){
+    const gap=8,offset=10;
+    let x=anchor?anchor.x+offset:(viewportWidth-width)/2;
+    let y=anchor?anchor.y+offset:(viewportHeight-height)/2;
+    if(anchor&&x+width>viewportWidth-gap)x=anchor.x-offset-width;
+    if(anchor&&y+height>viewportHeight-gap)y=anchor.y-offset-height;
+    return {x:Math.max(gap,Math.min(viewportWidth-gap-width,x)),
+      y:Math.max(gap,Math.min(viewportHeight-gap-height,y))};
+  }
+  function positionDesktopPanel(panel){
+    const state=desktopPanels.get(panel);
+    if(!state||panel.hidden)return;
+    const r=panel.getBoundingClientRect();
+    const point=desktopPanelCoordinates(state.anchor,r.width,r.height,innerWidth,innerHeight);
+    panel.style.left=point.x+'px';panel.style.top=point.y+'px';
+  }
+  function presentPanel(panel,anchor){
+    const desktop=!touchZonesAllowed();
+    for(const el of panel.querySelectorAll?.('[data-action="dismissHeader"]')||[])
+      el.title=desktop?'':'轻点收起';
+    panel.classList.toggle('hmtc-desktop-panel',desktop);
+    const layer=document.fullscreenElement||document.body;
+    if(desktopMountAllowed()&&panel.parentNode!==layer)layer.appendChild(panel);
+    if(!desktop){
+      desktopPanels.delete(panel);panel.style.removeProperty('left');panel.style.removeProperty('top');return;
+    }
+    // Menu managers pass a click event; only explicit x/y points are anchors.
+    const point=anchor&&Number.isFinite(anchor.x)&&Number.isFinite(anchor.y)?
+      {x:anchor.x,y:anchor.y}:desktopLastPoint;
+    desktopPanels.set(panel,{anchor:point?{...point}:null});
+    if(!panel._hmtcSizeObserver&&typeof ResizeObserver==='function'){
+      panel._hmtcSizeObserver=new ResizeObserver(()=>positionDesktopPanel(panel));
+      panel._hmtcSizeObserver.observe(panel);
+    }
+    positionDesktopPanel(panel);
+  }
+  function desktopPanelReflow(){
+    for(const panel of desktopPanels.keys()){
+      if(panel.hidden)continue;
+      const layer=document.fullscreenElement||document.body;
+      if(desktopMountAllowed()&&panel.parentNode!==layer)layer.appendChild(panel);
+      if(desktopMountAllowed())positionDesktopPanel(panel);
+    }
+  }
+  document.addEventListener('pointermove',e=>{
+    if(e.pointerType==='mouse')desktopLastPoint={x:e.clientX,y:e.clientY};
+  },{passive:true});
+  window.addEventListener('resize',desktopPanelReflow,{passive:true});
+  window.visualViewport?.addEventListener('resize',desktopPanelReflow,{passive:true});
+  document.addEventListener('fullscreenchange',desktopPanelReflow);
+  function installDesktopDismiss(dismiss){
+    document.addEventListener('pointerdown',e=>{
+      if(touchZonesAllowed()||e.button!==0||e.target?.closest?.(
+        '#hmtc-sheet,#hmtc-settings,#hmtc-yt-panel'))return;
+      dismiss(); // Observe only: do not consume the underlying click.
+    },{capture:true,passive:true});
+  }
+  GM_addStyle(`
+    #hmtc-sheet.hmtc-desktop-panel,#hmtc-settings.hmtc-desktop-panel,
+    #hmtc-yt-panel.hmtc-desktop-panel{
+      position:fixed;width:320px;min-width:0;max-width:calc(100vw - 16px);
+      max-height:min(520px,calc(100vh - 16px));right:auto;bottom:auto;margin:0;
+      padding:10px;border-radius:10px;font:12px/1.3 system-ui;overflow:auto}
+    .hmtc-desktop-panel .hmtc-dismiss-zone,.hmtc-desktop-panel .hmtc-dismiss-zone .metric{cursor:default!important}
+    .hmtc-desktop-panel .head{min-height:26px!important;gap:5px!important}
+    .hmtc-desktop-panel .title,.hmtc-desktop-panel .head strong{font-size:13px!important}
+    .hmtc-desktop-panel button,.hmtc-desktop-panel select{
+      min-height:28px!important;min-width:28px!important;padding:3px 5px!important;
+      border-radius:6px!important;font-size:12px!important}
+    .hmtc-desktop-panel .net{display:flex;align-items:center;gap:8px;
+      padding:5px 6px!important;margin-top:4px!important;border-radius:6px!important}
+    .hmtc-desktop-panel .speed{font-size:18px!important;margin:0!important}
+    .hmtc-desktop-panel .unit{font-size:11px!important}
+    .hmtc-desktop-panel .grid{gap:4px!important;margin:4px 0!important}
+    .hmtc-desktop-panel .metric{padding:5px 6px!important;border-radius:6px!important}
+    .hmtc-desktop-panel .metric label{font-size:10px!important;margin-bottom:2px!important}
+    .hmtc-desktop-panel .metric strong,.hmtc-desktop-panel .metric b{
+      font-size:13px!important;line-height:1.2!important}
+    .hmtc-desktop-panel .hmtc-play-controls{padding:4px 5px!important;margin-top:4px!important}
+    .hmtc-desktop-panel .row,.hmtc-desktop-panel .hmtc-play-row{margin:4px 0!important;gap:4px!important}
+    .hmtc-desktop-panel .hmtc-rate-presets,.hmtc-desktop-panel .hmtc-quality-presets,
+    .hmtc-desktop-panel .hmtc-yt-rates,.hmtc-desktop-panel .hmtc-yt-qualities{
+      gap:4px!important;margin:4px 0 6px!important;grid-template-columns:repeat(5,minmax(0,1fr))}
+    .hmtc-desktop-panel .hmtc-rate-presets button,.hmtc-desktop-panel .hmtc-quality-presets button,
+    .hmtc-desktop-panel .hmtc-yt-rates button,.hmtc-desktop-panel .hmtc-yt-qualities button{
+      min-width:0!important;font-size:11px!important}
+    .hmtc-desktop-panel .volume{gap:5px!important;margin:5px 0!important}
+    .hmtc-desktop-panel input[type=range]{height:28px!important}
+    .hmtc-desktop-panel .value{min-width:34px!important}
+    .hmtc-desktop-panel .actions,.hmtc-desktop-panel .footer{gap:4px!important;margin-top:5px!important}
+    .hmtc-desktop-panel .hmtc-youtube-quality-link{padding:5px!important;font-size:11px!important}
+    .hmtc-desktop-panel .setting{margin-top:8px!important}
+    .hmtc-desktop-panel .setting label{font-size:12px!important;margin-bottom:4px!important}
+  `);
+  function installDesktopFrameBridge(videoId,getPlayer,allowedOrigins){
+    let config=null,lastMove=0;
+    const paired=()=>config&&Date.now()<config.until;
+    const send=(type,point)=>{
+      if(!paired())return;
+      window.parent.postMessage({tag:DESKTOP_TAG,type,videoId,
+        ...(point?{x:point.x/innerWidth,y:point.y/innerHeight}:{})},config.origin);
+    };
+    document.addEventListener('contextmenu',event=>{
+      if(!paired()||!config.enabled||document.fullscreenElement)return;
+      const p=getPlayer();
+      let actualId;try{actualId=p?.getVideoData?.()?.video_id;}catch{return;}
+      if(actualId&&actualId!==videoId)return;
+      const point=desktopContextPoint(event,p);
+      if(!point)return;
+      event.preventDefault();event.stopPropagation();send('open',point);
+    },{capture:true});
+    document.addEventListener('pointerdown',event=>{
+      if(config?.enabled&&event.button===0)send('dismiss');
+    },{capture:true,passive:true});
+    document.addEventListener('keydown',event=>{
+      if(config?.enabled&&event.key==='Escape')send('escape');
+    });
+    document.addEventListener('pointerover',event=>{
+      if(event.pointerType==='mouse')send('mouse');
+    },{passive:true});
+    document.addEventListener('pointermove',event=>{
+      if(!config?.enabled||event.pointerType!=='mouse'||Date.now()-lastMove<200)return;
+      lastMove=Date.now();send('move',{x:event.clientX,y:event.clientY});
+    },{passive:true});
+    return {configure(event,message){
+      if(event.source!==window.parent||!allowedOrigins.has(event.origin)||
+         message.videoId!==videoId||typeof message.enabled!=='boolean')return false;
+      config={origin:event.origin,enabled:message.enabled,until:Date.now()+5000};
+      return true;
+    }};
+  }
   const HUD_KEY='hmtc_corner_hud_mode_v1';
   const HUD_MODES=['time','speed','both','off'];
   const hudMode=()=>{
@@ -122,7 +274,6 @@
     'text-align:center!important;opacity:.33!important}',
     '.hmtc-corner-hud.hmtc-hud-off:hover,.hmtc-corner-hud.hmtc-hud-off:focus-visible,',
     '.hmtc-corner-hud.hmtc-hud-off:active{opacity:.85!important}',
-    '.hmtc-panel-open{min-width:38px;min-height:24px;padding:4px 6px!important}',
     '.hmtc-corner-hud[hidden]{display:none!important}'
   ].join(''));
   // Common touch-sized, fixed rate presets shown on Holodex and YouTube.
@@ -1052,7 +1203,7 @@
         try{volume(e.target.value);refreshSheet();}catch(error){text('hint',error.message);}
       });
       sheet.addEventListener('click',async e=>{
-        if(e.target.closest('.metric')||e.target.closest('.head strong')){
+        if(touchZonesAllowed()&&(e.target.closest('.metric')||e.target.closest('.head strong'))){
           close();return;
         }
         const action=e.target.closest('button[data-action]')?.dataset.action;
@@ -1086,9 +1237,10 @@
         if(e.key==='Escape'&&sheet&&!sheet.hidden)close();
       });
     }
-    function open(){
-      if(!supported()||!p())return;
+    function open(anchor){
+      if(!supported()||!p()||!desktopMountAllowed())return;
       makePanel();sheet.hidden=false;backdrop.hidden=!touchZonesAllowed();
+      presentPanel(sheet,anchor);
       bandwidth.start();
       refreshSheet();
       refreshQualityChoices();
@@ -1213,6 +1365,12 @@
       }
       refreshWatchHud(player);
     }
+    installDesktopDismiss(()=>{if(sheet&&!sheet.hidden)close();});
+    document.addEventListener('contextmenu',event=>{
+      const point=desktopContextPoint(event,supported()?p():null);
+      if(!point)return;
+      event.preventDefault();event.stopPropagation();open(point);
+    },{capture:true});
     document.addEventListener('hmtc:corner-hud-change',refresh);
     watchTouchZonePolicy(()=>{
       if(!touchZonesAllowed())bandwidth.stop();
@@ -1270,6 +1428,7 @@
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const player = () => page.document.getElementById('movie_player');
     const controls=youtubePlaybackTools(page.document,player);
+    const desktopBridge=installDesktopFrameBridge(videoId,player,origins);
     const number = value => {
       if (typeof value === 'number') return Number.isFinite(value) ? value : null;
       if (typeof value !== 'string') return null;
@@ -1520,6 +1679,9 @@
           event.origin
         );
       };
+      if(message.action==='desktopPanelConfig'){
+        desktopBridge.configure(event,message);return;
+      }
       if(message.action==='stats') {
         // A YouTube playback change can turn its statistics off again.
         // Re-arm only if this script owns a silent monitoring session.
@@ -1572,7 +1734,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.13', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.14', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -2804,7 +2966,45 @@
       }
     });
   }
+  function configureDesktopFrame(row){
+    const target=nativeFrame(row);
+    if(!target)return;
+    try{target.frame.contentWindow.postMessage({tag:NATIVE_TAG,seq:++nativeSequence,
+      videoId:row.videoId,action:'desktopPanelConfig',
+      enabled:!touchZonesAllowed()&&desktopMountAllowed()&&isMulti()},target.origin);}catch{}
+
+  }
+  function receiveDesktopFrameMessage(event){
+    const message=event.data;
+    if(message?.tag!==DESKTOP_TAG||!YT_ORIGINS.has(event.origin))return false;
+    if(!['open','move','dismiss','escape','mouse'].includes(message.type)||!isMulti())return true;
+    let matched=null;
+    for(const row of rowMap.values()){
+      if(row.videoId!==message.videoId)continue;
+      const target=nativeFrame(row);
+      if(target&&target.origin===event.origin&&target.frame.contentWindow===event.source){matched={row,...target};break;}
+    }
+    if(!matched)return true;
+    if(message.type==='mouse'){
+      observeMouseInput({pointerType:'mouse'});configureDesktopFrame(matched.row);return true;
+    }
+    if(touchZonesAllowed()||!desktopMountAllowed())return true;
+    if(message.type==='dismiss'||message.type==='escape'){
+      if(settings?.hidden===false)closeSettings();else if(sheet&&!sheet.hidden)closeSheet();
+      return true;
+    }
+    if(typeof message.x!=='number'||typeof message.y!=='number'||
+       !Number.isFinite(message.x)||!Number.isFinite(message.y)||
+       message.x<0||message.x>1||message.y<0||message.y>1)return true;
+    const r=matched.frame.getBoundingClientRect();
+    if(!(r.width>0&&r.height>0))return true;
+    const point={x:r.left+message.x*r.width,y:r.top+message.y*r.height};
+    desktopLastPoint=point;
+    if(message.type==='open'){closeSettings();openSheet(matched.row,point);}
+    return true;
+  }
   window.addEventListener('message',event=>{
+    if(receiveDesktopFrameMessage(event))return;
     if(!YT_ORIGINS.has(event.origin))return;
     const response=event.data;
     if(response?.tag!==NATIVE_TAG)return;
@@ -3116,7 +3316,7 @@
     sheet.addEventListener('click',async e=>{
       const btn=e.target.closest('button[data-action]');
       if(!btn){
-        if(e.target.closest('[data-action="dismissHeader"]'))closeSheet();
+        if(touchZonesAllowed()&&e.target.closest('[data-action="dismissHeader"]'))closeSheet();
         return;
       }
       const action=btn.dataset.action;
@@ -3280,6 +3480,7 @@
     settings.querySelector('[data-control="autoRespectPause"]').checked=config.respectPause;
     settings.querySelector('[data-control="autoMute"]').value=config.muteFallback?'mute':'keep';
     settings.hidden=false;
+    presentPanel(settings,sheet&&!sheet.hidden?desktopPanels.get(sheet)?.anchor:undefined);
   }
   function closeSettings(){if(settings)settings.hidden=true;}
 
@@ -3496,12 +3697,15 @@
       if(still())for(const item of grid.querySelectorAll('button'))item.disabled=false;
     }
   }
-  function openSheet(row){
+  function openSheet(row,anchor){
+    if(!desktopMountAllowed())return;
+    if(settings?.hidden===false)closeSettings();
     makeSheet();
     if(active&&(active.layoutId!==row.layoutId||active.videoId!==row.videoId))
       stopNativeCollector();
     active={layoutId:row.layoutId,videoId:row.videoId};
     sheet.hidden=false;
+    presentPanel(sheet,anchor);
     if(backdrop)backdrop.hidden=!touchZonesAllowed();
     field('title',row.title||row.videoId);
     field('note','');
@@ -3542,7 +3746,7 @@
   }
   function hudCellDispose(cell){
     if(!cell)return;
-    hudSessionStop(cell);cell.button.remove();cell.panelButton?.remove();
+    hudSessionStop(cell);cell.button.remove();
   }
   function clearHudCells(){
     for(const cell of hudCells.values())hudCellDispose(cell);
@@ -3558,17 +3762,6 @@
       if(cell)hudCellDispose(cell);
       cell={key,frame,videoId:row.videoId,button:createCornerHud(),
         time:'—',speed:'—',lastSpeed:null,monitorWin:null,monitorOrigin:null};
-      cell.panelButton=document.createElement('button');
-      cell.panelButton.type='button';
-      cell.panelButton.className='hmtc-corner-hud hmtc-panel-open';
-      cell.panelButton.textContent='统计';
-      cell.panelButton.title='打开此视频的控制与统计面板';
-      cell.panelButton.setAttribute('aria-label','打开此视频的控制与统计面板');
-      cell.panelButton.addEventListener('click',event=>{
-        event.preventDefault();event.stopPropagation();
-        const current=rowMap.get(key);
-        if(current)openSheet(current);
-      });
       hudCells.set(key,cell);
     }
     const layer=document.fullscreenElement||document.body;
@@ -3579,10 +3772,7 @@
     cell.button.style.top=Math.max(0,rect.top+6)+'px';
     cell.button.style.maxWidth=Math.max(28,Math.min(240,rect.width-12))+'px';
     displayCornerHud(cell.button,cell.time,cell.speed);
-    if(cell.panelButton.parentNode!==layer)layer.appendChild(cell.panelButton);
-    cell.panelButton.hidden=cell.button.hidden||touchZonesAllowed();
-    cell.panelButton.style.left=Math.max(0,rect.left+6)+'px';
-    cell.panelButton.style.top=Math.max(0,rect.top+42)+'px';
+
   }
   function hudSpeedValue(cell,kbps){
     const now=Date.now();
@@ -3663,6 +3853,7 @@
         rowMap.set(key,row);
         if(touchZonesAllowed()&&get(EDGE_KEY,true))attachEdges(roots[row.index],row);
         attachCornerHud(roots[row.index],row);
+        configureDesktopFrame(row);
         if(active&&active.layoutId+':'+active.videoId===key)renderVolume(row);
       }
       for(const key of rowMap.keys())if(!validKeys.has(key))rowMap.delete(key);
@@ -3688,6 +3879,17 @@
 
     // Stats/settings are available on every device; only broad gesture zones
     // are gated to touch-only input. Hybrid PCs keep the normal mouse target.
+    installDesktopDismiss(()=>{if(settings?.hidden===false)closeSettings();else if(sheet&&!sheet.hidden)closeSheet();});
+    document.addEventListener('contextmenu',event=>{
+      if(!isMulti())return;
+      const frame=event.target?.closest?.('.mv-frame');
+      const point=desktopContextPoint(event,frame);
+      if(!point)return;
+      const roots=[...document.querySelectorAll('.multiview .mv-cell > .cell-content')];
+      const row=[...rowMap.values()].find(r=>roots[r.index]?.querySelector('.mv-frame')===frame);
+      if(!row)return;
+      event.preventDefault();event.stopPropagation();closeSettings();openSheet(row,point);
+    },{capture:true});
     GM_registerMenuCommand('左上角信息：切换时间／速度／隐藏',cycleHudMode);
     setInterval(pollCornerHuds,2200);
     window.addEventListener('pagehide',clearHudCells,{passive:true});
@@ -3717,7 +3919,11 @@
       }).catch(error=>alert('关闭设置未完全成功：'+error.message));
     });
 
+    document.addEventListener('fullscreenchange',()=>{
+      for(const row of rowMap.values())configureDesktopFrame(row);
+    });
     watchTouchZonePolicy(()=>{
+      for(const row of rowMap.values())configureDesktopFrame(row);
       // Remove immediately even if the asynchronous player refresh is busy.
       if(!touchZonesAllowed())document.querySelectorAll('.hmtc-edge').forEach(e=>e.remove());
       if(backdrop)backdrop.hidden=!sheet||sheet.hidden||!touchZonesAllowed();
@@ -3750,8 +3956,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.13 说明',()=>
-      alert('v0.6.13：多视图优先读取 iframe 实际媒体时间，未就绪不再显示 0/0；PC 每格左上角「统计」可直接打开对应面板。'));
+    GM_registerMenuCommand('Touch Controls v0.6.14 说明',()=>
+      alert('v0.6.14：PC 在视频中央 2/3 宽度内右键打开鼠标旁的紧凑面板；移除统计按钮。请关闭 Tweaks 对应右键动作，手机触控保持原样。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
@@ -3760,7 +3966,10 @@
       const nowMulti=isMulti();
       if(location.href!==last){
         last=location.href;
-        if(!nowMulti){closeSheet();rowMap.clear();clearHudCells();}
+        if(!nowMulti){
+          for(const row of rowMap.values())configureDesktopFrame(row);
+          closeSheet();rowMap.clear();clearHudCells();
+        }
       }
       if(nowMulti){
         if(!installed)installBridge();

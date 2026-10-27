@@ -5,7 +5,7 @@ const vm=require('node:vm');
 const {test}=require('node:test');
 const source=fs.readFileSync('userscripts/holodex-touch-controls.user.js','utf8');
 function section(start,end){return source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));}
-const policy=section('  let mouseInputSeen=false;',"  const HUD_KEY=");
+const policy=section('  let mouseInputSeen=false;',"  const DESKTOP_TAG=");
 function mediaEnv(coarse,fine){
   const media=new Map();
   for(const [query,matches] of [['(pointer:coarse)',coarse],['(any-pointer:fine)',fine]])
@@ -41,7 +41,7 @@ test('PC initialization registers statistics; selection opens the correct video 
     GM_registerMenuCommand:(name,fn)=>menus.set(name,fn),
     watchTouchZonePolicy:fn=>{policyChange=fn;},touchZonesAllowed:()=>false,
     cycleHudMode:noop,pollCornerHuds:noop,clearHudCells:noop,openSettings:noop,
-    manualAutoPlay:noop,diagnoseAutoPlay:noop,makeSheet:noop,get:(_k,d)=>d,DEBUG_KEY:'debug',
+    manualAutoPlay:noop,diagnoseAutoPlay:noop,makeSheet:noop,installDesktopDismiss:noop,get:(_k,d)=>d,DEBUG_KEY:'debug',
     installBridge:noop,isMulti:()=>true,setInterval:noop,refresh:noop,
     rowMap:new Map(rows.map(r=>[r.layoutId+':'+r.videoId,r])),
     openSheet:r=>opened.push(r),alert:noop,prompt:()=> '2'
@@ -98,11 +98,11 @@ test('actual mouse entry overrides incorrect coarse reports without cancelling i
 test('YouTube panel opens with no full-screen mouse blocker and closes cleanly',()=>{
   for(const touch of [false,true]){
     const ctx=vm.createContext({supported:()=>true,p:()=>({}),makePanel(){},
-      sheet:{hidden:true},backdrop:{hidden:true},touchZonesAllowed:()=>touch,
+      sheet:{hidden:true},backdrop:{hidden:true},touchZonesAllowed:()=>touch,desktopMountAllowed:()=>true,presentPanel(){},
       bandwidth:{start(){},stop(){}},hudWantsSpeed:()=>false,
       refreshSheet(){},refreshQualityChoices(){}});
     const yt=source.slice(0,source.indexOf('  // Run a minimal, read-only stats bridge'));
-    const start=yt.indexOf('    function open(){');const end=yt.indexOf('    function toastVolume',start);
+    const start=yt.indexOf('    function open(anchor){');const end=yt.indexOf('    function toastVolume',start);
     vm.runInContext(yt.slice(start,end)+section('    function close(){','    let qualitySwitching=false;'),ctx);
     vm.runInContext('open()',ctx);assert.equal(ctx.sheet.hidden,false);
     assert.equal(ctx.backdrop.hidden,!touch);
@@ -196,20 +196,109 @@ test('one failing wrapper method does not discard other playback fields',async()
   assert.equal(result.position,123);assert.equal(result.duration,3600);assert.equal(result.rate,1.25);
   assert.equal(result.live,true);assert.equal(result.volume,undefined);
 });
-test('desktop per-cell statistics button opens current row and is removed with its cell',()=>{
-  let touch=false;const opened=[],layer={appendChild(el){el.parentNode=this;}};
-  function element(){return {style:{},handlers:{},setAttribute(){},addEventListener(n,f){this.handlers[n]=f;},remove(){this.removed=true;}};}
-  const row={layoutId:1,videoId:'abcdefghijk'},key='1:abcdefghijk';
+test('HUD remains and no constant statistics button is created',()=>{
+  const layer={appendChild(el){el.parentNode=this;}};
+  const button={style:{},remove(){this.removed=true;}};
+  const row={layoutId:1,videoId:'abcdefghijk'};
   const frame={getBoundingClientRect:()=>({width:500,height:300,left:10,top:20,right:510,bottom:320})};
-  const ctx=vm.createContext({hudCells:new Map(),hudSessionStop(){},createCornerHud:element,
-    document:{createElement:element,body:layer},innerHeight:1000,innerWidth:1200,
-    touchZonesAllowed:()=>touch,displayCornerHud(){},rowMap:new Map([[key,row]]),openSheet:r=>opened.push(r)});
+  const ctx=vm.createContext({hudCells:new Map(),hudSessionStop(){},createCornerHud:()=>button,
+    document:{body:layer},innerHeight:1000,innerWidth:1200,displayCornerHud(){}});
   vm.runInContext(section('  function hudCellDispose(cell){','  function hudSpeedValue(cell,kbps){'),ctx);
-  const root={querySelector:()=>frame};ctx.attachCornerHud(root,row);
-  const cell=ctx.hudCells.get(key);assert.equal(cell.panelButton.textContent,'统计');assert.equal(cell.panelButton.hidden,false);
-  cell.panelButton.handlers.click({preventDefault(){},stopPropagation(){}});assert.equal(opened[0],row);
-  const updated={...row,title:'updated'};ctx.rowMap.set(key,updated);
-  cell.panelButton.handlers.click({preventDefault(){},stopPropagation(){}});assert.equal(opened[1],updated);
-  touch=true;ctx.attachCornerHud(root,row);assert.equal(cell.panelButton.hidden,true);
-  ctx.hudCellDispose(cell);assert.ok(cell.button.removed);assert.ok(cell.panelButton.removed);
+  ctx.attachCornerHud({querySelector:()=>frame},row);
+  assert.equal(ctx.hudCells.get('1:abcdefghijk').button,button);
+  ctx.hudCellDispose(ctx.hudCells.get('1:abcdefghijk'));assert.ok(button.removed);
+  assert.doesNotMatch(source,/hmtc-panel-open|panelButton/);
+});
+
+const desktopSource=section("  const DESKTOP_TAG=","  const HUD_KEY=");
+function desktopEnv(){
+  const handlers=new Map(),sent=[],styles=[];
+  const document={fullscreenElement:null,body:{appendChild(p){p.parentNode=this;}},
+    addEventListener(n,fn){if(!handlers.has(n))handlers.set(n,[]);handlers.get(n).push(fn);}};
+  const parent={postMessage:(m,o)=>sent.push({m,o})};
+  const ctx=vm.createContext({document,window:{parent,addEventListener(){}},
+    GM_addStyle:s=>styles.push(s),touchZonesAllowed:()=>false,innerWidth:1000,innerHeight:800,
+    Date,Map,Number,Math});
+  vm.runInContext(desktopSource,ctx);
+  const fire=(name,event)=>{for(const handler of handlers.get(name)||[])handler(event);};
+  return {ctx,handlers,fire,sent,styles,parent,document};
+}
+function contextEvent(x=300,y=200,extra={}){
+  return {button:2,clientX:x,clientY:y,target:{closest:()=>null},
+    preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},...extra};
+}
+const testPlayer=()=>({contains:()=>true,getBoundingClientRect:()=>({left:0,top:0,width:600,height:400}),getVideoData:()=>({video_id:'abcdefghijk'})});
+test('central right-click covers full height, exact two-thirds width, no other mouse actions',()=>{
+  const {ctx}=desktopEnv(),p=testPlayer();
+  for(const [x,y,want] of [[100,0,true],[500,400,true],[300,1,true],[300,399,true],[99,200,false],[501,200,false],[300,-1,false],[300,401,false]])
+    assert.equal(!!ctx.desktopContextPoint(contextEvent(x,y),p),want,`${x},${y}`);
+  for(const extra of [{button:0},{button:1},{ctrlKey:true},{altKey:true},{shiftKey:true},{metaKey:true}])
+    assert.equal(ctx.desktopContextPoint(contextEvent(300,200,extra),p),null);
+  assert.equal(ctx.desktopContextPoint(contextEvent(300,200,{target:{closest:()=>({})}}),p),null);
+  ctx.touchZonesAllowed=()=>true;assert.equal(ctx.desktopContextPoint(contextEvent(),p),null);
+});
+test('compact panel placement avoids all viewport edges and stays fixed when pointer moves',()=>{
+  const {ctx,fire}=desktopEnv();
+  for(const a of [{x:0,y:0},{x:999,y:0},{x:0,y:799},{x:999,y:799}]){
+    const p=ctx.desktopPanelCoordinates(a,320,480,1000,800);
+    assert.ok(p.x>=8&&p.x+320<=992);assert.ok(p.y>=8&&p.y+480<=792);
+  }
+  const panel={hidden:false,classList:{toggle(){}},style:{},getBoundingClientRect:()=>({width:320,height:480})};
+  ctx.presentPanel(panel,{x:100,y:100});assert.equal(panel.style.left,'110px');assert.equal(panel.style.top,'110px');
+  fire('pointermove',{pointerType:'mouse',clientX:900,clientY:700});ctx.desktopPanelReflow();
+  assert.equal(panel.style.left,'110px');assert.equal(panel.style.top,'110px');
+  ctx.innerWidth=400;ctx.innerHeight=600;ctx.desktopPanelReflow();
+  assert.ok(parseFloat(panel.style.left)+320<=392);assert.ok(parseFloat(panel.style.top)+480<=592);
+});
+test('panel mounts within full-screen container; mobile clears desktop positioning',()=>{
+  const {ctx,document}=desktopEnv(),classes=new Set();
+  const layer={tagName:'DIV',appendChild(p){p.parentNode=this;}};document.fullscreenElement=layer;
+  const panel={hidden:false,classList:{toggle(c,on){on?classes.add(c):classes.delete(c);}},
+    style:{removeProperty(k){delete this[k];}},getBoundingClientRect:()=>({width:320,height:400})};
+  ctx.presentPanel(panel,{x:500,y:300});assert.equal(panel.parentNode,layer);assert.ok(classes.has('hmtc-desktop-panel'));
+  document.fullscreenElement={tagName:'IFRAME'};assert.equal(ctx.desktopMountAllowed(),false);
+  document.fullscreenElement=null;ctx.touchZonesAllowed=()=>true;ctx.presentPanel(panel);
+  assert.equal(panel.style.left,undefined);assert.equal(panel.style.top,undefined);assert.equal(classes.size,0);
+});
+test('outside left-click dismisses without consuming playback or control input',()=>{
+  const {ctx,fire}=desktopEnv();let closed=0;ctx.installDesktopDismiss(()=>closed++);
+  const e=contextEvent(0,0,{button:0});fire('pointerdown',e);
+  assert.equal(closed,1);assert.equal(e.prevented,undefined);assert.equal(e.stopped,undefined);
+  fire('pointerdown',contextEvent(0,0,{button:0,target:{closest:()=>({})}}));assert.equal(closed,1);
+  fire('pointerdown',contextEvent());assert.equal(closed,1);
+});
+test('iframe right-click requires trusted pairing, current video and non-expired configuration',()=>{
+  const {ctx,parent,fire,sent,document}=desktopEnv();let now=10000,id='abcdefghijk';
+  ctx.Date={now:()=>now};const p=testPlayer();p.getVideoData=()=>({video_id:id});
+  const bridge=ctx.installDesktopFrameBridge('abcdefghijk',()=>p,new Set(['https://holodex.net']));
+  let e=contextEvent();fire('contextmenu',e);assert.equal(e.prevented,undefined);
+  assert.equal(bridge.configure({source:{},origin:'https://holodex.net'},{videoId:id,enabled:true}),false);
+  assert.equal(bridge.configure({source:parent,origin:'https://evil.example'},{videoId:id,enabled:true}),false);
+  bridge.configure({source:parent,origin:'https://holodex.net'},{videoId:id,enabled:true});
+  e=contextEvent();fire('contextmenu',e);assert.equal(e.prevented,true);assert.equal(sent.at(-1).m.type,'open');assert.equal(sent.at(-1).m.x,.3);
+  e=contextEvent(10);fire('contextmenu',e);assert.equal(e.prevented,undefined);
+  document.fullscreenElement={tagName:'DIV'};e=contextEvent();fire('contextmenu',e);assert.equal(e.prevented,undefined);
+  document.fullscreenElement=null;id='zyxwvutsrqp';e=contextEvent();fire('contextmenu',e);assert.equal(e.prevented,undefined);
+  id='abcdefghijk';now+=5001;e=contextEvent();fire('contextmenu',e);assert.equal(e.prevented,undefined);
+});
+test('iframe forwards dismissal and Escape without cancelling underlying events',()=>{
+  const {ctx,parent,fire,sent}=desktopEnv();
+  const bridge=ctx.installDesktopFrameBridge('abcdefghijk',testPlayer,new Set(['https://holodex.net']));
+  bridge.configure({source:parent,origin:'https://holodex.net'},{videoId:'abcdefghijk',enabled:true});
+  const e=contextEvent(0,0,{button:0});fire('pointerdown',e);fire('keydown',{key:'Escape'});
+  assert.deepEqual(sent.map(x=>x.m.type),['dismiss','escape']);assert.equal(e.prevented,undefined);
+});
+test('parent validates frame origin, window and coordinates, then opens correct video at scaled point',()=>{
+  const {ctx}=desktopEnv(),opened=[];const row={videoId:'abcdefghijk',layoutId:'1'};
+  const origin='https://www.youtube.com',win={};
+  const frame={contentWindow:win,getBoundingClientRect:()=>({left:600,top:100,width:300,height:200})};
+  Object.assign(ctx,{YT_ORIGINS:new Set([origin]),rowMap:new Map([['1:abcdefghijk',row]]),
+    isMulti:()=>true,nativeFrame:()=>({frame,origin}),settings:null,sheet:{hidden:false},
+    closeSettings(){},openSheet:(r,p)=>opened.push({r,p}),closeSheet(){},observeMouseInput(){}});
+  vm.runInContext(section('  function configureDesktopFrame(row){',"  window.addEventListener('message',event=>{"),ctx);
+  function send(extra={},eventExtra={}){ctx.receiveDesktopFrameMessage({origin,source:win,
+    data:{tag:'hmtc-desktop-panel-v1',type:'open',videoId:row.videoId,x:.5,y:.5,...extra},...eventExtra});}
+  send({}, {origin:'https://evil.example'});send({}, {source:{}});send({videoId:'zyxwvutsrqp'});send({x:NaN});send({x:1.01});assert.equal(opened.length,0);
+  send();assert.equal(opened[0].r,row);assert.equal(opened[0].p.x,750);assert.equal(opened[0].p.y,200);
+  ctx.rowMap.clear();send();assert.equal(opened.length,1);
 });
