@@ -1623,6 +1623,10 @@
     background:rgba(255,255,255,.065);border:1px solid #ffffff16;min-width:0}
   #hmtc-sheet .metric label{display:block;font-size:11px;color:#b8c7d7;margin-bottom:5px}
   #hmtc-sheet .metric strong{font-size:16px;font-weight:700;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+  #hmtc-sheet .hmtc-playtime-metric strong{font-size:clamp(16px,4vw,21px);
+    line-height:1.35;color:#f4ffff}
+  #hmtc-sheet .hmtc-playtime-metric small{display:block;color:#9ee3dd;
+    margin-top:5px;font-size:10px;line-height:1.4}
   #hmtc-sheet .hmtc-play-controls{margin-top:13px;padding:10px 12px;border-radius:15px;
     background:#243549b8;border:1px solid #ffffff22}
   #hmtc-sheet .hmtc-play-row{display:flex;gap:6px;align-items:center;margin:5px 0}
@@ -2769,7 +2773,7 @@
       '<div class="grid">',
       '<div class="metric"><label>缓冲健康度 · Buffer</label><strong data-field="health">—</strong></div>',
       '<div class="metric"><label>直播延迟 · Latency</label><strong data-field="latency">—</strong></div>',
-      '<div class="metric"><label data-field="positionLabel">播放时间</label>',
+      '<div class="metric hmtc-playtime-metric"><label data-field="positionLabel">播放时间</label>',
       '<strong data-field="position">—</strong>',
       '<small data-field="positionInfo"></small></div>',
       '<div class="metric"><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
@@ -3230,8 +3234,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.5 说明',()=>
-      alert('v0.6.5：连接速度支持新版 YouTube 原生统计字段、嵌套数据和统计面板文字；手机版不再因缺少 isVideoInfoVisible() 而跳过读取。直播状态精简为「直播中」，去除冗长时间轴说明。保留五档倍速、音量手势及多视图自动播放。'));
+    GM_registerMenuCommand('Touch Controls v0.6.6 说明',()=>
+      alert('v0.6.6：修复直播时把「播放时间」整个替换成「直播中」的问题。现在普通视频显示当前／总时长，直播显示当前播放位置并另标直播状态，Holodex 和 YouTube 均保留时间。连接速度对原生统计的偶发空值最多保留 6 秒真实采样并明确标注过期，绝不伪造测速结果。其余手势、倍速与自动播放保持不变。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
