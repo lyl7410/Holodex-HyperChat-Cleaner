@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.4
-// @description  Holodex／YouTube：直播状态识别和时间显示修复、实时连接速度、五档倍速、手势音量及智能自动播放。
+// @version      0.6.5
+// @description  Holodex／YouTube：连接速度字段兼容性增强、精简直播状态、五档倍速、音量手势及智能自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -212,36 +212,65 @@
       return n?Number(n[0]):null;
     };
     function parse(raw){
-      // Some player builds return debug objects as serialized JSON instead
-      // of a native object. Parse both without inventing measurements.
+      // YouTube's own Stats for nerds can return a plain-text report, a
+      // JSON string, or an object. Some builds label speed "connection_speed"
+      // or "bandwidth" rather than "bandwidth_kbps".
       let decoded=raw;
       if(typeof raw==='string'&&raw.trim().startsWith('{')){
         try{decoded=JSON.parse(raw);}catch{}
       }
-      const obj=decoded&&typeof decoded==='object'?decoded:{};
-      const nested=obj.stats&&typeof obj.stats==='object'?obj.stats:{};
-      const extra=obj.data&&typeof obj.data==='object'?obj.data:{};
-      const string=typeof raw==='string'?raw:'';
-      const first=(...candidates)=>{
-        for(const entry of candidates){
-          const n=asNumber(entry);
-          if(n!=null&&Number.isFinite(n)&&n>0)return n;
+      const normalize=(value,implicitKbps)=>{
+        if(typeof value==='number')
+          return implicitKbps&&Number.isFinite(value)&&value>0?value:null;
+        if(typeof value!=='string')return null;
+        const str=value.trim().replace(/,/g,'');
+        const match=str.match(/(\d+(?:\.\d+)?)\s*(Gbps|Gbit\/s|Mbps|Mbit\/s|Kbps|Kbit\/s|kb\/s|mb\/s)\b/i);
+        if(match){
+          const n=Number(match[1]),unit=match[2].toLowerCase();
+          return n*(unit.startsWith('g')?1000000:unit.startsWith('m')?1000:1);
         }
+        if(implicitKbps&&/^\d+(?:\.\d+)?$/.test(str))return Number(str);
         return null;
       };
-      // Prefer explicitly-Kbps fields. A raw integer "bandwidth" does NOT
-      // guarantee units, so never treat it as a network-speed measurement.
-      const keys=['bandwidth_kbps','bandwidthKbps','connection_speed_kbps',
-        'connectionSpeedKbps','connection_speed_in_kbps','connectionSpeedInKbps'];
-      const keyValues=keys.flatMap(k=>[obj[k],nested[k],extra[k]]);
-      const regex=/(?:Connection\s*Speed|连接速度|連線速度|接続速度)\s*[:：]?\s*([\d,.]+)\s*(Kbps|kb\/s|Mbps|Mb\/s|Gbps)\b/i;
-      const fromString=string.match(regex);
-      const count=fromString?asNumber(fromString[1]):null;
-      const unit=String(fromString?.[2]||'').toLowerCase();
-      const scale=unit.startsWith('g')?1000000:
-        unit.startsWith('m')?1000:1;
-      const bandwidthKbps=first(...keyValues,count!=null?count*scale:null);
-      return {bandwidthKbps};
+      const textSpeed=value=>{
+        if(typeof value!=='string')return null;
+        const match=value.match(
+          /(?:Connection\s*Speed|连接速度|連線速度|接続速度|连接速率)\s*[:：]?\s*([\d,.]+)\s*(Gbps|Gbit\/s|Mbps|Mbit\/s|Kbps|Kbit\/s|kb\/s|mb\/s)\b/i);
+        if(match)return normalize(match[1]+' '+match[2],false);
+        // Official native stats sometimes omit the unit suffix on a
+        // connection-speed line; only this named diagnostic field is Kbps.
+        const unitless=value.match(
+          /(?:Connection\s*Speed|连接速度|連線速度|接続速度)\s*[:：]?\s*([\d,.]+)(?![.\d])/i);
+        return unitless?normalize(unitless[1],true):null;
+      };
+      let speed=textSpeed(typeof raw==='string'?raw:'');
+      let source=speed!=null?'native-text':'';
+      const queue=[decoded],seen=new Set();
+      let checked=0;
+      while(queue.length&&checked<40&&speed==null){
+        const obj=queue.shift();
+        if(!obj||typeof obj!=='object'||seen.has(obj))continue;
+        checked++;seen.add(obj);
+        for(const [key,value] of Object.entries(obj).slice(0,90)){
+          const plain=key.replace(/[^a-z]/gi,'').toLowerCase();
+          const named=/^(?:bandwidthkbps|connectionspeedkbps|connectionspeedinkbps|connectionspeed|bandwidth)$/.test(plain);
+          if(named){
+            const candidate=normalize(value,true);
+            if(candidate!=null&&candidate>0){speed=candidate;source=key;break;}
+          }
+          if(typeof value==='string'&&
+             /(?:Connection\s*Speed|连接速度|連線速度|接続速度)/i.test(value)){
+            const candidate=textSpeed(value);
+            if(candidate!=null&&candidate>0){
+              speed=candidate;source='stats-text';break;
+            }
+          }
+          if(value&&typeof value==='object'&&queue.length<70)
+            queue.push(value);
+        }
+      }
+      return {bandwidthKbps:speed!=null&&Number.isFinite(speed)&&speed>0?
+        speed:null,source};
     }
     function read(){
       const p=getPlayer();
@@ -1146,7 +1175,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.4', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.5', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
