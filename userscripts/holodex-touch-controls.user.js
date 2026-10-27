@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.6
-// @description  恢复 YouTube/Holodex 播放时间，直播时间与状态分别显示；增强真实连接速度采集，保留五档倍速、触控和自动播放。
+// @version      0.6.7
+// @description  在视频左上角切换时间与原生连接速度显示；保留直播进度、五档倍速、手势和智能自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -29,6 +29,70 @@
 
 (function HolodexTouchControls() {
   'use strict';
+
+  // Shared and persisted by YouTube and Holodex. Tapping the HUD cycles
+  // time → native speed → both → compact (off). The compact control can
+  // restore the display without opening the settings sheet.
+  const HUD_KEY='hmtc_corner_hud_mode_v1';
+  const HUD_MODES=['time','speed','both','off'];
+  const hudMode=()=>{
+    const value=GM_getValue(HUD_KEY,'time');
+    return HUD_MODES.includes(value)?value:'time';
+  };
+  const hudWantsSpeed=()=>hudMode()==='speed'||hudMode()==='both';
+  const hudWantsTime=()=>hudMode()==='time'||hudMode()==='both';
+  function cycleHudMode(){
+    const mode=hudMode();
+    GM_setValue(HUD_KEY,HUD_MODES[(HUD_MODES.indexOf(mode)+1)%HUD_MODES.length]);
+    document.dispatchEvent(new Event('hmtc:corner-hud-change'));
+  }
+  function createCornerHud(){
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='hmtc-corner-hud';
+    button.title='轻点切换：时间 → 连接速度 → 同时 → 隐藏';
+    button.setAttribute('aria-label','切换视频左上角信息');
+    button.textContent='—';
+    button.addEventListener('click',e=>{
+      e.preventDefault();e.stopPropagation();cycleHudMode();
+    });
+    for(const type of ['pointerdown','pointerup','touchstart','touchend'])
+      button.addEventListener(type,e=>e.stopPropagation(),{passive:true});
+    return button;
+  }
+  function displayCornerHud(button,time,speed){
+    if(!button)return;
+    const mode=hudMode();
+    button.classList.toggle('hmtc-hud-off',mode==='off');
+    button.setAttribute('aria-label',mode==='off'?'显示左上角信息':
+      '切换左上角信息（目前'+({time:'播放时间',speed:'连接速度',both:'两项'}[mode])+'）');
+    button.textContent=mode==='off'?'···':
+      mode==='time'?(time||'—'):
+      mode==='speed'?(speed||'—'):
+      (time||'—')+'\n'+(speed||'—');
+  }
+  GM_addStyle([
+    '.hmtc-corner-hud{position:fixed!important;z-index:2147482700!important;',
+    'display:block!important;box-sizing:border-box!important;max-width:240px;',
+    'border:0!important;border-radius:5px!important;',
+    'padding:3px 5px!important;margin:0!important;',
+    'background:rgba(12,20,30,.40)!important;color:#f2fbff!important;',
+    'font:550 11px/1.3 system-ui,-apple-system,sans-serif!important;',
+    'font-variant-numeric:tabular-nums!important;white-space:pre-line!important;',
+    'text-align:left!important;overflow:hidden!important;text-overflow:ellipsis!important;',
+    'box-shadow:none!important;text-shadow:0 1px 2px #0009;',
+    '-webkit-tap-highlight-color:transparent;opacity:.68!important;',
+    'transition:opacity .18s ease!important;',
+    'touch-action:manipulation!important;pointer-events:auto!important;cursor:pointer!important}',
+    '.hmtc-corner-hud:hover,.hmtc-corner-hud:focus-visible,.hmtc-corner-hud:active{',
+    'opacity:.96!important}',
+    '.hmtc-corner-hud.hmtc-hud-off{width:24px!important;min-width:24px!important;',
+    'height:20px!important;padding:1px 2px!important;',
+    'text-align:center!important;opacity:.33!important}',
+    '.hmtc-corner-hud.hmtc-hud-off:hover,.hmtc-corner-hud.hmtc-hud-off:focus-visible,',
+    '.hmtc-corner-hud.hmtc-hud-off:active{opacity:.85!important}',
+    '.hmtc-corner-hud[hidden]{display:none!important}'
+  ].join(''));
   // Common touch-sized, fixed rate presets shown on Holodex and YouTube.
   const COMMON_RATES=[1,1.25,1.5,1.75,2];
   // Shared with embedded YouTube players and ordinary YouTube watch pages.
@@ -543,6 +607,62 @@
         String(Math.floor(a%3600/60)).padStart(2,'0')+':'+
         String(a%60).padStart(2,'0');
     };
+
+    // Same live/DVR-aware clock feeds both the detailed sheet and compact HUD.
+    function readWatchClock(){
+      const v=video(),player=p(),live=watchLive();
+      const valid=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0;
+      const mediaTime=Number(v?.currentTime);
+      let current=valid(mediaTime)?mediaTime:null;
+      if(current===null||(current===0&&Number(v?.readyState)===0)){
+        try{
+          const value=Number(player?.getCurrentTime?.());
+          if(valid(value))current=value;
+        }catch{}
+      }
+      let duration=Number(v?.duration);
+      if(!valid(duration)||duration===0){
+        try{duration=Number(player?.getDuration?.());}catch{duration=NaN;}
+      }
+      const elapsed=clock(current);
+      return {
+        time:live.live?elapsed:elapsed+' / '+(valid(duration)&&duration>0?clock(duration):'—'),
+        info:live.live?'🔴 直播中 · 播放位置（非直播总时长）':
+          '当前播放位置 / 总时长'
+      };
+    }
+    let watchHud=null;
+    function refreshWatchHud(player){
+      if(!player){
+        watchHud?.remove();watchHud=null;
+        if(!sheet||sheet.hidden)bandwidth.stop();
+        return;
+      }
+      const layer=document.fullscreenElement||document.body;
+      if(!watchHud?.isConnected)watchHud=createCornerHud();
+      if(watchHud.parentNode!==layer)layer.appendChild(watchHud);
+      const rect=player.getBoundingClientRect();
+      const visible=rect.width>75&&rect.height>55&&rect.bottom>0&&
+        rect.top<innerHeight&&rect.right>0&&rect.left<innerWidth;
+      watchHud.hidden=!visible;
+      if(!visible){
+        if(!sheet||sheet.hidden)bandwidth.stop();
+        return;
+      }
+      watchHud.style.left=Math.max(0,rect.left+Math.min(7,rect.width/20))+'px';
+      watchHud.style.top=Math.max(0,rect.top+6)+'px';
+      watchHud.style.maxWidth=Math.max(28,Math.min(240,rect.width-14))+'px';
+      const time=hudWantsTime()?readWatchClock().time:'—';
+      let speed='—';
+      if(hudWantsSpeed()){
+        bandwidth.start();
+        const net=bandwidth.read();
+        if(net.available)
+          speed=(net.bandwidthKbps/1000).toFixed(2)+' Mbps'+
+            (net.stale?' (上次)':'');
+      }else if(!sheet||sheet.hidden)bandwidth.stop();
+      displayCornerHud(watchHud,time,speed);
+    }
     function refreshSheet(){
       if(!sheet||sheet.hidden)return;
       const v=video(),snapshot=controls.snapshot();
@@ -551,31 +671,10 @@
         .replace(/\s*-\s*YouTube\s*$/,'').trim().slice(0,120));
       text('resolution',snapshot.resolution+' · 实际帧');
       text('quality',snapshot.resolution);
-      // Playback time is the primary metric, EVEN FOR LIVE videos. v0.6.5
-      // incorrectly replaced the entire clock with "LIVE". Keep live status
-      // separate; a rolling DVR window must not be shown as total runtime.
-      const live=watchLive();
-      const player=p();
-      const validClock=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0;
-      const mediaTime=Number(v?.currentTime);
-      let current=validClock(mediaTime)?mediaTime:null;
-      if(current===null||(current===0&&Number(v?.readyState)===0)){
-        try{
-          const fromPlayer=Number(player?.getCurrentTime?.());
-          if(validClock(fromPlayer))current=fromPlayer;
-        }catch{}
-      }
-      let duration=Number(v?.duration);
-      if(!validClock(duration)||duration===0){
-        try{duration=Number(player?.getDuration?.());}catch{duration=NaN;}
-      }
-      const elapsed=clock(current);
+      const currentClock=readWatchClock();
       text('timeLabel','播放时间');
-      text('time',live.live?elapsed:
-        elapsed+' / '+(validClock(duration)&&duration>0?clock(duration):'—'));
-      text('timeInfo',live.live?
-        '🔴 直播中 · 播放位置（非直播总时长）':
-        '当前播放位置 / 总时长');
+      text('time',currentClock.time);
+      text('timeInfo',currentClock.info);
       text('vol',vol()+'%');text('mute',muted()?'🔇':'🔊');
       const vslider=sheet.querySelector('[data-id="slider"]');
       if(vslider&&document.activeElement!==vslider)vslider.value=String(vol());
@@ -698,7 +797,7 @@
     }
 
     function close(){
-      bandwidth.stop();
+      if(!hudWantsSpeed())bandwidth.stop();
       if(sheet)sheet.hidden=true;
       if(backdrop)backdrop.hidden=true;
     }
@@ -934,7 +1033,9 @@
           refreshSheet();
         }
       }
+      refreshWatchHud(player);
     }
+    document.addEventListener('hmtc:corner-hud-change',refresh);
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
     GM_registerMenuCommand('YouTube：连接速度诊断',()=>{
       const info=bandwidth.diagnose();
@@ -1271,7 +1372,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.6', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.7', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -3143,8 +3244,114 @@
     clearInterval(statsInterval);statsInterval=null;
     stopNativeCollector();
   }
+
+  // Fixed overlay portals let each multiview video show its own clock/speed
+  // without touching cross-origin frames or the existing edge gestures.
+  const hudCells=new Map();
+  let hudBusy=false;
+  function hudSessionStop(cell){
+    if(!cell?.monitorWin)return;
+    if(active&&(active.layoutId+':'+active.videoId)===cell.key)return;
+    try{
+      cell.monitorWin.postMessage({tag:NATIVE_TAG,seq:++nativeSequence,
+        videoId:cell.videoId,action:'monitorStop'},cell.monitorOrigin);
+    }catch{}
+    cell.monitorWin=null;cell.monitorOrigin=null;
+  }
+  function hudCellDispose(cell){
+    if(!cell)return;
+    hudSessionStop(cell);cell.button.remove();
+  }
+  function clearHudCells(){
+    for(const cell of hudCells.values())hudCellDispose(cell);
+    hudCells.clear();
+  }
+  function attachCornerHud(root,row){
+    const frame=root?.querySelector('.mv-frame');
+    if(!frame)return;
+    const rect=frame.getBoundingClientRect();
+    const key=row.layoutId+':'+row.videoId;
+    let cell=hudCells.get(key);
+    if(cell?.frame!==frame){
+      if(cell)hudCellDispose(cell);
+      cell={key,frame,videoId:row.videoId,button:createCornerHud(),
+        time:'—',speed:'—',lastSpeed:null,monitorWin:null,monitorOrigin:null};
+      hudCells.set(key,cell);
+    }
+    const layer=document.fullscreenElement||document.body;
+    if(cell.button.parentNode!==layer)layer.appendChild(cell.button);
+    cell.button.hidden=rect.width<65||rect.height<45||rect.bottom<=0||
+      rect.top>=innerHeight||rect.right<=0||rect.left>=innerWidth;
+    cell.button.style.left=Math.max(0,rect.left+6)+'px';
+    cell.button.style.top=Math.max(0,rect.top+6)+'px';
+    cell.button.style.maxWidth=Math.max(28,Math.min(240,rect.width-12))+'px';
+    displayCornerHud(cell.button,cell.time,cell.speed);
+  }
+  function hudSpeedValue(cell,kbps){
+    const now=Date.now();
+    if(Number.isFinite(kbps)&&kbps>0){
+      cell.lastSpeed={kbps,at:now};
+      return (kbps/1000).toFixed(2)+' Mbps';
+    }
+    const last=cell.lastSpeed;
+    return last&&now-last.at>=0&&now-last.at<=6000?
+      (last.kbps/1000).toFixed(2)+' Mbps (上次)':'—';
+  }
+  async function pollCornerHuds(){
+    if(hudBusy||!installed||!isMulti()||document.hidden)return;
+    const wantTime=hudWantsTime(),wantSpeed=hudWantsSpeed();
+    hudBusy=true;
+    try{
+      const cells=[...hudCells.values()].filter(cell=>!cell.button.hidden).slice(0,12);
+      await Promise.allSettled(cells.map(async cell=>{
+        const row=rowMap.get(cell.key);
+        if(!row)return;
+        const instance=cell;
+        const stillHere=()=>hudCells.get(cell.key)===instance&&
+          rowMap.has(cell.key)&&isMulti();
+        const jobs=[];
+        if(wantTime)jobs.push(
+          rpc('stats',{layoutId:row.layoutId,videoId:row.videoId},2200)
+            .then(v=>{
+              if(!stillHere())return;
+              cell.time=!v?.ready?'—':v.live?timestamp(v.position):
+                timestamp(v.position)+' / '+timestamp(v.duration);
+            }).catch(()=>{if(stillHere())cell.time='—';})
+        );
+        if(wantSpeed)jobs.push((async()=>{
+          try{
+            const target=nativeFrame(row);
+            if(!target)throw Error('No iframe');
+            if(cell.monitorWin&&cell.monitorWin!==target.frame.contentWindow){
+              hudSessionStop(cell);cell.lastSpeed=null;
+            }
+            cell.monitorWin=target.frame.contentWindow;
+            cell.monitorOrigin=target.origin;
+            // Idempotent; recovers after a sheet closes or player reloads.
+            await nativeRequest(row,'monitorStart',1500);
+            const data=await nativeRequest(row,'stats',1700);
+            if(stillHere())cell.speed=hudSpeedValue(cell,
+              data?.available?Number(data.bandwidthKbps):NaN);
+          }catch{
+            if(stillHere())cell.speed=hudSpeedValue(cell,NaN);
+          }
+        })());
+        else hudSessionStop(cell);
+        await Promise.allSettled(jobs);
+        if(stillHere())displayCornerHud(cell.button,cell.time,cell.speed);
+      }));
+    }finally{hudBusy=false;}
+  }
+  function hudModeChanged(){
+    if(!hudWantsSpeed())
+      for(const cell of hudCells.values())hudSessionStop(cell);
+    for(const cell of hudCells.values())
+      displayCornerHud(cell.button,cell.time,cell.speed);
+    pollCornerHuds();
+  }
+  document.addEventListener('hmtc:corner-hud-change',hudModeChanged);
   async function refresh(){
-    if(!installed||listing||!isMulti()||!coarse||document.hidden)return;
+    if(!installed||listing||!isMulti()||document.hidden)return;
     listing=true;
     try{
       const rows=await rpc('list',{},3500);
@@ -3158,10 +3365,14 @@
         const ongoing=frame?.querySelector('.hmtc-edge--right')?._drag;
         if(ongoing && old){row.volume=old.volume;row.muted=old.muted;}
         rowMap.set(key,row);
-        if(get(EDGE_KEY,true))attachEdges(roots[row.index],row);
+        if(coarse&&get(EDGE_KEY,true))attachEdges(roots[row.index],row);
+        attachCornerHud(roots[row.index],row);
         if(active&&active.layoutId+':'+active.videoId===key)renderVolume(row);
       }
       for(const key of rowMap.keys())if(!validKeys.has(key))rowMap.delete(key);
+      for(const [key,cell] of hudCells)if(!validKeys.has(key)){
+        hudCellDispose(cell);hudCells.delete(key);
+      }
       // Remove obsolete v0.2.x icon and any edge area disabled or recycled.
       for(const root of roots){
         const frame=root.querySelector('.mv-frame');
@@ -3181,6 +3392,9 @@
 
     // PC and mobile both get the autonomous playback engine. Touch-only UI
     // remains gated to coarse pointers and is never inserted on a mouse PC.
+    GM_registerMenuCommand('左上角信息：切换时间／速度／隐藏',cycleHudMode);
+    setInterval(pollCornerHuds,2200);
+    window.addEventListener('pagehide',clearHudCells,{passive:true});
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
     GM_registerMenuCommand('诊断多视图自动播放状态',diagnoseAutoPlay);
@@ -3234,8 +3448,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.6 说明',()=>
-      alert('v0.6.6：修复直播时把「播放时间」整个替换成「直播中」的问题。现在普通视频显示当前／总时长，直播显示当前播放位置并另标直播状态，Holodex 和 YouTube 均保留时间。连接速度对原生统计的偶发空值最多保留 6 秒真实采样并明确标注过期，绝不伪造测速结果。其余手势、倍速与自动播放保持不变。'));
+    GM_registerMenuCommand('Touch Controls v0.6.7 说明',()=>
+      alert('v0.6.7：播放画面左上角可轻点切换时间、原生连接速度、同时显示或隐藏为小入口；保留 v0.6.6 的时间、测速修复和原有手势、倍速、智能自动播放。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
@@ -3244,12 +3458,12 @@
       const nowMulti=isMulti();
       if(location.href!==last){
         last=location.href;
-        if(!nowMulti&&coarse){closeSheet();rowMap.clear();}
+        if(!nowMulti){closeSheet();rowMap.clear();clearHudCells();}
       }
       if(nowMulti){
         if(!installed)installBridge();
         else {
-          if(coarse)refresh();
+          refresh();
           if(!previousMulti)syncAutoSettings().catch(()=>{});
           // Reconcile rare startup races, Vue app reinitialization or another
           // extension overwriting the page-agent state. This does not create
@@ -3264,7 +3478,8 @@
       previousMulti=nowMulti;
     },1700);
     document.addEventListener('visibilitychange',()=>{
-      if(!document.hidden&&coarse)refresh();
+      if(!document.hidden){refresh();pollCornerHuds();}
+      else for(const cell of hudCells.values())hudSessionStop(cell);
       // The player-world agent independently handles return-to-tab autoplay.
     });
   }
