@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.7
+// @version      0.6.8
 // @description  在视频左上角切换时间与原生连接速度显示；保留直播进度、五档倍速、手势和智能自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -173,20 +173,74 @@
     function closeQualityMenu(){
       if(visible(settingMenu()))settingButton()?.click?.();
     }
-    async function qualityOptions(){
-      const menu=await enterQualityMenu();
-      const choices=[...new Set(menu.choices.map(x=>x.name))];
-      closeQualityMenu();
-      return {choices,native:true};
+
+    // Undocumented page-world YouTube API; not the removed IFrame API.
+    // Based on independent implementations (yt4k, yt-force-max, Leta).
+    const QUALITY_HEIGHT={hd4320:4320,hd2880:2880,hd2160:2160,
+      hd1440:1440,hd1080:1080,hd720:720,large:480,medium:360,
+      small:240,tiny:144};
+    function qualityCatalog(){
+      const p=getPlayer();
+      if(!p)return {choices:[],selected:'',enumerated:false,
+        method:'none',reason:'播放器尚未加载'};
+      let levels=[],data=[],selected='';
+      try{levels=p.getAvailableQualityLevels?.()||[];}catch{}
+      try{data=p.getAvailableQualityData?.()||[];}catch{}
+      try{selected=String(p.getPlaybackQuality?.()||'');}catch{}
+      if(!Array.isArray(levels))levels=[];
+      if(!Array.isArray(data))data=[];
+      const keys=[...new Set([...levels,...data.map(x=>x?.quality)]
+        .filter(x=>typeof x==='string'&&Object.hasOwn(QUALITY_HEIGHT,x)))];
+      keys.sort((x,y)=>QUALITY_HEIGHT[y]-QUALITY_HEIGHT[x]);
+      const canSet=typeof p.setPlaybackQualityRange==='function';
+      const choices=keys.map(value=>{
+        const formats=data.filter(x=>x?.quality===value);
+        const standard=formats.find(x=>!x?.paygatedQualityDetails);
+        return {value,label:QUALITY_HEIGHT[value]+'p',
+          formatId:standard?.formatId==null?null:String(standard.formatId),
+          trial:false};
+      });
+      if(!choices.length&&canSet){
+        // Explicitly labelled trials; no claim the video supports these.
+        for(const value of ['hd1080','hd720','large'])
+          choices.push({value,label:QUALITY_HEIGHT[value]+'p（尝试）',
+            formatId:null,trial:true});
+      }
+      return {choices,selected,enumerated:keys.length>0,
+        method:canSet?'internal-range':'native-menu',
+        reason:keys.length?'':canSet?
+          '没有公开画质列表，以下仅为尝试档位':
+          '当前播放器没有开放内部画质接口'};
     }
+    async function qualityOptions(){return qualityCatalog();}
     async function setQuality(name){
-      if(typeof name!=='string'||name.length>90)throw Error('画质选项无效');
-      const menu=await enterQualityMenu();
-      const match=menu.choices.find(x=>x.name===name);
-      if(!match){closeQualityMenu();throw Error('清晰度已经变化，请重新读取原生菜单');}
-      match.element.click();
-      return {selectedInNativeMenu:true,requested:name,
-        actualResolution:snapshot().resolution,confirmedResolution:false};
+      if(typeof name!=='string'||!Object.hasOwn(QUALITY_HEIGHT,name))
+        throw Error('无效的画质档位');
+      const p=getPlayer(),catalog=qualityCatalog();
+      if(!p)throw Error('播放器未就绪');
+      const item=catalog.choices.find(x=>x.value===name);
+      if(!item)throw Error('这个视频没有列出该档位，请刷新列表');
+      if(typeof p.setPlaybackQualityRange!=='function')
+        throw Error('内部画质 API 不可用，请尝试原生设置');
+      try{
+        if(item.formatId)p.setPlaybackQualityRange(name,name,item.formatId);
+        else p.setPlaybackQualityRange(name,name);
+      }catch(error){
+        throw Error('播放器拒绝画质请求：'+String(error?.message||error));
+      }
+      // Never report success simply because an undocumented setter returned.
+      let actual='',format='';
+      for(let n=0;n<4;n++){
+        await pause(350);
+        try{actual=String(p.getPlaybackQuality?.()||'');}catch{}
+        try{format=String(p.getVideoStats?.()?.fmt||'');}catch{}
+        if(actual===name||(item.formatId&&format===item.formatId))break;
+      }
+      const confirmed=actual===name||!!(item.formatId&&format===item.formatId);
+      return {requested:name,confirmed,reported:actual,
+        actualResolution:snapshot().resolution,
+        message:confirmed?'播放器报告已选 '+QUALITY_HEIGHT[name]+'p；实际帧可能稍后变化':
+          '已请求 '+QUALITY_HEIGHT[name]+'p，但播放器尚未确认；可能被 YouTube 忽略'};
     }
     async function openQualityMenu(){
       const menu=await enterQualityMenu();
@@ -576,6 +630,8 @@
       '#hmtc-yt-panel .row{display:flex;gap:7px;align-items:center;margin-top:10px}',
       '#hmtc-yt-panel .row label{min-width:45px;font-weight:700}',
       '#hmtc-yt-panel .row select,#hmtc-yt-panel .row input{flex:1;min-width:0}',
+      '#hmtc-yt-panel [data-id="qualitySelect"]{min-height:40px;',
+      'color:#f5faff;background:#30465b;border-radius:9px}',
       '#hmtc-yt-panel .hmtc-yt-rates{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));',
       'gap:5px;margin:7px 0 12px}',
       '#hmtc-yt-panel .hmtc-yt-rates button{min-width:0;min-height:44px;',
@@ -801,6 +857,37 @@
       if(sheet)sheet.hidden=true;
       if(backdrop)backdrop.hidden=true;
     }
+
+    async function refreshQualityChoices(){
+      const sel=sheet?.querySelector('[data-id="qualitySelect"]');
+      if(!sel)return;
+      sel.disabled=true;
+      sel.replaceChildren();
+      const placeholder=document.createElement('option');
+      placeholder.value='';placeholder.textContent='正在读取';
+      sel.appendChild(placeholder);
+      try{
+        const catalog=await controls.qualityOptions();
+        if(!sel.isConnected)return;
+        sel.replaceChildren();
+        if(!catalog.choices.length){
+          placeholder.textContent='没有可用档位';sel.appendChild(placeholder);
+        }else{
+          for(const choice of catalog.choices){
+            const opt=document.createElement('option');
+            opt.value=choice.value;opt.textContent=choice.label;
+            sel.appendChild(opt);
+          }
+          const current=catalog.choices.find(x=>x.value===catalog.selected);
+          sel.value=(current||catalog.choices[0]).value;sel.disabled=false;
+        }
+        text('qualityTip',catalog.enumerated?
+          '档位来自当前播放器；内部接口可能被 YouTube 忽略，需确认返回值':
+          catalog.reason);
+        const btn=sheet.querySelector('[data-action="qualityApply"]');
+        if(btn)btn.disabled=!catalog.choices.length;
+      }catch(error){text('qualityTip','读取档位失败：'+error.message);}
+    }
     function makePanel(){
       if(sheet?.isConnected)return;
       backdrop=document.createElement('div');backdrop.id='hmtc-yt-backdrop';
@@ -828,10 +915,15 @@
         '<button type="button" data-action="ratePreset" data-rate="1.75">1.75×</button>',
         '<button type="button" data-action="ratePreset" data-rate="2">2×</button></div>',
         '<div class="row"><label>当前画质</label>',
-        '<span class="quality" data-id="quality">—</span>',
-        '<button type="button" data-action="quality">打开画质设置</button></div>',
+        '<span class="quality" data-id="quality">—</span></div>',
+        '<div class="row"><label>目标画质</label>',
+        '<select data-id="qualitySelect" aria-label="选择视频画质">',
+        '<option value="">加载中…</option></select></div>',
+        '<div class="row"><button data-action="qualityApply">应用画质</button>',
+        '<button data-action="qualityRefresh">刷新档位</button>',
+        '<button data-action="quality">原生设置</button></div>',
         '<div class="hmtc-yt-quality-tip" data-id="qualityTip">',
-        '使用 YouTube 原生画质设置；若当前手机版不提供齿轮，请切换浏览器「桌面版网站」。',
+        '优先使用网页播放器内部画质接口，应用后核验结果。原生设置是后备路径。',
         '</div>',
         '<div class="row"><button data-action="mute" data-id="mute">🔊</button>',
         '<input type="range" data-id="slider" min="0" max="100" step="1">',
@@ -875,6 +967,25 @@
         if(!action)return;
         if(action==='close'){close();return;}
         try{
+
+          if(action==='qualityRefresh'){
+            await refreshQualityChoices();return;
+          }
+          if(action==='qualityApply'){
+            const selected=sheet.querySelector('[data-id="qualitySelect"]')?.value;
+            if(!selected)return;
+            const btn=e.target.closest('button[data-action]');
+            btn.disabled=true;
+            try{
+              const result=await controls.setQuality(selected);
+              text('qualityTip',result.message);
+              text('hint',result.message);
+              refreshSheet();setTimeout(refreshSheet,700);
+            }catch(error){
+              text('qualityTip','画质切换失败：'+error.message);
+            }finally{btn.disabled=false;}
+            return;
+          }
           if(action==='quality'){
             try{
               const result=await openYoutubeNativeQuality();
@@ -917,6 +1028,7 @@
       makePanel();sheet.hidden=false;backdrop.hidden=false;
       bandwidth.start();
       refreshSheet();
+      refreshQualityChoices();
     }
     function toastVolume(n){
       if(!toast?.isConnected){toast=document.createElement('div');
@@ -1037,6 +1149,14 @@
     }
     document.addEventListener('hmtc:corner-hud-change',refresh);
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
+    GM_registerMenuCommand('YouTube：画质接口诊断',async()=>{
+      const c=await controls.qualityOptions();
+      alert(['YouTube 画质诊断 · v0.6.8','可用方式：'+c.method,
+        '真实档位：'+(c.enumerated?'已读取':'未公开'),
+        '当前报告：'+(c.selected||'未知'),
+        '档位：'+(c.choices.map(x=>x.label).join('、')||'无'),
+        c.reason||'切换后需核对播放器反馈'].join('\n'));
+    });
     GM_registerMenuCommand('YouTube：连接速度诊断',()=>{
       const info=bandwidth.diagnose();
       alert([
@@ -1372,7 +1492,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.7', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.8', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -3448,7 +3568,7 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.7 说明',()=>
+    GM_registerMenuCommand('Touch Controls v0.6.8 说明',()=>
       alert('v0.6.7：播放画面左上角可轻点切换时间、原生连接速度、同时显示或隐藏为小入口；保留 v0.6.6 的时间、测速修复和原有手势、倍速、智能自动播放。'));
 
     installBridge();
