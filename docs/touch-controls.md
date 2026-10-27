@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.9 精简面板与画质即选即切
+# Holodex / YouTube Touch Controls — v0.6.10 画质与倍速五列对齐
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 v0.6.9](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装／更新 v0.6.10](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -11,10 +11,18 @@
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
 
+## v0.6.10：画质与倍速同款按钮布局
+
+1. **普通 YouTube**：播放速度和画质都采用每行五列、等宽等高的按钮，当前播放器实际确认的档位显示选中态。点击清晰度按钮立即请求切换，不再使用下拉框。
+2. **Holodex 多视图**：统计面板尝试通过已存在的跨域 iframe 通信请求 `qualityOptions` 和 `selectQuality`，采用同一五列按钮样式；若手机浏览器没有给内嵌页面注入权限，则自动显示「在 YouTube 调整画质」链接。
+3. **档位**：只列出播放器报告的画质或明确标注“尝试”的档位；不提供 144p，超过五档自动换行。成功会高亮对应档位，不确认时不假装切换成功。
+4. **精简数据**：连接速度数字不再有 `≈`，缓冲时间标题不再标「（估计）」，分辨率不再附加「实际帧」，Holodex 顶部冗余英文提示同步删除。数据采集与计算方式未改变；如果网络速度是前 6 秒内缓存的实际样本，仍显示简短的「上次」。
+5. **验证**：已通过整份脚本语法编译、模拟普通 YouTube 与 Holodex 画质列表、按钮选择事件、选中态和五列布局检查。v0.6.8 的网页画质方法曾由用户实测成功；**v0.6.10 Holodex 内嵌画质按钮仍未经真实安卓多视图验证**。
+
 ## v0.6.9：紧凑信息区，画质选择后立即生效
 
 - **节省面板空间**：普通 YouTube 和 Holodex Multiview 的播放时间、连接速度数值下方不再显示长段辅助说明；同时压缩卡片间距与内边距。连接速度如采用 6 秒内旧样本，会在数字旁紧凑显示「上次」提示，不误认为实时值。
-- **画质仅保留一行**：普通 YouTube 面板只显示「画质」下拉框，选择 1080p/720p 等档位即向当前播放器发送切换请求，无需额外确认按钮；不再显示「应用画质」「刷新档位」「原生设置」三个按钮。
+- **v0.6.9 历史版画质下拉框**：当时普通 YouTube 通过下拉框选择档位立即请求切换；在 v0.6.10 已替换为五列快捷按钮，无需额外确认。
 - **不提供 144p**：画质档位过滤 `tiny/144p`，其他档位依实际视频支持情况决定。播放器未返回当前档位时，下拉框默认为「请选择画质」，不擅自选择最高画质。
 - **结果可见且不占常驻空间**：切换中显示短暂提示；成功后反馈自动隐藏，未确认或失败时保留提示。播放倍速等操作的状态说明亦只临时显示。
 - **旧版实测依据**：此前 v0.6.8 内部画质 API 切换在用户安卓浏览器上成功；v0.6.9 的即选即切事件与面板排版调整通过代码语法和模拟交互测试，设备 UI 仍需后续日常使用观察。
