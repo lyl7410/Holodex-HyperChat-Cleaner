@@ -212,8 +212,15 @@
       return n?Number(n[0]):null;
     };
     function parse(raw){
-      const obj=raw&&typeof raw==='object'?raw:{};
+      // Some player builds return debug objects as serialized JSON instead
+      // of a native object. Parse both without inventing measurements.
+      let decoded=raw;
+      if(typeof raw==='string'&&raw.trim().startsWith('{')){
+        try{decoded=JSON.parse(raw);}catch{}
+      }
+      const obj=decoded&&typeof decoded==='object'?decoded:{};
       const nested=obj.stats&&typeof obj.stats==='object'?obj.stats:{};
+      const extra=obj.data&&typeof obj.data==='object'?obj.data:{};
       const string=typeof raw==='string'?raw:'';
       const first=(...candidates)=>{
         for(const entry of candidates){
@@ -226,10 +233,14 @@
       // guarantee units, so never treat it as a network-speed measurement.
       const keys=['bandwidth_kbps','bandwidthKbps','connection_speed_kbps',
         'connectionSpeedKbps','connection_speed_in_kbps','connectionSpeedInKbps'];
-      const keyValues=keys.flatMap(k=>[obj[k],nested[k]]);
-      const regex=/(?:Connection\s*Speed|连接速度|連線速度|接続速度)\s*[:：]?\s*([\d,.]+)\s*(?:Kbps|kb\/s|kbps)/i;
+      const keyValues=keys.flatMap(k=>[obj[k],nested[k],extra[k]]);
+      const regex=/(?:Connection\s*Speed|连接速度|連線速度|接続速度)\s*[:：]?\s*([\d,.]+)\s*(Kbps|kb\/s|Mbps|Mb\/s|Gbps)\b/i;
       const fromString=string.match(regex);
-      const bandwidthKbps=first(...keyValues,fromString?.[1]);
+      const count=fromString?asNumber(fromString[1]):null;
+      const unit=String(fromString?.[2]||'').toLowerCase();
+      const scale=unit.startsWith('g')?1000000:
+        unit.startsWith('m')?1000:1;
+      const bandwidthKbps=first(...keyValues,count!=null?count*scale:null);
       return {bandwidthKbps};
     }
     function read(){
@@ -270,151 +281,6 @@
         sampledAt:Date.now()};
     }
     return {start,stop,read};
-  }
-
-  // The same on-demand YouTube diagnostics strategy that works in Holodex
-  // needs to run on ordinary watch pages as well. Merely calling
-  // getStatsForNerdsData() once is insufficient: on many player builds,
-  // bandwidth data is generated only while native Stats for nerds is ON.
-  function youtubeConnectionStats(pageDoc,getPlayer){
-    const CSS_CLASS='hmtc-watch-native-stats-silent';
-    let observed=null,active=false,forced=false,originalVisible=false;
-    let lastRearmAt=0,startedAt=0;
-    const asPositiveNumber=value=>{
-      if(value===null||value===undefined||value==='')return null;
-      const n=typeof value==='number'?value:
-        Number(String(value).replace(/,/g,'').trim());
-      return Number.isFinite(n)&&n>0?n:null;
-    };
-    const panel=()=>pageDoc.querySelector('.html5-video-info-panel-content')||
-      pageDoc.querySelector('.ytp-stats-for-nerds');
-    function nativeVisible(player){
-      try{
-        if(typeof player?.isVideoInfoVisible==='function')
-          return !!player.isVideoInfoVisible();
-      }catch{}
-      return null;
-    }
-    function ensureStyle(){
-      if(pageDoc.getElementById('hmtc-watch-stats-hidden-style'))return;
-      const style=pageDoc.createElement('style');
-      style.id='hmtc-watch-stats-hidden-style';
-      const nonce=pageDoc.querySelector('style[nonce],script[nonce]')?.nonce;
-      if(nonce)style.nonce=nonce;
-      style.textContent='html.'+CSS_CLASS+
-        ' .html5-video-info-panel,html.'+CSS_CLASS+
-        ' .ytp-stats-for-nerds{opacity:0!important;pointer-events:none!important;'+
-        'transition:none!important;}';
-      (pageDoc.head||pageDoc.documentElement).appendChild(style);
-    }
-    function silent(enabled){
-      if(enabled)ensureStyle();
-      pageDoc.documentElement.classList.toggle(CSS_CLASS,!!enabled);
-    }
-    function parse(raw,includePanel=false){
-      // Only values with explicit bandwidth units are considered.
-      // Network Activity and stream bitrate are NOT Connection Speed.
-      let data=raw,parts='';
-      if(typeof raw==='string'){
-        parts=raw;
-        if(raw.trim().startsWith('{')){
-          try{data=JSON.parse(raw);}catch{}
-        }
-      }
-      const candidate=[];
-      const obj=data&&typeof data==='object'?data:null;
-      for(const o of [obj,obj?.stats,obj?.data,obj?.videoStats]){
-        if(!o||typeof o!=='object')continue;
-        for(const key of ['bandwidth_kbps','bandwidthKbps',
-          'connection_speed_kbps','connectionSpeedKbps']){
-          const value=asPositiveNumber(o[key]);
-          if(value!=null)candidate.push({kbps:value,source:key});
-        }
-      }
-      if(candidate.length)return candidate[0];
-      if(includePanel)parts+='\n'+String(panel()?.textContent||'');
-      // Native panel versions use Connection Speed 1234 Kbps,
-      // 12.3 Mbps, or localized labels. Interpret units explicitly.
-      const match=parts.match(
-        /(?:Connection\s*Speed|连接速度|連線速度|接続速度)\s*[:：]?\s*([\d,.]+)\s*(Kbps|kb\/s|Mbps|Mb\/s|Gbps)\b/i);
-      if(!match)return null;
-      const quantity=asPositiveNumber(match[1]);
-      if(quantity==null)return null;
-      const units=match[2].toLowerCase();
-      const multiplier=units.startsWith('g')?1e6:
-        units.startsWith('m')?1000:1;
-      return {kbps:quantity*multiplier,source:includePanel?'native-panel':'debug-text'};
-    }
-    function start(){
-      const p=getPlayer();
-      if(!p)return {active:false,reason:'播放器尚未就绪'};
-      if(active&&observed===p){
-        // YouTube can silently reset its statistics state on a new video,
-        // even when the actual player DOM node is reused in an SPA.
-        if(forced&&nativeVisible(p)===false&&
-           Date.now()-lastRearmAt>3000&&
-           typeof p.showVideoInfo==='function'){
-          lastRearmAt=Date.now();
-          silent(true);
-          try{p.showVideoInfo();}catch{}
-        }
-        return {active:true,forced};
-      }
-      if(active)stop();
-      observed=p;active=true;forced=false;
-      startedAt=Date.now();lastRearmAt=startedAt;
-      const previouslyShown=nativeVisible(p);
-      originalVisible=previouslyShown===true;
-      if(previouslyShown===false&&typeof p.showVideoInfo==='function'){
-        try{
-          silent(true); // Hide before YouTube starts painting its diagnostics.
-          p.showVideoInfo();
-          forced=true;
-        }catch{
-          forced=false;silent(false);
-        }
-      }
-      return {active:true,forced,originalVisible};
-    }
-    function read(){
-      const p=getPlayer();
-      if(!p)return {kbps:null,source:'none',reason:'播放器尚未就绪'};
-      if(active&&observed!==p)start();
-      let value=null;
-      for(const [method,args] of [
-        ['getStatsForNerdsData',[]],['getStatsForNerds',[]],
-        ['getStatsForNerds',[0]],['getDebugText',[]]
-      ]){
-        if(typeof p[method]!=='function')continue;
-        try{
-          const found=parse(p[method](...args));
-          if(found){value={...found,source:method};break;}
-        }catch{}
-      }
-      const nativeEnabled=nativeVisible(p)===true;
-      if(nativeEnabled){
-        const fromPanel=parse(null,true);
-        // Native DOM can be fresher than a method's cached result.
-        if(fromPanel)value=fromPanel;
-      }
-      return value||{
-        kbps:null,source:'unavailable',
-        reason:!active?'原生统计监测未启动':
-          !nativeEnabled?'播放器未开放连接速度数据（统计面板未激活）':
-          '原生统计已开启，但尚未提供带宽值'
-      };
-    }
-    function stop(){
-      if(forced&&observed&&typeof observed.hideVideoInfo==='function'){
-        try{observed.hideVideoInfo();}catch{}
-      }
-      silent(false);
-      observed=null;active=false;forced=false;originalVisible=false;
-      lastRearmAt=0;startedAt=0;
-    }
-    return {start,read,stop,state:()=>({
-      active,forced,originalVisible,startedAt,sourcePlayer:observed
-    })};
   }
 
   // YouTube's own watch/live/shorts interface: no Holodex Vue bridge and no
