@@ -52,7 +52,7 @@
     button.className='hmtc-corner-hud';
     button.title='轻点切换：时间 → 连接速度 → 同时 → 隐藏';
     button.setAttribute('aria-label','切换视频左上角信息');
-    button.textContent='◷ —';
+    button.textContent='—';
     button.addEventListener('click',e=>{
       e.preventDefault();e.stopPropagation();cycleHudMode();
     });
@@ -66,24 +66,31 @@
     button.classList.toggle('hmtc-hud-off',mode==='off');
     button.setAttribute('aria-label',mode==='off'?'显示左上角信息':
       '切换左上角信息（目前'+({time:'播放时间',speed:'连接速度',both:'两项'}[mode])+'）');
-    button.textContent=mode==='off'?'◷':
-      mode==='time'?'◷ '+(time||'—'):
-      mode==='speed'?'⇣ '+(speed||'—'):
-      '◷ '+(time||'—')+'\n⇣ '+(speed||'—');
+    button.textContent=mode==='off'?'···':
+      mode==='time'?(time||'—'):
+      mode==='speed'?(speed||'—'):
+      (time||'—')+'\n'+(speed||'—');
   }
   GM_addStyle([
     '.hmtc-corner-hud{position:fixed!important;z-index:2147482700!important;',
     'display:block!important;box-sizing:border-box!important;max-width:240px;',
-    'border:1px solid #d2efff4d!important;border-radius:8px!important;',
-    'padding:4px 7px!important;margin:0!important;',
-    'background:#101a27db!important;color:#f2fbff!important;',
-    'font:650 12px/1.35 system-ui,-apple-system,sans-serif!important;',
+    'border:0!important;border-radius:5px!important;',
+    'padding:3px 5px!important;margin:0!important;',
+    'background:rgba(12,20,30,.40)!important;color:#f2fbff!important;',
+    'font:550 11px/1.3 system-ui,-apple-system,sans-serif!important;',
     'font-variant-numeric:tabular-nums!important;white-space:pre-line!important;',
     'text-align:left!important;overflow:hidden!important;text-overflow:ellipsis!important;',
-    'box-shadow:0 2px 8px #0007!important;-webkit-tap-highlight-color:transparent;',
+    'box-shadow:none!important;text-shadow:0 1px 2px #0009;',
+    '-webkit-tap-highlight-color:transparent;opacity:.68!important;',
+    'transition:opacity .18s ease!important;',
     'touch-action:manipulation!important;pointer-events:auto!important;cursor:pointer!important}',
-    '.hmtc-corner-hud.hmtc-hud-off{width:27px!important;min-width:27px!important;',
-    'height:27px!important;padding:3px!important;text-align:center!important;opacity:.72}',
+    '.hmtc-corner-hud:hover,.hmtc-corner-hud:focus-visible,.hmtc-corner-hud:active{',
+    'opacity:.96!important}',
+    '.hmtc-corner-hud.hmtc-hud-off{width:24px!important;min-width:24px!important;',
+    'height:20px!important;padding:1px 2px!important;',
+    'text-align:center!important;opacity:.33!important}',
+    '.hmtc-corner-hud.hmtc-hud-off:hover,.hmtc-corner-hud.hmtc-hud-off:focus-visible,',
+    '.hmtc-corner-hud.hmtc-hud-off:active{opacity:.85!important}',
     '.hmtc-corner-hud[hidden]{display:none!important}'
   ].join(''));
   // Common touch-sized, fixed rate presets shown on Holodex and YouTube.
@@ -651,7 +658,7 @@
         bandwidth.start();
         const net=bandwidth.read();
         if(net.available)
-          speed='≈'+(net.bandwidthKbps/1000).toFixed(2)+' Mbps'+
+          speed=(net.bandwidthKbps/1000).toFixed(2)+' Mbps'+
             (net.stale?' (上次)':'');
       }else if(!sheet||sheet.hidden)bandwidth.stop();
       displayCornerHud(watchHud,time,speed);
@@ -3284,11 +3291,11 @@
     const now=Date.now();
     if(Number.isFinite(kbps)&&kbps>0){
       cell.lastSpeed={kbps,at:now};
-      return '≈'+(kbps/1000).toFixed(2)+' Mbps';
+      return (kbps/1000).toFixed(2)+' Mbps';
     }
     const last=cell.lastSpeed;
     return last&&now-last.at>=0&&now-last.at<=6000?
-      '≈'+(last.kbps/1000).toFixed(2)+' Mbps (上次)':'—';
+      (last.kbps/1000).toFixed(2)+' Mbps (上次)':'—';
   }
   async function pollCornerHuds(){
     if(hudBusy||!installed||!isMulti()||document.hidden)return;
