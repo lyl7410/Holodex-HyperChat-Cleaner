@@ -324,7 +324,24 @@
           'YouTube 当前尚未提供实时 Connection Speed 数值':'',
         sampledAt:Date.now()};
     }
-    return {start,stop,read};
+    function diagnose(){
+      const p=getPlayer();
+      const methods=['getStatsForNerds','getStatsForNerdsData',
+        'getDebugText','showVideoInfo','isVideoInfoVisible']
+        .filter(name=>typeof p?.[name]==='function');
+      const panels=[...(pageDoc.querySelectorAll?.(
+        '.html5-video-info-panel, .html5-video-info-panel-content,'+
+        ' .ytp-stats-for-nerds')||[])];
+      return {
+        playerReady:!!p,
+        methods,
+        nativePanelFound:panels.length>0,
+        visibility:playerInfoVisible(p),
+        monitoring:monitor.active,
+        ...read()
+      };
+    }
+    return {start,stop,read,diagnose};
   }
 
   // HTMLMediaElement.duration is often a rolling DVR-window length for
@@ -867,6 +884,20 @@
       }
     }
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
+    GM_registerMenuCommand('YouTube：连接速度诊断',()=>{
+      const info=bandwidth.diagnose();
+      alert([
+        '连接速度诊断 · v0.6.5',
+        '播放器：'+(info.playerReady?'已识别':'未识别'),
+        '原生统计接口：'+(info.methods.join('、')||'未开放'),
+        '原版统计面板：'+(info.nativePanelFound?'已发现':'未发现'),
+        '统计采集：'+(info.monitoring?'开启':'未开启'),
+        '当前读取：'+(info.available?
+          (info.bandwidthKbps/1000).toFixed(2)+' Mbps':'无数值'),
+        '数据来源：'+(info.source||'—'),
+        info.available?'':('原因：'+(info.reason||'YouTube 未返回连接速度'))
+      ].filter(Boolean).join('\n'));
+    });
     GM_registerMenuCommand('YouTube：启用／禁用透明触控区',()=>{
       const next=!setting(enabledKey,true);GM_setValue(enabledKey,next);refresh();
       alert('YouTube 边缘触控区已'+(next?'启用':'关闭'));
