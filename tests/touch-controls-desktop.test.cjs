@@ -98,7 +98,7 @@ test('actual mouse entry overrides incorrect coarse reports without cancelling i
 test('YouTube panel opens with no full-screen mouse blocker and closes cleanly',()=>{
   for(const touch of [false,true]){
     const ctx=vm.createContext({supported:()=>true,p:()=>({}),makePanel(){},
-      sheet:{hidden:true},backdrop:{hidden:true},touchZonesAllowed:()=>touch,desktopMountAllowed:()=>true,presentPanel(){},
+      sheet:{hidden:true},backdrop:{hidden:true},touchZonesAllowed:()=>touch,desktopMountAllowed:()=>true,desktopVideoAnchor:()=>null,presentPanel(){},
       bandwidth:{start(){},stop(){}},hudWantsSpeed:()=>false,
       refreshSheet(){},refreshQualityChoices(){}});
     const yt=source.slice(0,source.indexOf('  // Run a minimal, read-only stats bridge'));
@@ -218,7 +218,7 @@ function desktopEnv(){
   const parent={postMessage:(m,o)=>sent.push({m,o})};
   const ctx=vm.createContext({document,window:{parent,addEventListener(){}},
     GM_addStyle:s=>styles.push(s),touchZonesAllowed:()=>false,innerWidth:1000,innerHeight:800,
-    Date,Map,Number,Math});
+    Date,Map,Number,Math,URL,location:{ancestorOrigins:[]},setInterval:()=>1,clearInterval(){}});
   vm.runInContext(desktopSource,ctx);
   const fire=(name,event)=>{for(const handler of handlers.get(name)||[])handler(event);};
   return {ctx,handlers,fire,sent,styles,parent,document};
@@ -301,4 +301,40 @@ test('parent validates frame origin, window and coordinates, then opens correct 
   send({}, {origin:'https://evil.example'});send({}, {source:{}});send({videoId:'zyxwvutsrqp'});send({x:NaN});send({x:1.01});assert.equal(opened.length,0);
   send();assert.equal(opened[0].r,row);assert.equal(opened[0].p.x,750);assert.equal(opened[0].p.y,200);
   ctx.rowMap.clear();send();assert.equal(opened.length,1);
+});
+
+test('embedded body-level controls portal is eligible while unrelated outside targets and buttons are excluded',()=>{
+  const {ctx}=desktopEnv();const p=testPlayer();p.id='movie_player';p.contains=()=>false;
+  const portalTarget={closest:selector=>selector==='#player-controls,.ytPlayerControlsContainerHost'?{}:null};
+  assert.ok(ctx.desktopContextPoint(contextEvent(300,200,{target:portalTarget}),p));
+  assert.equal(ctx.desktopContextPoint(contextEvent(300,200,{target:{closest:()=>null}}),p),null);
+  assert.equal(ctx.desktopContextPoint(contextEvent(300,200,{target:{closest:()=>({})}}),p),null);
+  p.id='other-player';assert.equal(ctx.desktopContextPoint(contextEvent(300,200,{target:portalTarget}),p),null);
+});
+test('video-centered panel stays centered as content and video bounds change and clamps only at viewport edges',()=>{
+  const {ctx}=desktopEnv();let rect={left:200,top:100,width:600,height:400};
+  const video={isConnected:true,getBoundingClientRect:()=>rect};let height=300;
+  const panel={hidden:false,classList:{toggle(){}},style:{},getBoundingClientRect:()=>({width:320,height})};
+  ctx.presentPanel(panel,ctx.desktopVideoAnchor(video));assert.equal(panel.style.left,'340px');assert.equal(panel.style.top,'150px');
+  height=400;ctx.positionDesktopPanel(panel);assert.equal(panel.style.top,'100px');
+  rect={left:0,top:0,width:300,height:200};ctx.desktopPanelReflow();
+  assert.equal(panel.style.left,'8px');assert.equal(panel.style.top,'8px');
+});
+test('iframe announces readiness before configuration, then retries after an expired lease',()=>{
+  const {ctx,document,parent,sent}=desktopEnv();document.referrer='https://holodex.net/multiview';
+  let timer,now=10000;ctx.Date={now:()=>now};ctx.setInterval=fn=>{timer=fn;return 1;};
+  const bridge=ctx.installDesktopFrameBridge('abcdefghijk',testPlayer,new Set(['https://holodex.net']));
+  assert.equal(sent[0].m.type,'ready');assert.equal(bridge.status().paired,false);
+  bridge.configure({source:parent,origin:'https://holodex.net'},{videoId:'abcdefghijk',enabled:true});
+  timer();assert.equal(sent.length,1);now+=5001;timer();assert.equal(sent.length,2);assert.equal(sent.at(-1).m.type,'ready');
+  assert.equal(bridge.status().paired,false);
+});
+test('parent replies to validated iframe readiness without depending on list refresh',()=>{
+  const {ctx}=desktopEnv(),config=[];const origin='https://www.youtube.com',win={postMessage:(m,o)=>config.push({m,o})};
+  const row={videoId:'abcdefghijk',layoutId:'1'};
+  Object.assign(ctx,{YT_ORIGINS:new Set([origin]),rowMap:new Map([['1:abcdefghijk',row]]),isMulti:()=>true,
+    nativeFrame:()=>({frame:{contentWindow:win},origin}),NATIVE_TAG:'hmtc-youtube-stats-v1',nativeSequence:0});
+  vm.runInContext(section('  function configureDesktopFrame(row){',"  window.addEventListener('message',event=>{"),ctx);
+  ctx.receiveDesktopFrameMessage({origin,source:win,data:{tag:'hmtc-desktop-panel-v1',type:'ready',videoId:row.videoId}});
+  assert.equal(config[0].m.action,'desktopPanelConfig');assert.equal(config[0].m.enabled,true);assert.equal(config[0].o,origin);
 });

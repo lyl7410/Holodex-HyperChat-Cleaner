@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.14 PC 中央右键与紧凑浮动面板
+# Holodex / YouTube Touch Controls — v0.6.15 多视图右键恢复与视频居中面板
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 v0.6.14](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装／更新 v0.6.15](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,18 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.15：多视图右键恢复与视频居中
+
+- **用户反馈**：普通 YouTube 能打开，Holodex 多视图中央右键仍显示原生菜单；希望面板显示在当前视频中间，而不是鼠标旁。
+- **事件兼容**：真实 YouTube 内嵌页面可观察到位于 movie_player 外部、同一文档中的 player-controls / ytPlayerControlsContainerHost 控制层。v0.6.14 强制要求事件目标属于 movie_player，导致这类右键被跳过。现在对当前 movie_player 的这两种已知外部控制层放行，仍检查视频几何范围、中央 2/3 宽度、修饰键与控件排除；不接管任意播放器外元素，原生对话框也排除。
+- **配对恢复**：iframe 加载时、配对过期后及用户再次进入画面时主动请求可信父页面配置。父页面为当前 iframe 独立续期，不再依赖 Vue 视频列表请求结束；切回页面立即续期。仍验证父页面来源、当前 iframe 来源／窗口和视频身份，保留 5 秒租约及显式禁用；缺少注入／配对时不吞原生右键。
+- **视频居中**：普通 YouTube 使用当前播放器边界，多视图使用对应 iframe／视频格子边界，将 320px 面板的中心对齐视频中心。面板比视频高时允许超出视频区域，但不超出浏览器视口；靠窗口边缘只做贴边防溢出，不再翻到鼠标上方或左侧。内容高度、视频布局、窗口和滚动变化时重新居中。设置面板沿用当前视频的中心。
+- **诊断入口**：脚本管理器菜单新增「诊断多视图右键面板」。显示每格 iframe 的脚本版本、是否配对／启用和最后一次右键的判断结果；无响应或旧版会说明刷新与 iframe 权限要求。无常驻按钮或透明覆盖层。
+- **验证**：语法检查与 **27 项 Node 回归测试通过**。新增外部控制层命中／普通元素与控件排除、居中及尺寸变化、主动配对／租约过期重试、父页面独立配置响应。本地双端口跨源 iframe 测试页通过测试按钮在 iframe 文档内派发 contextmenu，已验证实际跨源消息链路、A/B 格子切换和居中（中心误差小于 0.02 CSS 像素）；普通页本地直接右键居中通过。
+- **验证限制**：测试按钮派发事件不等同于真实鼠标右键实机验收。浏览器自动化仍无法直接点击跨源 iframe；远程 YouTube embed 检查遇到错误 153，未完成真实视频播放环境验收。需要在用户安装版中再次确认多视图右键恢复。
+
+请安装 **v0.6.15**，确认只启用一份脚本并完整刷新 Holodex 多视图，使内嵌视频也加载新版。若仍显示 YouTube 原生菜单，打开「诊断多视图右键面板」，在右键后把诊断文字提供给维护者；这可区分 iframe 没有加载脚本、旧版本、未配对或事件目标不匹配。
 
 ## v0.6.14：PC 中央右键与紧凑浮动面板
 

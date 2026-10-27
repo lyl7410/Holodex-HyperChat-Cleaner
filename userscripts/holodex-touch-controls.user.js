@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.14
-// @description  PC 视频中央右键打开鼠标旁紧凑面板，无常驻统计按钮；保留触屏手势、画质、HUD 与自动播放。
+// @version      0.6.15
+// @description  PC 视频中央右键打开居中紧凑面板，修复内嵌控制层与配对恢复；保留触屏手势、画质、HUD 与自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -60,7 +60,7 @@
   // restore the display without opening the settings sheet.
   const DESKTOP_TAG='hmtc-desktop-panel-v1';
   const DESKTOP_EXCLUDE='button,a,input,select,textarea,[contenteditable]:not([contenteditable="false"]),'+
-    '[role="button"],[role="slider"],.ytp-chrome-top,.ytp-chrome-bottom,.ytp-popup,'+
+    '[role="button"],[role="slider"],[role="dialog"],.ytp-chrome-top,.ytp-chrome-bottom,.ytp-popup,'+
     '.ytp-settings-menu,.ytp-contextmenu,.ytp-panel,.ytp-ce-element,.ytp-progress-bar-container,'+
     '.html5-video-info-panel,.html5-video-info-panel-content,.ytp-stats-for-nerds,'+
     '.hmtc-corner-hud,#hmtc-sheet,#hmtc-settings,#hmtc-yt-panel';
@@ -69,10 +69,22 @@
   function desktopMountAllowed(){
     return !['IFRAME','VIDEO'].includes(document.fullscreenElement?.tagName);
   }
+  function desktopVideoAnchor(element){
+    if(!element)return null;
+    const r=element.getBoundingClientRect();
+    return {x:r.left+r.width/2,y:r.top+r.height/2,center:true,element};
+  }
+  function desktopVideoTarget(target,player){
+    if(player.contains(target))return true;
+    // New embedded-player controls can live in a body-level sibling portal.
+    // Only accept this known portal for the current movie_player, never a
+    // generic outside element; the geometric and control exclusions still run.
+    return player.id==='movie_player'&&!!target?.closest?.('#player-controls,.ytPlayerControlsContainerHost');
+  }
   function desktopContextPoint(event,player){
     if(touchZonesAllowed()||event.button!==2||event.ctrlKey||event.altKey||
        event.shiftKey||event.metaKey||!player||!desktopMountAllowed()||
-       event.target?.closest?.(DESKTOP_EXCLUDE)||!player.contains(event.target))return null;
+       event.target?.closest?.(DESKTOP_EXCLUDE)||!desktopVideoTarget(event.target,player))return null;
     const r=player.getBoundingClientRect();
     if(!(r.width>0&&r.height>0))return null;
     const x=(event.clientX-r.left)/r.width,y=(event.clientY-r.top)/r.height;
@@ -81,10 +93,10 @@
   }
   function desktopPanelCoordinates(anchor,width,height,viewportWidth,viewportHeight){
     const gap=8,offset=10;
-    let x=anchor?anchor.x+offset:(viewportWidth-width)/2;
-    let y=anchor?anchor.y+offset:(viewportHeight-height)/2;
-    if(anchor&&x+width>viewportWidth-gap)x=anchor.x-offset-width;
-    if(anchor&&y+height>viewportHeight-gap)y=anchor.y-offset-height;
+    let x=anchor?(anchor.center?anchor.x-width/2:anchor.x+offset):(viewportWidth-width)/2;
+    let y=anchor?(anchor.center?anchor.y-height/2:anchor.y+offset):(viewportHeight-height)/2;
+    if(anchor&&!anchor.center&&x+width>viewportWidth-gap)x=anchor.x-offset-width;
+    if(anchor&&!anchor.center&&y+height>viewportHeight-gap)y=anchor.y-offset-height;
     return {x:Math.max(gap,Math.min(viewportWidth-gap-width,x)),
       y:Math.max(gap,Math.min(viewportHeight-gap-height,y))};
   }
@@ -92,7 +104,9 @@
     const state=desktopPanels.get(panel);
     if(!state||panel.hidden)return;
     const r=panel.getBoundingClientRect();
-    const point=desktopPanelCoordinates(state.anchor,r.width,r.height,innerWidth,innerHeight);
+    const anchor=state.anchor?.center&&state.anchor.element?.isConnected?
+      desktopVideoAnchor(state.anchor.element):state.anchor;
+    const point=desktopPanelCoordinates(anchor,r.width,r.height,innerWidth,innerHeight);
     panel.style.left=point.x+'px';panel.style.top=point.y+'px';
   }
   function presentPanel(panel,anchor){
@@ -107,7 +121,7 @@
     }
     // Menu managers pass a click event; only explicit x/y points are anchors.
     const point=anchor&&Number.isFinite(anchor.x)&&Number.isFinite(anchor.y)?
-      {x:anchor.x,y:anchor.y}:desktopLastPoint;
+      {x:anchor.x,y:anchor.y,center:anchor.center===true,element:anchor.element}:desktopLastPoint;
     desktopPanels.set(panel,{anchor:point?{...point}:null});
     if(!panel._hmtcSizeObserver&&typeof ResizeObserver==='function'){
       panel._hmtcSizeObserver=new ResizeObserver(()=>positionDesktopPanel(panel));
@@ -129,6 +143,7 @@
   window.addEventListener('resize',desktopPanelReflow,{passive:true});
   window.visualViewport?.addEventListener('resize',desktopPanelReflow,{passive:true});
   document.addEventListener('fullscreenchange',desktopPanelReflow);
+  document.addEventListener('scroll',desktopPanelReflow,{capture:true,passive:true});
   function installDesktopDismiss(dismiss){
     document.addEventListener('pointerdown',e=>{
       if(touchZonesAllowed()||e.button!==0||e.target?.closest?.(
@@ -174,36 +189,51 @@
     .hmtc-desktop-panel .setting label{font-size:12px!important;margin-bottom:4px!important}
   `);
   function installDesktopFrameBridge(videoId,getPlayer,allowedOrigins){
-    let config=null,lastMove=0;
+    let config=null,lastMove=0,lastHello=0,lastContext='尚未收到右键';
     const paired=()=>config&&Date.now()<config.until;
+    const requestConfig=()=>{
+      const now=Date.now();if(now-lastHello<500)return;lastHello=now;
+      let origin=null;
+      try{origin=new URL(document.referrer).origin;}catch{}
+      if(!allowedOrigins.has(origin))origin=location.ancestorOrigins?.[0];
+      if(!allowedOrigins.has(origin))return;
+      window.parent.postMessage({tag:DESKTOP_TAG,type:'ready',videoId},origin);
+    };
     const send=(type,point)=>{
       if(!paired())return;
       window.parent.postMessage({tag:DESKTOP_TAG,type,videoId,
         ...(point?{x:point.x/innerWidth,y:point.y/innerHeight}:{})},config.origin);
     };
     document.addEventListener('contextmenu',event=>{
-      if(!paired()||!config.enabled||document.fullscreenElement)return;
+      if(!paired()){lastContext='未配对或租约过期';requestConfig();return;}
+      if(!config.enabled){lastContext='父页面未启用';return;}
+      if(document.fullscreenElement){lastContext='独立视频全屏';return;}
       const p=getPlayer();
       let actualId;try{actualId=p?.getVideoData?.()?.video_id;}catch{return;}
-      if(actualId&&actualId!==videoId)return;
+      if(actualId&&actualId!==videoId){lastContext='视频已切换';return;}
       const point=desktopContextPoint(event,p);
-      if(!point)return;
+      if(!point){lastContext='非中央画面或交互控件';return;}
+      lastContext='已发送打开请求';
       event.preventDefault();event.stopPropagation();send('open',point);
     },{capture:true});
     document.addEventListener('pointerdown',event=>{
+      if(!paired())requestConfig();
       if(config?.enabled&&event.button===0)send('dismiss');
     },{capture:true,passive:true});
     document.addEventListener('keydown',event=>{
       if(config?.enabled&&event.key==='Escape')send('escape');
     });
     document.addEventListener('pointerover',event=>{
-      if(event.pointerType==='mouse')send('mouse');
+      if(event.pointerType==='mouse'){if(!paired())requestConfig();send('mouse');}
     },{passive:true});
     document.addEventListener('pointermove',event=>{
       if(!config?.enabled||event.pointerType!=='mouse'||Date.now()-lastMove<200)return;
       lastMove=Date.now();send('move',{x:event.clientX,y:event.clientY});
     },{passive:true});
-    return {configure(event,message){
+    requestConfig();
+    const pairingTimer=setInterval(()=>{if(!paired())requestConfig();},1800);
+    window.addEventListener('pagehide',event=>{if(!event.persisted)clearInterval(pairingTimer);});
+    return {status:()=>({paired:!!paired(),enabled:config?.enabled===true,lastContext}),configure(event,message){
       if(event.source!==window.parent||!allowedOrigins.has(event.origin)||
          message.videoId!==videoId||typeof message.enabled!=='boolean')return false;
       config={origin:event.origin,enabled:message.enabled,until:Date.now()+5000};
@@ -1240,7 +1270,7 @@
     function open(anchor){
       if(!supported()||!p()||!desktopMountAllowed())return;
       makePanel();sheet.hidden=false;backdrop.hidden=!touchZonesAllowed();
-      presentPanel(sheet,anchor);
+      presentPanel(sheet,touchZonesAllowed()?anchor:desktopVideoAnchor(p()));
       bandwidth.start();
       refreshSheet();
       refreshQualityChoices();
@@ -1679,6 +1709,9 @@
           event.origin
         );
       };
+      if(message.action==='desktopPanelStatus'){
+        respond({ok:true,data:{version:'0.6.15',...desktopBridge.status()}});return;
+      }
       if(message.action==='desktopPanelConfig'){
         desktopBridge.configure(event,message);return;
       }
@@ -1734,7 +1767,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.14', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.15', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -2941,7 +2974,7 @@
     return null;
   }
   function nativeRequest(row,action,timeout=1800,extra={}) {
-    if(!['stats','nativeToggle','monitorStart','monitorStop',
+    if(!['stats','nativeToggle','monitorStart','monitorStop','desktopPanelStatus',
           'playbackClock','playbackInfo','playbackRate','qualityMenu',
           'qualityOptions','selectQuality'].includes(action))
       return Promise.reject(new Error('不支持的 YouTube 指令'));
@@ -2977,7 +3010,7 @@
   function receiveDesktopFrameMessage(event){
     const message=event.data;
     if(message?.tag!==DESKTOP_TAG||!YT_ORIGINS.has(event.origin))return false;
-    if(!['open','move','dismiss','escape','mouse'].includes(message.type)||!isMulti())return true;
+    if(!['open','move','dismiss','escape','mouse','ready'].includes(message.type)||!isMulti())return true;
     let matched=null;
     for(const row of rowMap.values()){
       if(row.videoId!==message.videoId)continue;
@@ -2985,6 +3018,7 @@
       if(target&&target.origin===event.origin&&target.frame.contentWindow===event.source){matched={row,...target};break;}
     }
     if(!matched)return true;
+    if(message.type==='ready'){configureDesktopFrame(matched.row);return true;}
     if(message.type==='mouse'){
       observeMouseInput({pointerType:'mouse'});configureDesktopFrame(matched.row);return true;
     }
@@ -3705,7 +3739,9 @@
       stopNativeCollector();
     active={layoutId:row.layoutId,videoId:row.videoId};
     sheet.hidden=false;
-    presentPanel(sheet,anchor);
+    const videoFrame=nativeFrame(row)?.frame||
+      document.querySelectorAll('.multiview .mv-cell > .cell-content')[row.index]?.querySelector('.mv-frame');
+    presentPanel(sheet,touchZonesAllowed()?anchor:desktopVideoAnchor(videoFrame));
     if(backdrop)backdrop.hidden=!touchZonesAllowed();
     field('title',row.title||row.videoId);
     field('note','');
@@ -3893,6 +3929,21 @@
     GM_registerMenuCommand('左上角信息：切换时间／速度／隐藏',cycleHudMode);
     setInterval(pollCornerHuds,2200);
     window.addEventListener('pagehide',clearHudCells,{passive:true});
+    setInterval(()=>{
+      if(isMulti()&&!document.hidden)for(const row of rowMap.values())configureDesktopFrame(row);
+    },1800);
+    GM_registerMenuCommand('诊断多视图右键面板',async()=>{
+      const rows=[...rowMap.values()];
+      if(!rows.length)return alert('尚未识别多视图视频，请刷新页面后重试。');
+      const reports=await Promise.all(rows.map(async row=>{
+        try{
+          const d=await nativeRequest(row,'desktopPanelStatus',1800);
+          return (row.title||row.videoId).slice(0,36)+'：iframe '+d.version+
+            '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
+        }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
+      }));
+      alert('右键面板诊断 · v0.6.15\n'+reports.join('\n'));
+    });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
     GM_registerMenuCommand('诊断多视图自动播放状态',diagnoseAutoPlay);
@@ -3956,8 +4007,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.14 说明',()=>
-      alert('v0.6.14：PC 在视频中央 2/3 宽度内右键打开鼠标旁的紧凑面板；移除统计按钮。请关闭 Tweaks 对应右键动作，手机触控保持原样。'));
+    GM_registerMenuCommand('Touch Controls v0.6.15 说明',()=>
+      alert('v0.6.15：修复内嵌播放器控制层的右键识别与配对续期；PC 面板在当前视频中央打开。新增多视图右键诊断菜单。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
@@ -3989,7 +4040,10 @@
       previousMulti=nowMulti;
     },1700);
     document.addEventListener('visibilitychange',()=>{
-      if(!document.hidden){refresh();pollCornerHuds();}
+      if(!document.hidden){
+        for(const row of rowMap.values())configureDesktopFrame(row);
+        refresh();pollCornerHuds();
+      }
       else for(const cell of hudCells.values())hudSessionStop(cell);
       // The player-world agent independently handles return-to-tab autoplay.
     });
