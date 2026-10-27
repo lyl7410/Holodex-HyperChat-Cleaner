@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.3 实时连接速度恢复与播放时间说明
+# Holodex / YouTube Touch Controls — v0.6.4 直播时间识别与实时带宽修复
 
-独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.3 恢复普通 YouTube 页实时连接速度，保留单排五档倍速与手机画质入口，保留播放后的触控修复，保留原生直播统计、音量手势、灵敏度与 Holodex 智能自动播放；不增加第二个重复脚本。
+独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.4 修正普通 YouTube 直播播放时间的误判，并保留 v0.6.3 恢复的实时连接速度、单排五档倍速与手机画质入口，保留播放后的触控修复，保留原生直播统计、音量手势、灵敏度与 Holodex 智能自动播放；不增加第二个重复脚本。
 
-**[安装 / 更新 v0.6.3](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装 / 更新 v0.6.4](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,29 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.4：修正直播被错误显示为普通视频时长
+
+用户说明截图中的视频实际上是**正在进行的 YouTube 直播**，但自定义面板显示「播放时间 0:16:13 / 1:00:00」。此前依据普通 HTML5 视频元素的 `currentTime / duration` 直接显示。**对于有 DVR 回看时间轴的直播，浏览器仍可能提供有限 `duration` 值（例如 1 小时的窗口长度），不能把它当作整场直播总时长。**
+
+### 新逻辑
+
+- 优先检查当前 YouTube 播放器提供的 `getVideoData()`、`getPlayerResponse()` 等直播标记，以及直播信息中的 `liveBroadcastDetails.isLiveNow`；其次判断播放器 LIVE 类型和可见的直播徽章。只有浏览器确实提供实时直播证据时，面板才标记为直播。
+- **直播**：原「播放时间」卡片变为 **「直播状态」**，内容为 **「🔴 正在直播」**，并附注「时间轴位置 0:16:13（非直播总时长）」。时间轴秒数仅代表播放器在可回看直播流中的进度坐标，不能理解为主播已经直播了多少分钟。
+- **普通视频**：继续显示「当前进度 / 视频总时长」，例如 `0:16:13 / 1:00:00`。
+- **已经结束的直播回放**：如果来源明确表示 `isLiveNow:false`，应按普通点播视频处理；不能仅凭历史直播标记误报正在直播。
+- **YouTube 页面切换**：初始播放器配置只在视频 ID 与当前视频一致时采用，避免把前一条视频的直播状态带到下一条视频。
+- **连接速度**：保留上一版的 YouTube 原生 Stats for nerds 实时带宽监测、持续刷新与关闭恢复机制；与播放状态检测相互独立。
+
+### 安卓复测
+
+1. 将 Tampermonkey 同一脚本更新到 **v0.6.4**，完整刷新实际直播的 YouTube 页面。
+2. 点击左侧触控区进入面板，预期第一格为 **「直播状态 / 🔴 正在直播」**，不再显示一个可能误导的 `/ 1:00:00`。
+3. 查看卡片小字：时间轴位置不代表直播总时长，也不是直播延迟。连接速度仍单独显示 YouTube 提供的实时 Mbps 数值。
+4. 打开一个普通的 1 小时点播视频，应仍显示类似 `0:16:13 / 1:00:00` 的正常进度与总时长。已结束直播回放也应按点播显示。
+5. 如果当前直播仍显示两段时间，请保留页面截图；该版本的播放器没有暴露脚本所识别的直播标记，需要按实际页面结构补充识别。
+
+**验证边界**：已通过有限 `duration` 的直播、已结束直播回放、普通 1 小时视频、SPA 旧数据过滤和播放器 LIVE 标识等隔离模拟。尚未在你的实际安卓 Tampermonkey 上完成回归。
 
 ## v0.6.3：恢复普通 YouTube 面板实时连接速度
 
