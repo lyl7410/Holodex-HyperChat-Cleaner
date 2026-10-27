@@ -1439,7 +1439,7 @@
         // frame; label them explicitly rather than inventing optimal resolution.
         const video=p.querySelector?.('video') || page.document.querySelector('video.html5-main-video');
         if(video?.videoWidth>0 && video?.videoHeight>0)
-          data.resolution=video.videoWidth+'×'+video.videoHeight+'（实际帧）';
+          data.resolution=video.videoWidth+'×'+video.videoHeight;
       }
       const meaningful=data.bandwidthKbps!=null||data.bufferSeconds!=null||
         data.liveLatencySeconds!=null||!!data.resolution||!!data.codecs;
@@ -1868,11 +1868,12 @@
     background:#243549b8;border:1px solid #ffffff22}
   #hmtc-sheet .hmtc-play-row{display:flex;gap:6px;align-items:center;margin:5px 0}
   #hmtc-sheet .hmtc-play-row label{color:#cbd8e6;font-size:12px;min-width:64px;font-weight:650}
-  #hmtc-sheet .hmtc-rate-presets{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
+  #hmtc-sheet .hmtc-rate-presets,#hmtc-sheet .hmtc-quality-presets{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
     gap:5px;margin:8px 0 12px}
-  #hmtc-sheet .hmtc-rate-presets button{min-width:0;min-height:44px;padding:6px 3px;
+  #hmtc-sheet .hmtc-rate-presets button,#hmtc-sheet .hmtc-quality-presets button{min-width:0;min-height:44px;padding:6px 3px;
     font-size:clamp(10px,2.6vw,13px);white-space:nowrap}
-  #hmtc-sheet .hmtc-rate-presets button.hmtc-rate-selected{
+  #hmtc-sheet .hmtc-rate-presets button.hmtc-rate-selected,
+  #hmtc-sheet .hmtc-quality-presets button.hmtc-quality-selected{
     background:#15796f!important;border-color:#80e8d2!important;
     color:#fff!important;box-shadow:inset 0 0 0 1px #a1eee766}
   #hmtc-sheet .hmtc-youtube-quality-link{display:block;width:100%;
@@ -1883,7 +1884,7 @@
     min-height:42px;min-width:75px;flex:1;border-radius:10px;padding:8px;font:650 13px system-ui}
   #hmtc-sheet .hmtc-play-row .hmtc-quality-current{flex:1;min-width:0;overflow:hidden;
     text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#8bdedb}
-  #hmtc-sheet .hmtc-play-help{font-size:10px;color:#a5bace;line-height:1.5;margin-top:4px}
+  #hmtc-sheet .hmtc-youtube-quality-link[hidden]{display:none!important}
   #hmtc-sheet .volume{display:flex;gap:9px;align-items:center;margin:14px 0 11px}
   #hmtc-sheet .volume input{flex:1;width:100%;min-width:0;height:40px;accent-color:#61d7d1;touch-action:pan-x}
   #hmtc-sheet .value{min-width:50px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
@@ -3012,11 +3013,11 @@
       '<div><span class="speed" data-field="speed">—</span><span class="unit">Mbps</span>',
       '<span class="speedFreshness" data-field="speedFreshness"></span></div></div>',
       '<div class="grid">',
-      '<div class="metric"><label>缓冲健康度 · Buffer</label><strong data-field="health">—</strong></div>',
-      '<div class="metric"><label>直播延迟 · Latency</label><strong data-field="latency">—</strong></div>',
+      '<div class="metric"><label>缓冲</label><strong data-field="health">—</strong></div>',
+      '<div class="metric"><label>直播延迟</label><strong data-field="latency">—</strong></div>',
       '<div class="metric hmtc-playtime-metric"><label data-field="positionLabel">播放时间</label>',
       '<strong data-field="position">—</strong></div>',
-      '<div class="metric"><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
+      '<div class="metric"><label>分辨率</label><strong data-field="resolution">—</strong></div>',
       '</div></div>',
       '<div class="hmtc-play-controls">',
       '<div class="hmtc-play-row"><label>播放速度</label></div>',
@@ -3026,13 +3027,11 @@
       '<button type="button" data-action="ratePreset" data-rate="1.5">1.5×</button>',
       '<button type="button" data-action="ratePreset" data-rate="1.75">1.75×</button>',
       '<button type="button" data-action="ratePreset" data-rate="2">2×</button></div>',
-      '<div class="hmtc-play-row"><label>当前画质</label>',
-      '<span class="hmtc-quality-current" data-field="qualityStatus">读取中…</span></div>',
-      '<div class="hmtc-play-row"><a class="hmtc-youtube-quality-link"',
+      '<div class="hmtc-play-row"><label>画质</label></div>',
+      '<div class="hmtc-quality-presets" role="group" aria-label="画质快捷档位"></div>',
+      '<a class="hmtc-youtube-quality-link"',
       ' data-field="youtubeQualityLink" target="_blank" rel="noopener noreferrer"',
-      ' href="https://www.youtube.com/">在 YouTube 打开视频并调整画质 ↗</a></div>',
-      '<div class="hmtc-play-help">嵌入播放器未提供可用画质菜单；',
-      '跳转 YouTube 原站可选择该视频真实支持的画质。不会在 Holodex 内伪装切换。</div>',
+      ' href="https://www.youtube.com/" hidden>在 YouTube 调整画质</a>',
       '</div>',
       '<div class="volume"><button type="button" data-action="mute" aria-label="静音">🔊</button>',
       '<input type="range" data-field="slider" aria-label="当前视频音量" min="0" max="100" step="1">',
@@ -3276,12 +3275,12 @@
     const measured=!!data?.available&&Number.isFinite(kbps)&&kbps>0;
     if(measured){
       lastHolodexSpeed={key,kbps,source:data.source||'原生统计',at:now};
-      field('speed','≈ '+(kbps/1000).toFixed(2));
+      field('speed',(kbps/1000).toFixed(2));
       field('speedFreshness','');
     }else if(lastHolodexSpeed&&lastHolodexSpeed.key===key&&
              now-lastHolodexSpeed.at>=0&&now-lastHolodexSpeed.at<=6000){
       const age=Math.round((now-lastHolodexSpeed.at)/1000);
-      field('speed','≈ '+(lastHolodexSpeed.kbps/1000).toFixed(2));
+      field('speed',(lastHolodexSpeed.kbps/1000).toFixed(2));
       field('speedFreshness','上次 '+age+'s');
     }else{
       field('speed','—');
@@ -3290,7 +3289,6 @@
     field('health',typeof data?.bufferSeconds==='number'
       ? data.bufferSeconds.toFixed(1)+' s':'—');
     field('resolution',data?.resolution||'—');
-    field('qualityStatus','当前：'+(data?.resolution||'—'));
     field('latency',Number.isFinite(data?.liveLatencySeconds)
       ? data.liveLatencySeconds.toFixed(2)+' s':'—');
   }
@@ -3362,7 +3360,6 @@
     field('note','');
     renderVolume(row);
     renderYouTubeStats(null,'正在读取 YouTube 嵌入播放器…');
-    field('qualityStatus','当前：待读取');
     updateSheetRate({rate:1,rates:[.5,1,1.5,2]});
     field('position','读取中…');
     const qualityLink=sheet.querySelector('[data-field="youtubeQualityLink"]');
@@ -3584,8 +3581,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.9 说明',()=>
-      alert('v0.6.9：精简统计面板，移除播放时间与连接速度下方的长说明；普通 YouTube 画质下拉选择后立即切换，不再需要应用按钮，移除 144p。保留 HUD、五档倍速、手势和智能自动播放。'));
+    GM_registerMenuCommand('Touch Controls v0.6.10 说明',()=>
+      alert('v0.6.10：画质与倍速使用同样的五列按钮网格；点击画质切换，精简分辨率、缓冲和网速标签，保留手势、HUD 和多视图自动播放。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
