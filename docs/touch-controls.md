@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.11 PC 统计与鼠标兼容
+# Holodex / YouTube Touch Controls — v0.6.12 PC 面板背景与居中修复
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 v0.6.11](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装／更新 v0.6.12](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,17 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.12：Tweaks 原生详细统计兼容与面板居中
+
+- **Tweaks for YouTube 原生详细信息**：用户反馈关闭自定义面板后仍无法通过右键显示原生统计。连接速度 HUD 会持续调用静默采集，把同一块原生 Stats for nerds 设为透明；因此第三方扩展即使已执行显示动作，结果仍可能不可见。桌面下普通 YouTube 与 Holodex iframe 均改为被动读取现有字段，不自动 showVideoInfo / hideVideoInfo、不施加静默隐藏样式。Holodex 面板内用户明确点击「YouTube 原版统计」仍可切换显示。浏览器不提供被动带宽数据时显示 —，不为持续测速重新占用原生统计。
+- **补充定位**：v0.6.11 只处理手势热区，打开统计时仍存在另一层全屏透明 backdrop。它虽未取消 contextmenu，但会成为右键目标，阻止播放器和第三方扩展命中视频。截图中的 YouTube 面板靠右来自旧的通用横屏规则，桌面宽屏同样命中。
+- **修复**：Holodex 与普通 YouTube 在桌面模式打开统计时不启用透明背景层，CSS 同时排除其鼠标命中。桌面通过面板关闭按钮或 Escape 收起；面板外的鼠标操作继续交给视频和其他扩展。纯触屏仍保留点面板外关闭。
+- **误报保护**：即使浏览器把 PC 报告为 coarse，捕获到 pointerover / pointerdown 的 mouse 类型后，本页持续切换为鼠标安全模式；只观察事件，不取消事件。页面刷新前不自动恢复大片触摸热区，以免混合设备反复遮挡。跨域 iframe 内的事件无法被顶层观察，因此仍以媒体查询作为首要保护。
+- **定位**：移除 YouTube 通用横屏靠右规则，面板在横屏和竖屏均水平居中，限制高度并保留内部滚动。
+- **验证**：语法检查与 11 项 Node 回归测试通过；新增实际鼠标覆盖错误 coarse 报告、YouTube 打开／关闭背景状态、Holodex 动态背景状态与横屏规则检查，以及桌面普通页／iframe 不开关、不隐藏第三方原生统计的测试。仍需真实浏览器／第三方扩展验证。
+
+测试时请先确认脚本管理器显示 **0.6.12**，只启用一份 Touch Controls，并刷新所有相关 YouTube / Holodex 页面。PR 未合并前，主分支更新地址仍可能是旧版。在 Tweaks for YouTube 中启用画面中央右键显示原生详细信息，分别在 HUD 时间／速度模式、自定义面板关闭／打开时验证原生统计可显示与关闭。重点分别验证面板关闭与打开时的视频中央／两侧右键操作；在面板自身范围内，鼠标目标仍是面板。
 
 ## v0.6.11：PC 统计入口与透明手势层兼容
 
@@ -30,7 +41,7 @@ node --test tests/touch-controls-desktop.test.cjs
 
 实机检查清单（待验证）：
 
-1. 普通 PC 在 Holodex 单格／多格通过菜单打开对应视频统计；取消序号不打开；点击关闭、面板外与 Escape 后背景层消失。
+1. 普通 PC 在 Holodex 单格／多格通过菜单打开对应视频统计；取消序号不打开；点击关闭与 Escape 后面板消失；桌面面板外鼠标操作直接传给页面，触屏点面板外仍关闭。
 2. 在原问题涉及的其他扩展中设置右键快捷操作，分别在视频中央、左右两侧测试；播放／暂停、双击、右键菜单与原生播放器控制应正常。开发者工具中不应存在可命中的 .hmtc-edge / .hmtc-yt-edge。
 3. 触屏笔记本仍报告触摸点时，鼠标／触控板操作正常；在支持媒体查询热切换的设备上连接鼠标，应立即隐藏／移除热区。
 4. 纯安卓触屏：左侧轻点／600ms 长按按设置打开面板，右侧上下滑动调音量、取消触摸后不误开。关闭手势后菜单入口仍可使用。

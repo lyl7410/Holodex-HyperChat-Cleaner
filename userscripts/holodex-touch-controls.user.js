@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.11
+// @version      0.6.12
 // @description  修复 PC 统计入口与透明手势层鼠标冲突；保留触屏手势、画质、HUD 与自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -32,11 +32,23 @@
 
   // Broad transparent zones are safe only when no precise pointing device exists.
   // Do not infer input mode from maxTouchPoints: touch laptops also have a mouse.
+  let mouseInputSeen=false;
   function touchZonesAllowed(){
-    return matchMedia('(pointer:coarse)').matches&&
+    return !mouseInputSeen&&matchMedia('(pointer:coarse)').matches&&
       !matchMedia('(any-pointer:fine)').matches;
   }
+  // Some desktop browsers report coarse input despite a real mouse. Observe
+  // pointer entry before the next button press, without cancelling any event.
+  function observeMouseInput(event){
+    if(event.pointerType!=='mouse'||mouseInputSeen)return;
+    mouseInputSeen=true;
+    document.documentElement.classList.add('hmtc-mouse-input');
+    document.dispatchEvent(new Event('hmtc:input-policy-change'));
+  }
+  document.addEventListener('pointerover',observeMouseInput,{capture:true,passive:true});
+  document.addEventListener('pointerdown',observeMouseInput,{capture:true,passive:true});
   function watchTouchZonePolicy(refresh){
+    document.addEventListener('hmtc:input-policy-change',refresh);
     for(const query of ['(pointer:coarse)','(any-pointer:fine)']){
       const media=matchMedia(query);
       if(media.addEventListener)media.addEventListener('change',refresh);
@@ -86,7 +98,11 @@
   }
   GM_addStyle([
     '@media (pointer:fine),(pointer:none),(any-pointer:fine){',
-    '.hmtc-edge,.hmtc-yt-edge{display:none!important;pointer-events:none!important}}',
+    '.hmtc-edge,.hmtc-yt-edge,#hmtc-backdrop,#hmtc-yt-backdrop{',
+    'display:none!important;pointer-events:none!important}}',
+    'html.hmtc-mouse-input .hmtc-edge,html.hmtc-mouse-input .hmtc-yt-edge,',
+    'html.hmtc-mouse-input #hmtc-backdrop,html.hmtc-mouse-input #hmtc-yt-backdrop{',
+    'display:none!important;pointer-events:none!important}',
     '.hmtc-corner-hud{position:fixed!important;z-index:2147482700!important;',
     'display:block!important;box-sizing:border-box!important;max-width:240px;',
     'border:0!important;border-radius:5px!important;',
@@ -269,10 +285,10 @@
 
   // Restore the SAME measurement strategy previously used by Holodex's
   // iframe stats collector on a standalone YouTube watch/live page:
-  // activate native Stats for nerds ONLY while the custom panel is visible,
-  // hide the original overlay (without display:none), and keep reading the
-  // real player's live bandwidth fields. No inferred/download-test speeds.
-  function youtubeWatchBandwidth(pageDoc,getPlayer){
+  // On touch-only devices, native diagnostics can be sampled silently for
+  // the panel/HUD. Desktop reads existing fields only: other extensions own
+  // the native Stats for nerds visibility. No inferred/download-test speeds.
+  function youtubeWatchBandwidth(pageDoc,getPlayer,allowSilent=touchZonesAllowed){
     const CLASS='hmtc-yt-native-bandwidth-silent';
     const STYLE_ID='hmtc-yt-bandwidth-style';
     const monitor={player:null,forced:false,active:false,lastArm:0,
@@ -309,6 +325,13 @@
       monitor.forced=false;monitor.lastArm=0;monitor.lastSample=null;
     }
     function start(){
+      if(!allowSilent()){
+        // Desktop extensions (e.g. Tweaks for YouTube) toggle the same panel.
+        // Never silently enable, re-arm or hide their diagnostic UI.
+        if(monitor.forced)stop();
+        else css(false);
+        return {started:false,hidden:false,passive:true};
+      }
       const p=getPlayer();
       if(monitor.player&&monitor.player!==p)stop();
       if(!p)return {started:false,reason:'播放器尚未就绪'};
@@ -668,8 +691,7 @@
       '#hmtc-yt-toast{position:fixed;z-index:2147482992;pointer-events:none;',
       'transform:translate(-50%,-50%);background:#1a2c41f5;border-radius:12px;',
       'padding:11px 15px;color:#eff;font:800 22px system-ui}',
-      '@media(orientation:landscape){#hmtc-yt-panel{left:auto;right:8px;',
-      'max-width:min(385px,69vw);max-height:calc(100vh - 16px)}}'
+      '#hmtc-yt-panel{max-height:calc(100vh - 16px);cursor:auto}'
     ].join(''));
     let hintHideTimer=null;
     const text=(key,value)=>{const el=sheet?.querySelector('[data-id="'+key+'"]');
@@ -1055,7 +1077,7 @@
     }
     function open(){
       if(!supported()||!p())return;
-      makePanel();sheet.hidden=false;backdrop.hidden=false;
+      makePanel();sheet.hidden=false;backdrop.hidden=!touchZonesAllowed();
       bandwidth.start();
       refreshSheet();
       refreshQualityChoices();
@@ -1154,6 +1176,7 @@
     function refresh(){
       if(!document.body)return;
       const player=supported()?p():null;
+      if(backdrop)backdrop.hidden=!sheet||sheet.hidden||!touchZonesAllowed();
       if(!player||!touchZonesAllowed()||!setting(enabledKey,true)){
         left?.remove();right?.remove();left=right=root=null;
         if(!player)close();
@@ -1180,7 +1203,10 @@
       refreshWatchHud(player);
     }
     document.addEventListener('hmtc:corner-hud-change',refresh);
-    watchTouchZonePolicy(refresh);
+    watchTouchZonePolicy(()=>{
+      if(!touchZonesAllowed())bandwidth.stop();
+      refresh();
+    });
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
     GM_registerMenuCommand('YouTube：画质接口诊断',async()=>{
       const c=await controls.qualityOptions();
@@ -1325,6 +1351,11 @@
       return null;
     }
     function startMonitor(){
+      if(!touchZonesAllowed()){
+        if(monitor.active)stopMonitor();
+        else silent(false);
+        return {enabled:false,hidden:false,passive:true};
+      }
       const p=player();
       if(!p)return {enabled:false,reason:'YouTube 播放器尚未就绪'};
       if(typeof p.showVideoInfo!=='function')
@@ -1357,7 +1388,7 @@
     }
     function stopMonitor(){
       const p=player();
-      if(monitor.active&&monitor.forced&&typeof p?.hideVideoInfo==='function'){
+      if(monitor.active&&monitor.forced&&!monitor.manual&&typeof p?.hideVideoInfo==='function'){
         // Restore the state that existed before the Holodex panel opened.
         try{p.hideVideoInfo();}catch{}
       }
@@ -1368,6 +1399,9 @@
       monitor.initiallyVisible=false;
       return {stopped:true};
     }
+    watchTouchZonePolicy(()=>{
+      if(!touchZonesAllowed())stopMonitor();
+    });
     function toggleNative(){
       const p=player();
       if(!p)throw new Error('播放器尚未就绪');
@@ -1525,7 +1559,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.11', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.12', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -3439,7 +3473,7 @@
       stopNativeCollector();
     active={layoutId:row.layoutId,videoId:row.videoId};
     sheet.hidden=false;
-    if(backdrop)backdrop.hidden=false;
+    if(backdrop)backdrop.hidden=!touchZonesAllowed();
     field('title',row.title||row.videoId);
     field('note','');
     renderVolume(row);
@@ -3643,6 +3677,7 @@
     watchTouchZonePolicy(()=>{
       // Remove immediately even if the asynchronous player refresh is busy.
       if(!touchZonesAllowed())document.querySelectorAll('.hmtc-edge').forEach(e=>e.remove());
+      if(backdrop)backdrop.hidden=!sheet||sheet.hidden||!touchZonesAllowed();
       refresh();
     });
     {
@@ -3672,8 +3707,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.11 说明',()=>
-      alert('v0.6.11：PC 可从脚本菜单选择视频查看统计；检测到鼠标等精确指针时禁用透明手势热区，避免遮挡播放器和其他扩展右键操作。纯触屏保留原有手势。'));
+    GM_registerMenuCommand('Touch Controls v0.6.12 说明',()=>
+      alert('v0.6.12：PC 面板居中，打开后不再用透明全屏背景拦截播放器操作；实际鼠标输入也会停用热区。统计可从脚本菜单打开，纯触屏保留手势。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
