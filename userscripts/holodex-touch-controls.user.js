@@ -142,7 +142,8 @@
   function youtubeWatchBandwidth(pageDoc,getPlayer){
     const CLASS='hmtc-yt-native-bandwidth-silent';
     const STYLE_ID='hmtc-yt-bandwidth-style';
-    const monitor={player:null,forced:false,active:false,lastArm:0};
+    const monitor={player:null,forced:false,active:false,lastArm:0,
+      lastSample:null};
     const playerInfoVisible=p=>{
       try{
         return typeof p?.isVideoInfoVisible==='function'?
@@ -172,7 +173,7 @@
       }
       css(false);
       monitor.player=null;monitor.active=false;
-      monitor.forced=false;monitor.lastArm=0;
+      monitor.forced=false;monitor.lastArm=0;monitor.lastSample=null;
     }
     function start(){
       const p=getPlayer();
@@ -324,11 +325,33 @@
           }
         }
       }
+      // Brief outages in native stats should not blank a value which was
+      // just sampled. Preserve the last VERIFIED reading for <= 6 seconds,
+      // clearly mark it as historical, and never reuse it for another video.
+      let videoId=null;
+      try{videoId=p.getVideoData?.()?.video_id||null;}catch{}
+      const now=Date.now();
+      if(bandwidthKbps!=null){
+        monitor.lastSample={bandwidthKbps,source,at:now,player:p,videoId};
+      }else if(monitor.lastSample){
+        const old=monitor.lastSample;
+        const sameVideo=old.player===p&&
+          (old.videoId===videoId||!old.videoId&&!videoId);
+        const age=now-old.at;
+        if(sameVideo&&age>=0&&age<=6000){
+          bandwidthKbps=old.bandwidthKbps;source=old.source;
+          return {available:true,bandwidthKbps,source,
+            monitoring:monitor.active,hidden:monitor.forced,
+            stale:true,sampleAgeSeconds:Math.max(0,age/1000),
+            sampledAt:old.at};
+        }
+        monitor.lastSample=null;
+      }
       return {available:bandwidthKbps!=null,bandwidthKbps,source,
-        monitoring:monitor.active,hidden:monitor.forced,
+        monitoring:monitor.active,hidden:monitor.forced,stale:false,
         reason:bandwidthKbps==null?
           'YouTube 当前尚未提供实时 Connection Speed 数值':'',
-        sampledAt:Date.now()};
+        sampledAt:now};
     }
     function diagnose(){
       const p=getPlayer();
@@ -568,13 +591,16 @@
       text('speed',net.available?
         '≈ '+(net.bandwidthKbps/1000).toFixed(2)+' Mbps':'—');
       text('speedInfo',net.available?
-        (net.source==='native-panel-dom'?'YouTube 原版统计 · 实时':
+        (net.stale?
+          '最近一次原生测速 · '+net.sampleAgeSeconds.toFixed(0)+'秒前（等待更新）':
+          net.source==='native-panel-dom'?'YouTube 原版统计 · 实时':
           'YouTube 连接速度 · '+net.source):
         (net.monitoring?
           '等待 YouTube 提供带宽数据':'此播放器尚未提供带宽数据'));
       const speedValue=sheet.querySelector('[data-id="speed"]');
       if(speedValue)speedValue.title=net.available?
-        '实时连接速度 · YouTube '+net.source:net.reason;
+        (net.stale?'最近一次真实连接速度（非实时）':'实时连接速度')+
+        ' · YouTube '+net.source:net.reason;
       let buffer=NaN;
       try{
         const time=Number(v.currentTime),ranges=v.buffered;
