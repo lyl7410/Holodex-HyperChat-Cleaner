@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.10
-// @description  画质与倍速统一按钮网格，即点即切；统计数字去冗余说明，保留 HUD、手势及自动播放。
+// @version      0.6.11
+// @description  修复 PC 统计入口与透明手势层鼠标冲突；保留触屏手势、画质、HUD 与自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -30,6 +30,19 @@
 (function HolodexTouchControls() {
   'use strict';
 
+  // Broad transparent zones are safe only when no precise pointing device exists.
+  // Do not infer input mode from maxTouchPoints: touch laptops also have a mouse.
+  function touchZonesAllowed(){
+    return matchMedia('(pointer:coarse)').matches&&
+      !matchMedia('(any-pointer:fine)').matches;
+  }
+  function watchTouchZonePolicy(refresh){
+    for(const query of ['(pointer:coarse)','(any-pointer:fine)']){
+      const media=matchMedia(query);
+      if(media.addEventListener)media.addEventListener('change',refresh);
+      else media.addListener?.(refresh);
+    }
+  }
   // Shared and persisted by YouTube and Holodex. Tapping the HUD cycles
   // time → native speed → both → compact (off). The compact control can
   // restore the display without opening the settings sheet.
@@ -72,6 +85,8 @@
       (time||'—')+'\n'+(speed||'—');
   }
   GM_addStyle([
+    '@media (pointer:fine),(pointer:none),(any-pointer:fine){',
+    '.hmtc-edge,.hmtc-yt-edge{display:none!important;pointer-events:none!important}}',
     '.hmtc-corner-hud{position:fixed!important;z-index:2147482700!important;',
     'display:block!important;box-sizing:border-box!important;max-width:240px;',
     'border:0!important;border-radius:5px!important;',
@@ -564,7 +579,6 @@
     const bandwidth=youtubeWatchBandwidth(page.document,p);
     const watchLive=()=>youtubeWatchLiveState(page.document,p,
       controls.video,page);
-    const coarse=matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>0;
     const enabledKey='hmtc_youtube_edges_v1';
     const setting=(key,def)=>GM_getValue(key,def);
     const mode=()=>setting('hmtc_stats_trigger_v1','tap');
@@ -1075,7 +1089,9 @@
           base:vol(),moved:false,held:false,
           range:Math.max(90,player.getBoundingClientRect().height*.65)/sense()};
         if(['hold','both'].includes(mode()))gesture.timer=setTimeout(()=>{
-          if(gesture&&!gesture.moved){gesture.held=true;lastTap=Date.now();open();}
+          if(gesture&&!gesture.moved&&el.isConnected&&touchZonesAllowed()){
+            gesture.held=true;lastTap=Date.now();open();
+          }
         },600);
         if(side==='right'&&e.cancelable)e.preventDefault();
       },{passive:side==='left'});
@@ -1108,7 +1124,7 @@
       },{passive:false});
       el.addEventListener('touchcancel',reset,{passive:true});
       el.addEventListener('click',e=>{
-        if(side==='left'&&['tap','both'].includes(mode())&&Date.now()-lastTap>650){
+        if(touchZonesAllowed()&&e.button===0&&side==='left'&&['tap','both'].includes(mode())&&Date.now()-lastTap>650){
           e.preventDefault();e.stopPropagation();lastTap=Date.now();open();
         }
       });
@@ -1138,7 +1154,7 @@
     function refresh(){
       if(!document.body)return;
       const player=supported()?p():null;
-      if(!player||!coarse||!setting(enabledKey,true)){
+      if(!player||!touchZonesAllowed()||!setting(enabledKey,true)){
         left?.remove();right?.remove();left=right=root=null;
         if(!player)close();
       }else{
@@ -1164,6 +1180,7 @@
       refreshWatchHud(player);
     }
     document.addEventListener('hmtc:corner-hud-change',refresh);
+    watchTouchZonePolicy(refresh);
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
     GM_registerMenuCommand('YouTube：画质接口诊断',async()=>{
       const c=await controls.qualityOptions();
@@ -1508,7 +1525,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.10', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.11', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -1524,7 +1541,6 @@
     return;
   }
   GM_registerMenuCommand('暂停 Holodex Touch Controls',()=>{set(KEY,false);location.reload();});
-  const coarse=matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>0;
   const isMulti=()=>/^\/multiview(?:\/|$)/.test(location.pathname);
   const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
   const token='hmtc-'+(crypto.randomUUID?.()||String(Date.now())+Math.random());
@@ -2812,7 +2828,7 @@
     function armHold(zone,gesture){
       if(!allowsHold())return;
       gesture.timer=setTimeout(()=>{
-        if(zone._gesture!==gesture||gesture.moved||gesture.held||
+        if(!touchZonesAllowed()||zone._gesture!==gesture||gesture.moved||gesture.held||
            gesture.key!==zone.dataset.key||!zone.isConnected)return;
         const target=rowMap.get(gesture.key);
         if(!target)return;
@@ -2923,9 +2939,12 @@
 
         zone.addEventListener('touchcancel',reset,{passive:true});
         zone.addEventListener('contextmenu',e=>{
-          if(allowsHold()){e.preventDefault();e.stopPropagation();}
+          // Only suppress a menu belonging to our active touch/pen hold.
+          if(touchZonesAllowed()&&gesture&&allowsHold()&&
+             (gesture.held||gesture.timer)){e.preventDefault();e.stopPropagation();}
         });
         zone.addEventListener('click',e=>{
+          if(!touchZonesAllowed()||e.button!==0)return;
           e.preventDefault();e.stopPropagation();
           if(side!=='left'||!allowsTap()||Date.now()-zone._lastTap<650)return;
           // Click fallback for devices which synthesize click but not touchend.
@@ -3565,7 +3584,7 @@
         const ongoing=frame?.querySelector('.hmtc-edge--right')?._drag;
         if(ongoing && old){row.volume=old.volume;row.muted=old.muted;}
         rowMap.set(key,row);
-        if(coarse&&get(EDGE_KEY,true))attachEdges(roots[row.index],row);
+        if(touchZonesAllowed()&&get(EDGE_KEY,true))attachEdges(roots[row.index],row);
         attachCornerHud(roots[row.index],row);
         if(active&&active.layoutId+':'+active.videoId===key)renderVolume(row);
       }
@@ -3578,7 +3597,7 @@
         const frame=root.querySelector('.mv-frame');
         frame?.querySelector('.hmtc-zone')?.remove();
         for(const edge of frame?.querySelectorAll('.hmtc-edge')||[]){
-          if(!get(EDGE_KEY,true)||!validKeys.has(edge.dataset.key)||
+          if(!touchZonesAllowed()||!get(EDGE_KEY,true)||!validKeys.has(edge.dataset.key)||
              !root.querySelector('.hmtc-edge--'+edge.dataset.side)?.isConnected)
             edge.remove();
         }
@@ -3590,8 +3609,8 @@
   function init(){
     if(!document.body)return;
 
-    // PC and mobile both get the autonomous playback engine. Touch-only UI
-    // remains gated to coarse pointers and is never inserted on a mouse PC.
+    // Stats/settings are available on every device; only broad gesture zones
+    // are gated to touch-only input. Hybrid PCs keep the normal mouse target.
     GM_registerMenuCommand('左上角信息：切换时间／速度／隐藏',cycleHudMode);
     setInterval(pollCornerHuds,2200);
     window.addEventListener('pagehide',clearHudCells,{passive:true});
@@ -3621,7 +3640,12 @@
       }).catch(error=>alert('关闭设置未完全成功：'+error.message));
     });
 
-    if(coarse){
+    watchTouchZonePolicy(()=>{
+      // Remove immediately even if the asynchronous player refresh is busy.
+      if(!touchZonesAllowed())document.querySelectorAll('.hmtc-edge').forEach(e=>e.remove());
+      refresh();
+    });
+    {
       makeSheet();
       document.documentElement.classList.toggle('hmtc-debug',!!get(DEBUG_KEY,false));
       GM_registerMenuCommand('启用/禁用透明边缘手势',()=>{
@@ -3637,7 +3661,7 @@
         set(DEBUG_KEY,next);
         document.documentElement.classList.toggle('hmtc-debug',next);
       });
-      GM_registerMenuCommand('选择视频查看统计（备用入口）',()=>{
+      GM_registerMenuCommand('选择视频查看统计（PC／触屏）',()=>{
         const rows=[...rowMap.values()];
         if(!rows.length)return alert('当前没有已识别的 YouTube 视频格子。');
         if(rows.length===1){openSheet(rows[0]);return;}
@@ -3648,8 +3672,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.10 说明',()=>
-      alert('v0.6.10：画质与倍速使用同样的五列按钮网格；点击画质切换，精简分辨率、缓冲和网速标签，保留手势、HUD 和多视图自动播放。'));
+    GM_registerMenuCommand('Touch Controls v0.6.11 说明',()=>
+      alert('v0.6.11：PC 可从脚本菜单选择视频查看统计；检测到鼠标等精确指针时禁用透明手势热区，避免遮挡播放器和其他扩展右键操作。纯触屏保留原有手势。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();

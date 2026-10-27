@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.10 画质与倍速五列对齐
+# Holodex / YouTube Touch Controls — v0.6.11 PC 统计与鼠标兼容
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 v0.6.10](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装／更新 v0.6.11](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,31 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.11：PC 统计入口与透明手势层兼容
+
+- **PC 打开统计**：在脚本管理器菜单选择「选择视频查看统计（PC／触屏）」。单视频直接打开，多视频输入序号；与触摸手势开关、打开方式无关。普通 YouTube 使用「YouTube：打开快捷控制面板」。左上角 HUD 仍用于切换时间／速度显示。
+- **原因**：旧版把 Holodex 统计入口和触摸 UI 一起限制在 coarse 条件内；又用 maxTouchPoints 把触屏笔记本当成手机。透明层覆盖播放器两侧各最多 112px、78% 高，成为鼠标命中目标；即使不调用 preventDefault，其他扩展也可能无法识别其下面的视频。hold 模式还会直接取消热区右键菜单。
+- **桌面安全策略**：仅主指针为 coarse 且不存在 fine 指针时创建手势热区。带鼠标／触控板的混合设备优先鼠标操作，因此也不提供大片触摸热区；仍可从菜单查看统计、调音量与倍速。Holodex 和普通 YouTube 共用策略，媒体查询变化时重新检查，CSS 同时立即禁用热区命中。关闭统计面板后全屏背景层仍会隐藏。
+- **事件限制**：只在本脚本正在处理的触摸／笔长按中阻止热区菜单；空闲右键、桌面鼠标点击不取消。设备改变或热区移除后，未完成的长按不会再打开面板。
+- **验证状态**：Node 内置测试覆盖输入类型矩阵、动态输入切换、旧式媒体查询监听、桌面菜单注册、单／多视频选择、取消／无效输入、热区右键与触摸操作。已通过脚本语法检查；尚未完成真实 PC 浏览器与第三方扩展组合实测。
+
+### 回归验证
+
+运行（Node.js 18+，无额外依赖）：
+
+```sh
+node --check userscripts/holodex-touch-controls.user.js
+node --test tests/touch-controls-desktop.test.cjs
+```
+
+实机检查清单（待验证）：
+
+1. 普通 PC 在 Holodex 单格／多格通过菜单打开对应视频统计；取消序号不打开；点击关闭、面板外与 Escape 后背景层消失。
+2. 在原问题涉及的其他扩展中设置右键快捷操作，分别在视频中央、左右两侧测试；播放／暂停、双击、右键菜单与原生播放器控制应正常。开发者工具中不应存在可命中的 .hmtc-edge / .hmtc-yt-edge。
+3. 触屏笔记本仍报告触摸点时，鼠标／触控板操作正常；在支持媒体查询热切换的设备上连接鼠标，应立即隐藏／移除热区。
+4. 纯安卓触屏：左侧轻点／600ms 长按按设置打开面板，右侧上下滑动调音量、取消触摸后不误开。关闭手势后菜单入口仍可使用。
+5. 普通 YouTube watch/live/shorts、Holodex 动态新增／删除视频、滚动、全屏、退出全屏后重复检查；画质五列按钮、HUD 与自动播放功能正常。
 
 ## v0.6.10：画质与倍速同款按钮布局
 
