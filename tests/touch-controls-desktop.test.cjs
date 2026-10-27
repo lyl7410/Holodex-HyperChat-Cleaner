@@ -159,3 +159,57 @@ test('desktop iframe monitor stays passive while explicit native toggle remains 
   assert.equal(visible,true);assert.equal(shows,1);assert.equal(hides,0);assert.equal(silentState,false);
   vm.runInContext('toggleNative()',ctx);assert.equal(visible,false);assert.equal(hides,1);
 });
+
+test('multiview formatting distinguishes missing metadata, real start, VOD and live',()=>{
+  const ctx=vm.createContext({});vm.runInContext(section('  function timestamp(n){','  async function readMultiviewClock(row){'),ctx);
+  for(const value of [null,undefined,'',false,NaN,-1])assert.equal(ctx.timestamp(value),'—');
+  assert.equal(ctx.playbackTimeText({ready:true,position:0,duration:0}),'—');
+  assert.equal(ctx.playbackTimeText({ready:true,position:null,duration:3600}),'—');
+  assert.equal(ctx.playbackTimeText({ready:true,position:0,duration:3600}),'00:00:00 / 01:00:00');
+  assert.equal(ctx.playbackTimeText({ready:true,position:4085,duration:7674}),'01:08:05 / 02:07:54');
+  assert.equal(ctx.playbackTimeText({ready:true,position:4085,duration:3600,live:true}),'01:08:05');
+});
+test('frame media clock requires metadata and rejects recycled video identity',()=>{
+  let video={readyState:0,currentTime:0,duration:NaN},id='abcdefghijk',live=false;
+  const ctx=vm.createContext({youtubeWatchLiveState:()=>({live})});
+  vm.runInContext(section('  function readFrameClock(', '  function youtubeWatchLiveState('),ctx);
+  const read=()=>ctx.readFrameClock({},()=>({getVideoData:()=>({video_id:id})}),()=>video,{},'abcdefghijk');
+  assert.equal(read().ready,false);video={readyState:4,currentTime:4085,duration:7674};
+  assert.equal(read().position,4085);assert.equal(read().duration,7674);
+  live=true;video.duration=Infinity;assert.equal(read().live,true);assert.equal(read().duration,null);
+  id='zyxwvutsrqp';assert.equal(read().ready,false);
+});
+test('multiview clock prefers actual media over stale wrapper zero and falls back without iframe access',async()=>{
+  let fail=false;
+  const ctx=vm.createContext({rpc:async()=>({ready:true,position:0,duration:0}),
+    nativeRequest:async()=>{if(fail)throw Error('no injection');return {ready:true,position:120,duration:600};}});
+  vm.runInContext(section('  function timestamp(n){','  async function stats(){'),ctx);
+  assert.equal(ctx.playbackTimeText(await ctx.readMultiviewClock({})), '00:02:00 / 00:10:00');
+  fail=true;assert.equal(ctx.playbackTimeText(await ctx.readMultiviewClock({})),'—');
+  ctx.rpc=async()=>({ready:true,position:60,duration:600});
+  assert.equal(ctx.playbackTimeText(await ctx.readMultiviewClock({})),'00:01:00 / 00:10:00');
+});
+test('one failing wrapper method does not discard other playback fields',async()=>{
+  const ctx=vm.createContext({});vm.runInContext(section('    async function snapshot(vm){','    // Multiview-wide autoplay'),ctx);
+  const result=await ctx.snapshot({video:{status:'live'},ytPlayer:{getCurrentTime:()=>123,
+    getDuration:()=>3600,getVolume(){throw Error('not ready');},getPlaybackRate:async()=>1.25}});
+  assert.equal(result.position,123);assert.equal(result.duration,3600);assert.equal(result.rate,1.25);
+  assert.equal(result.live,true);assert.equal(result.volume,undefined);
+});
+test('desktop per-cell statistics button opens current row and is removed with its cell',()=>{
+  let touch=false;const opened=[],layer={appendChild(el){el.parentNode=this;}};
+  function element(){return {style:{},handlers:{},setAttribute(){},addEventListener(n,f){this.handlers[n]=f;},remove(){this.removed=true;}};}
+  const row={layoutId:1,videoId:'abcdefghijk'},key='1:abcdefghijk';
+  const frame={getBoundingClientRect:()=>({width:500,height:300,left:10,top:20,right:510,bottom:320})};
+  const ctx=vm.createContext({hudCells:new Map(),hudSessionStop(){},createCornerHud:element,
+    document:{createElement:element,body:layer},innerHeight:1000,innerWidth:1200,
+    touchZonesAllowed:()=>touch,displayCornerHud(){},rowMap:new Map([[key,row]]),openSheet:r=>opened.push(r)});
+  vm.runInContext(section('  function hudCellDispose(cell){','  function hudSpeedValue(cell,kbps){'),ctx);
+  const root={querySelector:()=>frame};ctx.attachCornerHud(root,row);
+  const cell=ctx.hudCells.get(key);assert.equal(cell.panelButton.textContent,'统计');assert.equal(cell.panelButton.hidden,false);
+  cell.panelButton.handlers.click({preventDefault(){},stopPropagation(){}});assert.equal(opened[0],row);
+  const updated={...row,title:'updated'};ctx.rowMap.set(key,updated);
+  cell.panelButton.handlers.click({preventDefault(){},stopPropagation(){}});assert.equal(opened[1],updated);
+  touch=true;ctx.attachCornerHud(root,row);assert.equal(cell.panelButton.hidden,true);
+  ctx.hudCellDispose(cell);assert.ok(cell.button.removed);assert.ok(cell.panelButton.removed);
+});

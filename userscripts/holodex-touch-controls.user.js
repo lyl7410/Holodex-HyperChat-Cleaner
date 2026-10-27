@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.12
+// @version      0.6.13
 // @description  修复 PC 统计入口与透明手势层鼠标冲突；保留触屏手势、画质、HUD 与自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -122,6 +122,7 @@
     'text-align:center!important;opacity:.33!important}',
     '.hmtc-corner-hud.hmtc-hud-off:hover,.hmtc-corner-hud.hmtc-hud-off:focus-visible,',
     '.hmtc-corner-hud.hmtc-hud-off:active{opacity:.85!important}',
+    '.hmtc-panel-open{min-width:38px;min-height:24px;padding:4px 6px!important}',
     '.hmtc-corner-hud[hidden]{display:none!important}'
   ].join(''));
   // Common touch-sized, fixed rate presets shown on Holodex and YouTube.
@@ -532,6 +533,16 @@
   // HTMLMediaElement.duration is often a rolling DVR-window length for
   // YouTube LIVE (e.g. precisely 1:00:00), NOT the stream's total duration.
   // Prefer YouTube's explicit live flags and visible live-badge state.
+  function readFrameClock(pageDoc,getPlayer,getVideo,mainPage,expectedVideoId){
+    const p=getPlayer();
+    if(!p)return {ready:false};
+    const actualId=p.getVideoData?.()?.video_id;
+    if(actualId&&actualId!==expectedVideoId)return {ready:false};
+    const v=getVideo();
+    return {ready:!!v&&v.readyState>=1,position:v?.currentTime??null,
+      duration:Number.isFinite(v?.duration)?v.duration:null,
+      live:youtubeWatchLiveState(pageDoc,getPlayer,getVideo,mainPage).live};
+  }
   function youtubeWatchLiveState(pageDoc,getPlayer,getVideo,mainPage){
     const player=getPlayer();
     if(!player)return {live:false,reason:'no-player'};
@@ -1530,10 +1541,12 @@
         catch(err){respond({ok:false,error:String(err?.message||err).slice(0,120)});}
         return;
       }
-      if(['playbackInfo','playbackRate','qualityMenu','qualityOptions','selectQuality'].includes(message.action)){
+      if(['playbackClock','playbackInfo','playbackRate','qualityMenu','qualityOptions','selectQuality'].includes(message.action)){
         try{
           if(!player())throw Error('YouTube 播放器尚未就绪');
           let info;
+          if(message.action==='playbackClock')info=readFrameClock(
+            page.document,player,controls.video,page,videoId);
           if(message.action==='playbackInfo')info=controls.snapshot();
           if(message.action==='playbackRate')info=controls.setRate(message.rate);
           if(message.action==='qualityMenu')info=await controls.openQualityMenu();
@@ -1559,7 +1572,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.12', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.13', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -2028,7 +2041,7 @@
         'getVideoLoadedFraction','getPlaybackRate','getVolume','isMuted'];
       const fields=['state','position','duration','fraction','rate','volume','muted'];
       const values=await Promise.allSettled(methods.map(x=>
-        typeof p[x]==='function'?Promise.resolve(p[x]()):null));
+        Promise.resolve().then(()=>typeof p[x]==='function'?p[x]():null)));
       const data={ready:true,live:vm.video?.status==='live'};
       values.forEach((v,i)=>{if(v.status==='fulfilled'&&v.value!=null)data[fields[i]]=v.value;});
       return data;
@@ -2767,7 +2780,7 @@
   }
   function nativeRequest(row,action,timeout=1800,extra={}) {
     if(!['stats','nativeToggle','monitorStart','monitorStop',
-          'playbackInfo','playbackRate','qualityMenu',
+          'playbackClock','playbackInfo','playbackRate','qualityMenu',
           'qualityOptions','selectQuality'].includes(action))
       return Promise.reject(new Error('不支持的 YouTube 指令'));
     const target=nativeFrame(row);
@@ -3356,10 +3369,31 @@
   }
 
   function timestamp(n){
-    if(!Number.isFinite(Number(n))||Number(n)<0)return '—';
+    if(n==null||n===''||typeof n==='boolean'||!Number.isFinite(Number(n))||Number(n)<0)return '—';
     n=Math.floor(Number(n));
     return String(Math.floor(n/3600)).padStart(2,'0')+':'+
       String(Math.floor(n%3600/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
+  }
+  function playbackTimeText(v){
+    if(!v?.ready)return '—';
+    const position=timestamp(v.position),duration=timestamp(v.duration);
+    if(position==='—')return '—';
+    if(v.live)return position;
+    // IFrame API returns 0/0 before media metadata is available. That is not
+    // a verified playback position or a real zero-length video.
+    if(!(Number(v.duration)>0))return '—';
+    return position+' / '+duration;
+  }
+  async function readMultiviewClock(row){
+    // Start both reads together. Prefer the frame's actual media clock over
+    // Holodex's wrapper, which may retain its initial zero values.
+    const fallback=rpc('stats',{layoutId:row.layoutId,videoId:row.videoId},2200)
+      .then(v=>v,()=>null);
+    try{
+      const v=await nativeRequest(row,'playbackClock',1300);
+      if(playbackTimeText(v)!=='—')return v;
+    }catch{}
+    return await fallback;
   }
   async function stats(){
     if(statsBusy||!active||sheet.hidden)return;
@@ -3370,17 +3404,12 @@
     const stillActive=()=>!!active&&!sheet.hidden&&active.layoutId+':'+active.videoId===key;
     // Do not delay reliable playback time while optional YouTube private stats
     // wait for an inaccessible third-party iframe and eventually time out.
-    const playback=rpc('stats',{
-      layoutId:row.layoutId,videoId:row.videoId
-    },3500).then(v=>{
+    const playback=readMultiviewClock(row).then(v=>{
       if(!stillActive())return;
       // Live must NOT hide time. getDuration() on a live YouTube player can
       // be a sliding DVR window, so don't mislabel it as total stream length.
       field('positionLabel','播放时间');
-      field('position',v.ready
-        ? (v.live?timestamp(v.position):
-          timestamp(v.position)+' / '+timestamp(v.duration))
-        : '尚未就绪');
+      field('position',playbackTimeText(v));
     }).catch(error=>{
       if(stillActive())field('position','暂时无法读取');
     });
@@ -3513,7 +3542,7 @@
   }
   function hudCellDispose(cell){
     if(!cell)return;
-    hudSessionStop(cell);cell.button.remove();
+    hudSessionStop(cell);cell.button.remove();cell.panelButton?.remove();
   }
   function clearHudCells(){
     for(const cell of hudCells.values())hudCellDispose(cell);
@@ -3529,6 +3558,17 @@
       if(cell)hudCellDispose(cell);
       cell={key,frame,videoId:row.videoId,button:createCornerHud(),
         time:'—',speed:'—',lastSpeed:null,monitorWin:null,monitorOrigin:null};
+      cell.panelButton=document.createElement('button');
+      cell.panelButton.type='button';
+      cell.panelButton.className='hmtc-corner-hud hmtc-panel-open';
+      cell.panelButton.textContent='统计';
+      cell.panelButton.title='打开此视频的控制与统计面板';
+      cell.panelButton.setAttribute('aria-label','打开此视频的控制与统计面板');
+      cell.panelButton.addEventListener('click',event=>{
+        event.preventDefault();event.stopPropagation();
+        const current=rowMap.get(key);
+        if(current)openSheet(current);
+      });
       hudCells.set(key,cell);
     }
     const layer=document.fullscreenElement||document.body;
@@ -3539,6 +3579,10 @@
     cell.button.style.top=Math.max(0,rect.top+6)+'px';
     cell.button.style.maxWidth=Math.max(28,Math.min(240,rect.width-12))+'px';
     displayCornerHud(cell.button,cell.time,cell.speed);
+    if(cell.panelButton.parentNode!==layer)layer.appendChild(cell.panelButton);
+    cell.panelButton.hidden=cell.button.hidden||touchZonesAllowed();
+    cell.panelButton.style.left=Math.max(0,rect.left+6)+'px';
+    cell.panelButton.style.top=Math.max(0,rect.top+42)+'px';
   }
   function hudSpeedValue(cell,kbps){
     const now=Date.now();
@@ -3564,11 +3608,10 @@
           rowMap.has(cell.key)&&isMulti();
         const jobs=[];
         if(wantTime)jobs.push(
-          rpc('stats',{layoutId:row.layoutId,videoId:row.videoId},2200)
+          readMultiviewClock(row)
             .then(v=>{
               if(!stillHere())return;
-              cell.time=!v?.ready?'—':v.live?timestamp(v.position):
-                timestamp(v.position)+' / '+timestamp(v.duration);
+              cell.time=playbackTimeText(v);
             }).catch(()=>{if(stillHere())cell.time='—';})
         );
         if(wantSpeed)jobs.push((async()=>{
@@ -3707,8 +3750,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.12 说明',()=>
-      alert('v0.6.12：PC 面板居中，打开后不再用透明全屏背景拦截播放器操作；实际鼠标输入也会停用热区。统计可从脚本菜单打开，纯触屏保留手势。'));
+    GM_registerMenuCommand('Touch Controls v0.6.13 说明',()=>
+      alert('v0.6.13：多视图优先读取 iframe 实际媒体时间，未就绪不再显示 0/0；PC 每格左上角「统计」可直接打开对应面板。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();

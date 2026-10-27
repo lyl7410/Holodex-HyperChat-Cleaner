@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.12 PC 面板背景与居中修复
+# Holodex / YouTube Touch Controls — v0.6.13 多视图时间与 PC 统计按钮
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 v0.6.12](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装／更新 v0.6.13](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,16 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.13：多视图时间与 PC 快捷入口
+
+- **PC 直接打开**：每个可见视频左上角，时间标签下方新增小「统计」按钮，单击打开该视频的统计、倍速、画质与音量面板。时间标签仍只负责切换 HUD 显示；隐藏 HUD 后「统计」入口仍保留。没有可见视频时不显示按钮，格子回收／删除时同步移除。纯触屏继续使用原有手势，脚本菜单也保留。
+- **时间来源**：HUD 与详细面板统一优先通过受限 iframe 通信读取实际 HTMLVideoElement 的 currentTime、duration、readyState，并使用 YouTube 播放器信息判断直播。读取不依赖启用原生详细统计，不改变 Tweaks 的原生统计显示。
+- **缺失与后备**：跨域 iframe 未运行脚本、未开放权限或未响应时使用 Holodex IFrame API 后备。未就绪、缺失位置或点播总时长为 0／未知时显示 —，不将 null 或接口初始 0/0 显示为正常时间。真实点播起点 0/正时长仍显示 00:00:00 / 总时长。单个播放器方法抛错不会丢弃其他方法结果。
+- **直播**：只显示播放位置，不将滚动 DVR 窗口当成直播总时长。该数值是播放器媒体时间，不保证等于从开播时刻计算的墙钟时长；不通过观看时间推算直播时长。
+- **验证**：语法与 16 项 Node 回归测试通过，新增缺失值／0/0／真实起点、点播／直播格式、iframe 元数据与视频身份检查、实际媒体优先及权限缺失后备、包装接口异常隔离、按钮点击对应当前视频与移除检查。真实多视图浏览器仍待验证。
+
+请安装 **v0.6.13** 后刷新 Holodex 多视图和内嵌视频，确认脚本允许在 YouTube embed／youtube-nocookie iframe 运行。测试一个已播放到中途的录像与一个直播，核对 HUD 与自定义面板一致；点击每格「统计」确认标题对应，删除／替换格子后入口不残留，并回归 Tweaks 右键操作。
 
 ## v0.6.12：Tweaks 原生详细统计兼容与面板居中
 
