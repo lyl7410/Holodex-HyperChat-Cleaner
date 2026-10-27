@@ -2,7 +2,7 @@
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
 // @version      0.6.8
-// @description  在视频左上角切换时间与原生连接速度显示；保留直播进度、五档倍速、手势和智能自动播放。
+// @description  增加网页播放器画质档位读取与内部画质接口切换，保留左上角 HUD、五档倍速、手势及智能自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -140,9 +140,9 @@
       else throw Error('YouTube 播放器尚未就绪');
       return snapshot();
     }
-    // YouTube's setPlaybackQuality() was removed (2019): native DOM is the
-    // ONLY attempted quality-control path. Verify the available entries;
-    // never fabricate a list of resolutions or falsely claim success.
+    // The public IFrame quality setter was deprecated in 2019. For desktop
+    // menus keep the native fallback; for mobile try the undocumented native
+    // YouTube webpage player methods, and verify instead of claiming success.
     const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
     const settingButton=()=>getPlayer()?.querySelector?.('.ytp-settings-button');
     const settingMenu=()=>getPlayer()?.querySelector?.('.ytp-settings-menu');
@@ -885,7 +885,7 @@
           '档位来自当前播放器；内部接口可能被 YouTube 忽略，需确认返回值':
           catalog.reason);
         const btn=sheet.querySelector('[data-action="qualityApply"]');
-        if(btn)btn.disabled=!catalog.choices.length;
+        if(btn)btn.disabled=!catalog.choices.length||catalog.method!=='internal-range';
       }catch(error){text('qualityTip','读取档位失败：'+error.message);}
     }
     function makePanel(){
@@ -930,7 +930,7 @@
         '<strong data-id="vol">—</strong></div>',
         '<div class="actions"><button data-action="minus">−10</button>',
         '<button data-action="plus">＋10</button><button data-action="full">100%</button></div>',
-        '<div class="hint" data-id="hint">当前画质显示实际视频帧大小；不使用已经失效的画质 API。</div>',
+        '<div class="hint" data-id="hint">实际分辨率来自视频帧；内部画质请求可能被 YouTube 忽略。</div>',
         '<details class="hmtc-yt-preferences"><summary>⚙ 手势设置</summary>',
         '<div class="row"><label>统计</label><select data-id="mode">',
         '<option value="tap">左侧轻点打开</option>',
@@ -995,8 +995,7 @@
               // The browser itself can expose Quality in its normal player UI.
               if(sheet.hidden){sheet.hidden=false;backdrop.hidden=false;}
               text('qualityTip',
-                '未找到当前手机版播放器的可操作画质齿轮。请轻点视频显示原生控件 → '+
-                '齿轮「设置」→「画质」→「高级」；若没有齿轮，在浏览器菜单开启「桌面版网站」。');
+                '当前页面未找到原生设置按钮。可优先使用上方「目标画质」列表尝试内部画质接口；若该接口也不存在，请切换浏览器桌面模式。');
               text('hint','当前无法由脚本直接打开画质：'+error.message);
             }
             return;
