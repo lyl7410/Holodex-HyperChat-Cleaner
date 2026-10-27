@@ -365,6 +365,8 @@
       '#hmtc-yt-panel .metric{padding:10px;border-radius:13px;background:#ffffff0b;min-width:0}',
       '#hmtc-yt-panel .metric label{display:block;font-size:11px;color:#afc2d1}',
       '#hmtc-yt-panel .metric b{font-size:15px;overflow-wrap:anywhere}',
+      '#hmtc-yt-panel .metric small{display:block;color:#93d9d4;font-size:10px;',
+      'font-weight:400;margin-top:3px;overflow-wrap:anywhere}',
       '#hmtc-yt-panel .row{display:flex;gap:7px;align-items:center;margin-top:10px}',
       '#hmtc-yt-panel .row label{min-width:45px;font-weight:700}',
       '#hmtc-yt-panel .row select,#hmtc-yt-panel .row input{flex:1;min-width:0}',
@@ -422,7 +424,12 @@
       // Stats-for-nerds engine, so speed stayed "—" while time/buffer worked.
       const net=bandwidth.read();
       text('speed',net.available?
-        (net.bandwidthKbps/1000).toFixed(2)+' Mbps':'—');
+        '≈ '+(net.bandwidthKbps/1000).toFixed(2)+' Mbps':'—');
+      text('speedInfo',net.available?
+        (net.source==='native-panel-dom'?'YouTube 原版统计 · 实时':
+          'YouTube 连接速度 · '+net.source):
+        (net.monitoring?
+          '等待 YouTube 提供带宽数据':'此播放器尚未提供带宽数据'));
       const speedValue=sheet.querySelector('[data-id="speed"]');
       if(speedValue)speedValue.title=net.available?
         '实时连接速度 · YouTube '+net.source:net.reason;
@@ -541,7 +548,8 @@
         '<div class="grid">',
         '<div class="metric"><label>播放时间</label><b data-id="time">—</b></div>',
         '<div class="metric"><label>实际分辨率</label><b data-id="resolution">—</b></div>',
-        '<div class="metric"><label>连接速度</label><b data-id="speed">—</b></div>',
+        '<div class="metric"><label>连接速度</label><b data-id="speed">—</b>',
+        '<small data-id="speedInfo">读取 YouTube 实时数据…</small></div>',
         '<div class="metric"><label>已缓冲时长（估计）</label><b data-id="buffer">—</b></div></div>',
         '<div class="row"><label>播放速度</label></div>',
         '<div class="hmtc-yt-rates" role="group" aria-label="常用播放倍速">',
@@ -3019,8 +3027,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.2 说明',()=>
-      alert('v0.6.2：Holodex 与 YouTube 均使用单排五档固定倍速：1×、1.25×、1.5×、1.75×、2×。YouTube 手机面板移除不可读取的画质下拉框，改为寻找当前播放器的原生设置按钮；找不到时提示用户在视频内打开齿轮或启用浏览器桌面版。保留原有音量手势、统计及 Holodex 自动播放。'));
+    GM_registerMenuCommand('Touch Controls v0.6.3 说明',()=>
+      alert('v0.6.3：恢复普通 YouTube 面板实时连接速度：打开面板期间尝试开启隐藏的原版详细统计，读取真实连接带宽并定时刷新，关闭时恢复原版统计状态。仍保留五档单排倍速、左右音量手势和 Holodex 智能自动播放。浏览器不提供带宽数据时仍显示不可用，不会虚报网速。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
