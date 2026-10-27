@@ -3237,8 +3237,114 @@
     clearInterval(statsInterval);statsInterval=null;
     stopNativeCollector();
   }
+
+  // Fixed overlay portals let each multiview video show its own clock/speed
+  // without touching cross-origin frames or the existing edge gestures.
+  const hudCells=new Map();
+  let hudBusy=false;
+  function hudSessionStop(cell){
+    if(!cell?.monitorWin)return;
+    if(active&&(active.layoutId+':'+active.videoId)===cell.key)return;
+    try{
+      cell.monitorWin.postMessage({tag:NATIVE_TAG,seq:++nativeSequence,
+        videoId:cell.videoId,action:'monitorStop'},cell.monitorOrigin);
+    }catch{}
+    cell.monitorWin=null;cell.monitorOrigin=null;
+  }
+  function hudCellDispose(cell){
+    if(!cell)return;
+    hudSessionStop(cell);cell.button.remove();
+  }
+  function clearHudCells(){
+    for(const cell of hudCells.values())hudCellDispose(cell);
+    hudCells.clear();
+  }
+  function attachCornerHud(root,row){
+    const frame=root?.querySelector('.mv-frame');
+    if(!frame)return;
+    const rect=frame.getBoundingClientRect();
+    const key=row.layoutId+':'+row.videoId;
+    let cell=hudCells.get(key);
+    if(cell?.frame!==frame){
+      if(cell)hudCellDispose(cell);
+      cell={key,frame,videoId:row.videoId,button:createCornerHud(),
+        time:'—',speed:'—',lastSpeed:null,monitorWin:null,monitorOrigin:null};
+      hudCells.set(key,cell);
+    }
+    const layer=document.fullscreenElement||document.body;
+    if(cell.button.parentNode!==layer)layer.appendChild(cell.button);
+    cell.button.hidden=rect.width<65||rect.height<45||rect.bottom<=0||
+      rect.top>=innerHeight||rect.right<=0||rect.left>=innerWidth;
+    cell.button.style.left=Math.max(0,rect.left+6)+'px';
+    cell.button.style.top=Math.max(0,rect.top+6)+'px';
+    cell.button.style.maxWidth=Math.max(28,Math.min(240,rect.width-12))+'px';
+    displayCornerHud(cell.button,cell.time,cell.speed);
+  }
+  function hudSpeedValue(cell,kbps){
+    const now=Date.now();
+    if(Number.isFinite(kbps)&&kbps>0){
+      cell.lastSpeed={kbps,at:now};
+      return '≈'+(kbps/1000).toFixed(2)+' Mbps';
+    }
+    const last=cell.lastSpeed;
+    return last&&now-last.at>=0&&now-last.at<=6000?
+      '≈'+(last.kbps/1000).toFixed(2)+' Mbps (上次)':'—';
+  }
+  async function pollCornerHuds(){
+    if(hudBusy||!installed||!isMulti()||document.hidden)return;
+    const wantTime=hudWantsTime(),wantSpeed=hudWantsSpeed();
+    hudBusy=true;
+    try{
+      const cells=[...hudCells.values()].filter(cell=>!cell.button.hidden).slice(0,12);
+      await Promise.allSettled(cells.map(async cell=>{
+        const row=rowMap.get(cell.key);
+        if(!row)return;
+        const instance=cell;
+        const stillHere=()=>hudCells.get(cell.key)===instance&&
+          rowMap.has(cell.key)&&isMulti();
+        const jobs=[];
+        if(wantTime)jobs.push(
+          rpc('stats',{layoutId:row.layoutId,videoId:row.videoId},2200)
+            .then(v=>{
+              if(!stillHere())return;
+              cell.time=!v?.ready?'—':v.live?timestamp(v.position):
+                timestamp(v.position)+' / '+timestamp(v.duration);
+            }).catch(()=>{if(stillHere())cell.time='—';})
+        );
+        if(wantSpeed)jobs.push((async()=>{
+          try{
+            const target=nativeFrame(row);
+            if(!target)throw Error('No iframe');
+            if(cell.monitorWin&&cell.monitorWin!==target.frame.contentWindow){
+              hudSessionStop(cell);cell.lastSpeed=null;
+            }
+            cell.monitorWin=target.frame.contentWindow;
+            cell.monitorOrigin=target.origin;
+            // Idempotent; recovers after a sheet closes or player reloads.
+            await nativeRequest(row,'monitorStart',1500);
+            const data=await nativeRequest(row,'stats',1700);
+            if(stillHere())cell.speed=hudSpeedValue(cell,
+              data?.available?Number(data.bandwidthKbps):NaN);
+          }catch{
+            if(stillHere())cell.speed=hudSpeedValue(cell,NaN);
+          }
+        })());
+        else hudSessionStop(cell);
+        await Promise.allSettled(jobs);
+        if(stillHere())displayCornerHud(cell.button,cell.time,cell.speed);
+      }));
+    }finally{hudBusy=false;}
+  }
+  function hudModeChanged(){
+    if(!hudWantsSpeed())
+      for(const cell of hudCells.values())hudSessionStop(cell);
+    for(const cell of hudCells.values())
+      displayCornerHud(cell.button,cell.time,cell.speed);
+    pollCornerHuds();
+  }
+  document.addEventListener('hmtc:corner-hud-change',hudModeChanged);
   async function refresh(){
-    if(!installed||listing||!isMulti()||!coarse||document.hidden)return;
+    if(!installed||listing||!isMulti()||document.hidden)return;
     listing=true;
     try{
       const rows=await rpc('list',{},3500);
@@ -3252,10 +3358,14 @@
         const ongoing=frame?.querySelector('.hmtc-edge--right')?._drag;
         if(ongoing && old){row.volume=old.volume;row.muted=old.muted;}
         rowMap.set(key,row);
-        if(get(EDGE_KEY,true))attachEdges(roots[row.index],row);
+        if(coarse&&get(EDGE_KEY,true))attachEdges(roots[row.index],row);
+        attachCornerHud(roots[row.index],row);
         if(active&&active.layoutId+':'+active.videoId===key)renderVolume(row);
       }
       for(const key of rowMap.keys())if(!validKeys.has(key))rowMap.delete(key);
+      for(const [key,cell] of hudCells)if(!validKeys.has(key)){
+        hudCellDispose(cell);hudCells.delete(key);
+      }
       // Remove obsolete v0.2.x icon and any edge area disabled or recycled.
       for(const root of roots){
         const frame=root.querySelector('.mv-frame');
@@ -3275,6 +3385,9 @@
 
     // PC and mobile both get the autonomous playback engine. Touch-only UI
     // remains gated to coarse pointers and is never inserted on a mouse PC.
+    GM_registerMenuCommand('左上角信息：切换时间／速度／隐藏',cycleHudMode);
+    setInterval(pollCornerHuds,2200);
+    window.addEventListener('pagehide',clearHudCells,{passive:true});
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
     GM_registerMenuCommand('诊断多视图自动播放状态',diagnoseAutoPlay);
@@ -3338,12 +3451,12 @@
       const nowMulti=isMulti();
       if(location.href!==last){
         last=location.href;
-        if(!nowMulti&&coarse){closeSheet();rowMap.clear();}
+        if(!nowMulti){closeSheet();rowMap.clear();clearHudCells();}
       }
       if(nowMulti){
         if(!installed)installBridge();
         else {
-          if(coarse)refresh();
+          refresh();
           if(!previousMulti)syncAutoSettings().catch(()=>{});
           // Reconcile rare startup races, Vue app reinitialization or another
           // extension overwriting the page-agent state. This does not create
@@ -3358,7 +3471,8 @@
       previousMulti=nowMulti;
     },1700);
     document.addEventListener('visibilitychange',()=>{
-      if(!document.hidden&&coarse)refresh();
+      if(!document.hidden){refresh();pollCornerHuds();}
+      else for(const cell of hudCells.values())hudSessionStop(cell);
       // The player-world agent independently handles return-to-tab autoplay.
     });
   }
