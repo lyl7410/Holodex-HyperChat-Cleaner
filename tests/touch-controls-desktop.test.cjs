@@ -485,3 +485,40 @@ test('explicit secs key accepts real zero and distinguishes an invalid value fro
   }
   assert.equal(ctx.nativeLatencySeconds({live_latency_style:'LOW_LATENCY',live_latency_samples:[3],latency_class:2,lowlatency:true}),null);
 });
+
+test('diagnostics preserve missing, invalid and unit-bearing scalar latency values',()=>{
+  const ctx=vm.createContext({});vm.runInContext(metricHelpers,ctx);
+  for(const [value,type,preview] of [[undefined,'undefined','undefined'],[null,'null','null'],
+    [-1,'number','-1'],[NaN,'number','NaN'],[Infinity,'number','Infinity'],
+    ['', 'string','""'],['12.5 s','string','"12.5 s"']]){
+    const detail=ctx.latencyValueDetails({live_latency_secs:value})[0];
+    assert.equal(detail.field,'live_latency_secs');assert.equal(detail.type,type);assert.equal(detail.preview,preview);
+  }
+  assert.equal(ctx.latencyValueDetails('{"stats":{"live_latency_secs":null}}')[0].type,'null');
+});
+
+test('diagnostics avoid accessors, cycles, unbounded output and unrelated payload data',()=>{
+  const ctx=vm.createContext({});vm.runInContext(metricHelpers,ctx);
+  let reads=0;const raw={url:'https://private.example/token',live_latency_secs:{secret:'private'},live_latency_ms:[1,2]};
+  Object.defineProperty(raw,'liveLatencySeconds',{get(){reads++;throw Error('getter');}});raw.self=raw;
+  const result=ctx.latencyValueDetails(raw);
+  assert.equal(reads,0);assert.equal(result.length,3);
+  assert.equal(result.find(x=>x.field==='liveLatencySeconds').type,'accessor');
+  assert.equal(result.find(x=>x.field==='live_latency_ms').type,'array');
+  assert.ok(!JSON.stringify(result).includes('private'));
+  const text=ctx.latencyValueDetails({live_latency_secs:'https://private.example/token'})[0];
+  assert.ok(!text.preview.includes('private'));
+  const deep={};let next=deep;for(let i=0;i<10;i++)next=next.child={};next.live_latency_secs=1;
+  assert.equal(ctx.latencyValueDetails(deep).length,0);
+  assert.ok(ctx.latencyValueDetails(Array.from({length:100},()=>({live_latency_secs:1}))).length<=16);
+});
+
+test('actual readStats diagnostics include value types and distinguish the zero-argument source',()=>{
+  const ctx=frameStatsContext({getStatsForNerds:(...args)=>({live_latency_secs:args.length?'12.5 s':null})});
+  const result=ctx.readStats(undefined,true);
+  const sources=result.latencyDiagnostics.sources;
+  assert.equal(sources.find(x=>x.method==='getStatsForNerds').values[0].type,'null');
+  assert.equal(sources.find(x=>x.method==='getStatsForNerds(0)').values[0].preview,'"12.5 s"');
+  assert.equal(result.liveLatencySeconds,null);
+  assert.equal(ctx.readStats().latencyDiagnostics,undefined);
+});

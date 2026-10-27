@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.18 原生延迟字段与纯时间 HUD
+# Holodex / YouTube Touch Controls — v0.6.19 延迟原值诊断
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 v0.6.18](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装／更新 PR 测试版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/fix/touch-controls-desktop-v0.6.11/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.19；分支名保留旧编号） · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,19 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.19：先取得实际延迟字段值
+
+v0.6.18 已补上 live_latency_secs 字段，但用户仍看到「未提供」。此前报告只列字段名，没有值与类型，不能判断是解析格式问题还是播放器确实没有给出有效数值。v0.6.19 仅增强诊断，**尚未确认实机延迟问题已修复**，不改变解析规则、原生统计被动采集策略或面板布局。
+
+1. 使用上面的 PR 测试版链接，安装页面确认 **0.6.19**，更新同名脚本。
+2. 完整刷新 Holodex 多视图页面，让内嵌 YouTube 也加载新脚本，等待问题直播开始播放。
+3. 点击浏览器的脚本管理器图标，在 Touch Controls 菜单中选择 **「诊断视频类型／时长／延迟」**。
+4. 复制报告发回，特别是 live_latency_secs 的「类型／原值」行。Windows 原生提示框通常可按 Ctrl+C 复制；无法复制时可提供该报告截图。
+
+明确单位字段以白名单读取，区分 null、undefined、空字符串、负数、NaN、Infinity、带单位字符串、数组和对象。对象／数组内容不展开，不调用字段 getter；限制遍历深度、数量和字符串长度，省略非数值文本，不输出完整 stats 数据。getStatsForNerds 与 getStatsForNerds(0) 分别显示。仅显式打开诊断菜单时附带这些信息，报告不会自动上传。
+
+语法检查和 **46 项 Node 自动测试通过**，覆盖实际 readStats 诊断链路、不同值类型、循环对象、getter、深度限制及无关数据排除。自动测试使用构造数据；真实播放器字段值仍需用户回报，不能用测试数值证明实机延迟正常。
 
 ## v0.6.18：实际延迟字段适配与纯时间 HUD
 

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.18
-// @description  PC 视频居中面板，兼容原生 live_latency_secs 延迟字段；画面时间标签精简，面板保留类型与录像总时长。
+// @version      0.6.19
+// @description  PC 视频居中面板，延迟诊断显示明确单位字段的原值与类型，帮助定位未提供原因。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -293,6 +293,41 @@
       }
     }
     return names;
+  }
+  // Diagnostic-only: never serialize the full stats payload or invoke accessors.
+  function latencyValueDetails(raw){
+    if(typeof raw==='string')try{raw=JSON.parse(raw);}catch{return [];}
+    const queue=[{value:raw,depth:0}],seen=new Set(),details=[];let visited=0;
+    while(queue.length&&visited++<60&&details.length<16){
+      const {value,depth}=queue.shift();
+      if(!value||typeof value!=='object'||seen.has(value))continue;seen.add(value);
+      let keys;try{keys=Object.getOwnPropertyNames(value).slice(0,100);}catch{continue;}
+      for(const key of keys){
+        if(details.length>=16)break;
+        let descriptor;try{descriptor=Object.getOwnPropertyDescriptor(value,key);}catch{continue;}
+        if(!descriptor)continue;
+        const known=LATENCY_SECONDS_KEYS.has(key)||LATENCY_MS_KEYS.has(key);
+        if(!('value' in descriptor)){
+          if(known)details.push({field:key,type:'accessor',preview:'未读取 getter'});
+          continue;
+        }
+        const v=descriptor.value;
+        if(known){
+          const type=v===null?'null':Array.isArray(v)?'array':typeof v;
+          let preview;
+          if(type==='string'){
+            // Preserve numeric/unit syntax; suppress URLs and arbitrary text/tokens.
+            preview=/^\s*(?:[+\-]?(?:[\d.,]+(?:e[+\-]?\d+)?|NaN|Infinity)\s*(?:ms|s|secs?|seconds?|milliseconds?|毫秒|秒)?)?\s*$/i.test(v)&&v.length<=80?
+              JSON.stringify(v):'[文本已省略；长度 '+v.length+']';
+          }else if(type==='number'||type==='boolean'||type==='undefined'||type==='null')preview=String(v);
+          else if(type==='array')preview='[数组；内容未展开]';
+          else preview='[非标量；内容未展开]';
+          details.push({field:key,type,preview});
+        }
+        if(v&&typeof v==='object'&&depth<3)queue.push({value:v,depth:depth+1});
+      }
+    }
+    return details;
   }
   function bindPanelRightClose(panel,close){
     panel.addEventListener('contextmenu',event=>{
@@ -1717,7 +1752,8 @@
           const sample=parse(raw),fields=latencyFieldNames(raw);
           if(fields.length)rawLatencyFields=true;
           if(fields.some(path=>{const key=path.split('.').pop();return LATENCY_SECONDS_KEYS.has(key)||LATENCY_MS_KEYS.has(key);}))rawExplicitLatencyField=true;
-          if(diagnose)sources.push({method:name,available:true,fields,latencySeconds:sample.liveLatencySeconds});
+          if(diagnose)sources.push({method:name+(args.length?'(0)':''),available:true,fields,
+            values:latencyValueDetails(raw),latencySeconds:sample.liveLatencySeconds});
           if(sample.bandwidthKbps!=null && data.bandwidthKbps==null){
             data.bandwidthKbps=sample.bandwidthKbps;
             source=name;
@@ -1797,7 +1833,7 @@
         respond({ok:true,data:readStats(message.status,true)});return;
       }
       if(message.action==='desktopPanelStatus'){
-        respond({ok:true,data:{version:'0.6.18',...desktopBridge.status()}});return;
+        respond({ok:true,data:{version:'0.6.19',...desktopBridge.status()}});return;
       }
       if(message.action==='desktopPanelConfig'){
         desktopBridge.configure(event,message);return;
@@ -1854,7 +1890,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.18', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.19', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -4062,11 +4098,12 @@
             'getLiveLatency：'+(d.getter?.supported?d.getter.status:'不存在'),
             '原版统计：'+(d.nativePanelVisible===true?'开启':d.nativePanelVisible===false?'关闭':'状态不可读'),
             ...(d.sources||[]).map(x=>x.method+'：'+(!x.available?'不存在':x.error||
-              (x.latencySeconds!=null?'延迟 '+x.latencySeconds+' s':'没有可解析延迟')+(x.fields?.length?'；字段 '+x.fields.join(','):'；无延迟字段')))
+              (x.latencySeconds!=null?'延迟 '+x.latencySeconds+' s':'没有可解析延迟')+(x.fields?.length?'；字段 '+x.fields.join(','):'；无延迟字段'))+
+              (x.values||[]).map(v=>'\n  '+v.field+'：类型 '+v.type+'；原值 '+v.preview).join(''))
           ].join('\n');
         }catch(error){return (row.title||row.videoId)+'：'+String(error?.message||error);}
       }));
-      alert('数据诊断 · v0.6.18\n'+reports.join('\n\n'));
+      alert('数据诊断 · v0.6.19\n'+reports.join('\n\n'));
     });
     GM_registerMenuCommand('诊断多视图右键面板',async()=>{
       const rows=[...rowMap.values()];
@@ -4078,7 +4115,7 @@
             '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
         }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
       }));
-      alert('右键面板诊断 · v0.6.18\n'+reports.join('\n'));
+      alert('右键面板诊断 · v0.6.19\n'+reports.join('\n'));
     });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
@@ -4143,8 +4180,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.18 说明',()=>
-      alert('v0.6.18：补上 YouTube live_latency_secs 秒字段解析；画面上的时间 HUD 不再带直播／录像文字，面板类型标识保留。'));
+    GM_registerMenuCommand('Touch Controls v0.6.19 说明',()=>
+      alert('v0.6.19：诊断菜单增加延迟字段原值与类型；用于定位问题，尚未确认实际延迟缺失原因。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
