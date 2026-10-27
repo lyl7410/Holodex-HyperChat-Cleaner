@@ -128,6 +128,150 @@
   }
 
 
+  // Restore the SAME measurement strategy previously used by Holodex's
+  // iframe stats collector on a standalone YouTube watch/live page:
+  // activate native Stats for nerds ONLY while the custom panel is visible,
+  // hide the original overlay (without display:none), and keep reading the
+  // real player's live bandwidth fields. No inferred/download-test speeds.
+  function youtubeWatchBandwidth(pageDoc,getPlayer){
+    const CLASS='hmtc-yt-native-bandwidth-silent';
+    const STYLE_ID='hmtc-yt-bandwidth-style';
+    const monitor={player:null,forced:false,active:false,lastArm:0};
+    const playerInfoVisible=p=>{
+      try{
+        return typeof p?.isVideoInfoVisible==='function'?
+          !!p.isVideoInfoVisible():null;
+      }catch{return null;}
+    };
+    const css=enabled=>{
+      if(enabled&&!pageDoc.getElementById(STYLE_ID)){
+        const style=pageDoc.createElement('style');
+        style.id=STYLE_ID;
+        const nonce=pageDoc.querySelector('script[nonce],style[nonce]')?.nonce;
+        if(nonce)style.nonce=nonce;
+        style.textContent='html.'+CLASS+
+          ' .html5-video-info-panel,html.'+CLASS+
+          ' .ytp-stats-for-nerds{opacity:0!important;pointer-events:none!important;'+
+          'transition:none!important}';
+        (pageDoc.head||pageDoc.documentElement).appendChild(style);
+      }
+      pageDoc.documentElement.classList.toggle(CLASS,!!enabled);
+    };
+    function stop(){
+      const original=monitor.player;
+      if(monitor.forced&&original&&
+         typeof original.hideVideoInfo==='function'){
+        // We enabled the original stats panel; put it back the way it was.
+        try{original.hideVideoInfo();}catch{}
+      }
+      css(false);
+      monitor.player=null;monitor.active=false;
+      monitor.forced=false;monitor.lastArm=0;
+    }
+    function start(){
+      const p=getPlayer();
+      if(monitor.player&&monitor.player!==p)stop();
+      if(!p)return {started:false,reason:'播放器尚未就绪'};
+      if(!monitor.active){
+        monitor.player=p;
+        monitor.active=true;
+        monitor.forced=false;
+      }
+      const visible=playerInfoVisible(p);
+      if(visible===null||typeof p.showVideoInfo!=='function')
+        return {started:false,reason:'此播放器不开放原生带宽监视接口'};
+      if(!visible&&!monitor.forced){
+        // The user may already have hidden their own native stats since the
+        // custom panel opened. Only take ownership on the first activation.
+        const now=Date.now();
+        if(monitor.lastArm&&now-monitor.lastArm<2000)
+          return {started:false,reason:'等待原生统计更新'};
+        monitor.lastArm=now;
+        css(true);
+        try{
+          p.showVideoInfo();
+          monitor.forced=true;
+        }catch(error){
+          css(false);
+          return {started:false,reason:String(error?.message||error)};
+        }
+      }else if(!visible&&monitor.forced){
+        const now=Date.now();
+        if(now-monitor.lastArm>=2000){
+          monitor.lastArm=now;
+          css(true);
+          try{p.showVideoInfo();}catch{}
+        }
+      }
+      return {started:visible||monitor.forced,hidden:monitor.forced};
+    }
+    const asNumber=value=>{
+      if(typeof value==='number')return Number.isFinite(value)?value:null;
+      if(typeof value!=='string')return null;
+      const n=value.replace(/,/g,'').match(/-?\d+(?:\.\d+)?/);
+      return n?Number(n[0]):null;
+    };
+    function parse(raw){
+      const obj=raw&&typeof raw==='object'?raw:{};
+      const nested=obj.stats&&typeof obj.stats==='object'?obj.stats:{};
+      const string=typeof raw==='string'?raw:'';
+      const first=(...candidates)=>{
+        for(const entry of candidates){
+          const n=asNumber(entry);
+          if(n!=null&&Number.isFinite(n)&&n>0)return n;
+        }
+        return null;
+      };
+      // Prefer explicitly-Kbps fields. A raw integer "bandwidth" does NOT
+      // guarantee units, so never treat it as a network-speed measurement.
+      const keys=['bandwidth_kbps','bandwidthKbps','connection_speed_kbps',
+        'connectionSpeedKbps','connection_speed_in_kbps','connectionSpeedInKbps'];
+      const keyValues=keys.flatMap(k=>[obj[k],nested[k]]);
+      const regex=/(?:Connection\s*Speed|连接速度|連線速度|接続速度)\s*[:：]?\s*([\d,.]+)\s*(?:Kbps|kb\/s|kbps)/i;
+      const fromString=string.match(regex);
+      const bandwidthKbps=first(...keyValues,fromString?.[1]);
+      return {bandwidthKbps};
+    }
+    function read(){
+      const p=getPlayer();
+      if(!p)return {available:false,bandwidthKbps:null,reason:'播放器尚未就绪'};
+      if(monitor.player&&monitor.player!==p)stop();
+      let bandwidthKbps=null,source='';
+      for(const [method,args] of [
+        ['getStatsForNerdsData',[]],
+        ['getStatsForNerds',[]],
+        ['getStatsForNerds',[0]],
+        ['getDebugText',[]]
+      ]){
+        if(typeof p[method]!=='function')continue;
+        try{
+          const raw=p[method](...args),sample=parse(raw);
+          if(sample.bandwidthKbps!=null){
+            bandwidthKbps=sample.bandwidthKbps;
+            source=method;break;
+          }
+        }catch{}
+      }
+      // YouTube may update bandwidth ONLY in its original Stats-for-nerds
+      // DOM. Read that DOM only if its native panel is logically visible.
+      if(playerInfoVisible(p)===true){
+        const panel=pageDoc.querySelector(
+          '.html5-video-info-panel-content, .ytp-stats-for-nerds');
+        const fromPanel=parse(panel?.textContent||'');
+        if(fromPanel.bandwidthKbps!=null){
+          bandwidthKbps=fromPanel.bandwidthKbps;
+          source='native-panel-dom';
+        }
+      }
+      return {available:bandwidthKbps!=null,bandwidthKbps,source,
+        monitoring:monitor.active,hidden:monitor.forced,
+        reason:bandwidthKbps==null?
+          'YouTube 当前尚未提供实时 Connection Speed 数值':'',
+        sampledAt:Date.now()};
+    }
+    return {start,stop,read};
+  }
+
   // YouTube's own watch/live/shorts interface: no Holodex Vue bridge and no
   // persistent floating icon. Invisible edges exist only on touch devices.
   function youtubeWatchControls(){
