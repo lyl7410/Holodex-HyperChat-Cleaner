@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.6 恢复播放时间并稳住连接速度
+# Holodex / YouTube Touch Controls — v0.6.7 左上角常驻时间与原生连接速度
 
-独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.6 根据实际反馈恢复普通 YouTube 和 Holodex 的**播放时间**：直播时不再用状态标签覆盖进度，并强化 Connection Speed 的真实原生数据采集容错。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
+独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装 / 更新 v0.6.6](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装 / 更新 v0.6.7](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,18 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.7：视频左上角常驻信息
+
+更新原 Touch Controls 后，在 Holodex 多视图和普通 YouTube 视频左上角出现小标签；PC 与 Android 均支持，不需另装 HUD。
+
+1. 初始显示播放时间。点播是当前位置／总时长；直播仅是播放器时间轴位置，不当作开播总时长。
+2. 轻点标签切换：**时间 → 连接速度 → 两者 → 只留小入口（◷）**。也可以用篡改猴菜单「左上角信息：切换时间／速度／隐藏」。
+3. 模式保存在 GM 配置中，刷新后仍生效。Holodex 每个可见视频有独立标签，屏幕外视频不主动轮询；普通 YouTube 使用原统计采集器。
+4. Mbps 值仅来自 YouTube 原生播放器统计。标记「(上次)」表示 6 秒内此前取得的真实样本；过期或浏览器不提供数值就显示 —，不虚构测速。
+5. 选择只显示时间或收起时不需要持续采集网速；原有左右手势、五档倍速、画质入口和 Holodex 智能自动播放不变。
+
+**测试边界：**已通过 JS 语法与四档切换模拟检查；尚未在实际安卓和 Holodex 多格浏览器环境验证 UI 层级、iframe 授权与真实带宽数值。
 
 ## v0.6.6：为什么播放时间没了，如何恢复
 
