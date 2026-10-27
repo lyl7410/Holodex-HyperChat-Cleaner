@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.16
-// @description  PC 视频居中紧凑面板，单项当前分辨率、直播延迟补查与面板右键收起；保留触屏手势、HUD 与自动播放。
+// @version      0.6.17
+// @description  PC 视频居中面板，明确直播／录像标识与录像总时长，提供延迟来源诊断；保留手势、HUD 与自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -240,6 +240,7 @@
       return true;
     }};
   }
+  GM_addStyle('.hmtc-media-kind{flex:none;font:600 10px/1.4 system-ui;padding:2px 5px;border-radius:4px;background:#ffffff18;color:#d4e3ed}.hmtc-media-kind[data-kind="live"]{color:#ffb7b7}.hmtc-media-kind[data-kind="vod"]{color:#b9e5df}');
   function currentResolution(value){
     if(typeof value!=='string')return '';
     const m=value.match(/(\d{2,5})\s*[x×]\s*(\d{2,5})(?:\s*@\s*(\d+(?:\.\d+)?))?/i);
@@ -274,6 +275,23 @@
       if(m&&(m[1]||m[3])){const n=numeric(m[2]);if(n!=null)return /^(?:ms|millisecond|毫秒)/i.test(m[3]||m[1])?n/1000:n;}
     }
     return null;
+  }
+  function latencyFieldNames(raw){
+    let value=raw;
+    if(typeof raw==='string')try{value=JSON.parse(raw);}catch{
+      return /(?:live latency|latency to live|直播延迟)/i.test(raw)?['原生延迟文字']:[];
+    }
+    const queue=[{value,path:'',depth:0}],seen=new Set(),names=[];let count=0;
+    while(queue.length&&count++<60&&names.length<16){
+      const {value,path,depth}=queue.shift();
+      if(!value||typeof value!=='object'||seen.has(value))continue;seen.add(value);
+      for(const [key,v] of Object.entries(value)){
+        const name=path?path+'.'+key:key;
+        if(/latency/i.test(key))names.push(name.slice(0,90));
+        if(v&&typeof v==='object'&&depth<3)queue.push({value:v,path:name,depth:depth+1});
+      }
+    }
+    return names;
   }
   function bindPanelRightClose(panel,close){
     panel.addEventListener('contextmenu',event=>{
@@ -755,59 +773,79 @@
   // HTMLMediaElement.duration is often a rolling DVR-window length for
   // YouTube LIVE (e.g. precisely 1:00:00), NOT the stream's total duration.
   // Prefer YouTube's explicit live flags and visible live-badge state.
-  function readFrameClock(pageDoc,getPlayer,getVideo,mainPage,expectedVideoId){
+  function readFrameClock(pageDoc,getPlayer,getVideo,mainPage,expectedVideoId,statusHint){
     const p=getPlayer();
-    if(!p)return {ready:false};
-    const actualId=p.getVideoData?.()?.video_id;
-    if(actualId&&actualId!==expectedVideoId)return {ready:false};
+    if(!p)return {ready:false,live:null};
+    const safe=(fn)=>{try{return fn();}catch{return null;}};
+    const actualId=safe(()=>p.getVideoData?.()?.video_id);
+    if(expectedVideoId&&actualId&&actualId!==expectedVideoId)return {ready:false,live:null};
     const v=getVideo();
-    return {ready:!!v&&v.readyState>=1,position:v?.currentTime??null,
-      duration:Number.isFinite(v?.duration)?v.duration:null,
-      live:youtubeWatchLiveState(pageDoc,getPlayer,getVideo,mainPage).live};
+    const number=value=>value==null||typeof value==='string'&&!value.trim()||typeof value==='boolean'?null:
+      Number.isFinite(Number(value))&&Number(value)>=0?Number(value):null;
+    const state=resolvePlaybackState(youtubeWatchLiveState(pageDoc,getPlayer,getVideo,mainPage),statusHint);
+    let position=number(v?.currentTime);
+    if(position==null||v?.readyState===0)position=number(safe(()=>p.getCurrentTime?.()))??position;
+    let duration=number(v?.duration),durationSource=duration>0?'media':'';
+    if(!(duration>0)){duration=number(safe(()=>p.getDuration?.()));if(duration>0)durationSource='player-api';}
+    if(!(duration>0)&&state.durationSeconds>0){duration=state.durationSeconds;durationSource='video-details';}
+    return {ready:!!v&&v.readyState>=1||position!=null&&(duration>0||state.live===true),
+      position,duration:duration>0?duration:null,live:state.live,liveReason:state.reason,durationSource};
+  }
+  function resolvePlaybackState(state,statusHint){
+    if(state?.live===true||state?.live===false)return {...state,reason:state.reason||state.liveReason||
+      (statusHint==='past'?'holodex-past':statusHint==='live'?'holodex-live':'reported-live-state')};
+    if(statusHint==='past')return {...state,live:false,reason:'holodex-past'};
+    if(statusHint==='live')return {...state,live:true,reason:'holodex-live'};
+    return {...state,live:null,reason:state?.reason||'unknown'};
+  }
+  function playbackKindLabel(value){
+    return value?.live===true?'直播':value?.live===false?'录像':'待确认';
+  }
+  function renderMediaKind(panel,state){
+    const badge=panel?.querySelector('[data-hmtc-media-kind]');
+    if(!badge)return;
+    badge.textContent=playbackKindLabel(state);
+    badge.dataset.kind=state?.live===true?'live':state?.live===false?'vod':'unknown';
   }
   function youtubeWatchLiveState(pageDoc,getPlayer,getVideo,mainPage){
     const player=getPlayer();
-    if(!player)return {live:false,reason:'no-player'};
+    if(!player)return {live:null,reason:'no-player'};
     const safe=(fn,fallback=null)=>{try{return fn()??fallback;}catch{return fallback;}};
     const data=safe(()=>player.getVideoData?.(),{})||{};
     const playerId=data.video_id||data.videoId||'';
     let response=safe(()=>player.getPlayerResponse?.());
+    if(response?.videoDetails?.videoId&&playerId&&response.videoDetails.videoId!==playerId)response=null;
     if(!response){
-      // ytInitialPlayerResponse may refer to an earlier video after YouTube
-      // SPA navigation; never trust it if the video IDs do not match.
       const candidate=mainPage?.ytInitialPlayerResponse;
-      const responseId=candidate?.videoDetails?.videoId||'';
-      if(candidate&&playerId&&responseId===playerId)response=candidate;
+      if(playerId&&candidate?.videoDetails?.videoId===playerId)response=candidate;
     }
     const details=response?.videoDetails||{};
     const liveInfo=response?.microformat?.playerMicroformatRenderer?.liveBroadcastDetails;
-    // A replay of a past live stream may still carry isLiveContent=true:
-    // a definitive "isLiveNow:false" must win over that stale designation.
-    if(liveInfo?.isLiveNow===false)return {live:false,reason:'past-broadcast'};
-    if(liveInfo?.isLiveNow===true)return {live:true,reason:'broadcast-details'};
-    if(data.isLive===true||details.isLive===true)
-      return {live:true,reason:'player-live'};
-    if(data.isLiveContent===true||details.isLiveContent===true)
-      return {live:true,reason:'video-details-live'};
-    if(player.classList?.contains?.('ytp-live')||
-       player.classList?.contains?.('ytp-live-streaming'))
-      return {live:true,reason:'player-live-class'};
-    for(const selector of [
-      '.ytp-live-badge','.ytm-live-badge',
-      '.badge-style-type-live-now','.ytp-live'
-    ]){
-      const node=pageDoc.querySelector(selector);
-      if(!node)continue;
-      const rect=safe(()=>node.getBoundingClientRect?.());
+    const durationSeconds=Number.isFinite(Number(details.lengthSeconds))&&Number(details.lengthSeconds)>0?Number(details.lengthSeconds):null;
+    const state=(live,reason)=>({live,reason,durationSeconds});
+    if(liveInfo?.isLiveNow===false||liveInfo?.endTimestamp)return state(false,'past-broadcast');
+    if(liveInfo?.isLiveNow===true)return state(true,'broadcast-details');
+    if(data.isLive===true||details.isLive===true)return state(true,'player-live');
+    if(data.isLive===false||details.isLive===false)return state(false,'player-not-live');
+    const apiLive=safe(()=>player.isLive?.());
+    if(typeof apiLive==='boolean')return state(apiLive,'player-is-live');
+    if(player.classList?.contains?.('ytp-live')||player.classList?.contains?.('ytp-live-streaming'))
+      return state(true,'player-live-class');
+    // Only inspect this player's own badge. A recommended live video elsewhere
+    // on the page says nothing about the video currently being watched.
+    for(const selector of ['.ytp-live-badge','.ytm-live-badge','.ytp-live']){
+      const node=player.querySelector?.(selector);
+      const rect=safe(()=>node?.getBoundingClientRect?.());
       const style=safe(()=>mainPage?.getComputedStyle?.(node));
-      if((rect&&rect.width>0&&rect.height>0)&&
-         style?.display!=='none'&&style?.visibility!=='hidden')
-        return {live:true,reason:'visible-live-badge'};
+      if(rect?.width>0&&rect.height>0&&style?.display!=='none'&&style?.visibility!=='hidden')
+        return state(true,'visible-player-live-badge');
     }
     const video=getVideo();
-    if(video?.duration===Infinity)
-      return {live:true,reason:'infinite-media'};
-    return {live:false,reason:'vod'};
+    if(video?.readyState>=1&&video.duration===Infinity)return state(true,'infinite-media');
+    if(data.isLiveContent===false||details.isLiveContent===false)return state(false,'vod-details');
+    // isLiveContent is historical: archived live streams retain this flag.
+    // Never use it alone as evidence of a broadcast happening now.
+    return state(null,data.isLiveContent===true||details.isLiveContent===true?'historic-live-flag-only':'unknown');
   }
 
   // YouTube's own watch/live/shorts interface: no Holodex Vue bridge and no
@@ -945,26 +983,9 @@
 
     // Same live/DVR-aware clock feeds both the detailed sheet and compact HUD.
     function readWatchClock(){
-      const v=video(),player=p(),live=watchLive();
-      const valid=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0;
-      const mediaTime=Number(v?.currentTime);
-      let current=valid(mediaTime)?mediaTime:null;
-      if(current===null||(current===0&&Number(v?.readyState)===0)){
-        try{
-          const value=Number(player?.getCurrentTime?.());
-          if(valid(value))current=value;
-        }catch{}
-      }
-      let duration=Number(v?.duration);
-      if(!valid(duration)||duration===0){
-        try{duration=Number(player?.getDuration?.());}catch{duration=NaN;}
-      }
-      const elapsed=clock(current);
-      return {
-        time:live.live?elapsed:elapsed+' / '+(valid(duration)&&duration>0?clock(duration):'—'),
-        info:live.live?'🔴 直播中 · 播放位置（非直播总时长）':
-          '当前播放位置 / 总时长'
-      };
+      let id=null;try{id=p()?.getVideoData?.()?.video_id;}catch{}
+      const data=readFrameClock(page.document,p,video,page,id);
+      return {time:playbackTimeText(data),hudTime:playbackKindLabel(data)+' '+playbackTimeText(data),state:data};
     }
     let watchHud=null;
     function refreshWatchHud(player){
@@ -987,7 +1008,7 @@
       watchHud.style.left=Math.max(0,rect.left+Math.min(7,rect.width/20))+'px';
       watchHud.style.top=Math.max(0,rect.top+6)+'px';
       watchHud.style.maxWidth=Math.max(28,Math.min(240,rect.width-14))+'px';
-      const time=hudWantsTime()?readWatchClock().time:'—';
+      const time=hudWantsTime()?readWatchClock().hudTime:'—';
       let speed='—';
       if(hudWantsSpeed()){
         bandwidth.start();
@@ -1007,6 +1028,7 @@
       text('resolution',snapshot.resolution);
       const currentClock=readWatchClock();
       text('timeLabel','播放时间');
+      renderMediaKind(sheet,currentClock.state);
       text('time',currentClock.time);
       text('vol',vol()+'%');text('mute',muted()?'🔇':'🔊');
       const vslider=sheet.querySelector('[data-id="slider"]');
@@ -1222,6 +1244,7 @@
       sheet.setAttribute('aria-label','YouTube 视频音量、倍速、画质和统计');
       sheet.innerHTML=[
         '<div class="head"><strong data-id="title">YouTube</strong>',
+        '<span class="hmtc-media-kind" data-hmtc-media-kind>待确认</span>',
         '<button data-action="close" aria-label="关闭面板">✕</button></div>',
         '<div class="grid">',
         '<div class="metric hmtc-yt-time-metric"><label data-id="timeLabel">播放时间</label>',
@@ -1663,7 +1686,7 @@
       throw new Error('此播放器不支持切换原版统计');
     }
 
-    function readStats() {
+    function readStats(statusHint,diagnose=false) {
       const p=player();
       if(!p)return {available:false, reason:'YouTube 播放器尚未就绪'};
       let actualId=null;
@@ -1671,7 +1694,8 @@
       if(actualId&&actualId!==videoId)
         return {available:false,reason:'播放视频已切换'};
       let source='none';
-      const data=parse(null);
+      const data=parse(null),sources=[];let rawLatencyFields=false,availableSourceCount=0;
+      const getter={supported:typeof p.getLiveLatency==='function',status:'未查询'};
       // Prefer fresh API output; previous versions wrongly read old panel DOM first.
       // Combine compatible fields instead of stopping at an API which happens
       // to return resolution but not the more important Connection Speed.
@@ -1682,11 +1706,16 @@
         ['getDebugText',[]],
         ['getVideoStats',[]]
       ]) {
-        if(typeof p[name]!=='function')continue;
+        if(typeof p[name]!=='function'){if(diagnose)sources.push({method:name,available:false});continue;}
+        availableSourceCount++;
         try{
           const raw=p[name](...args);
-          if(!raw || (typeof raw!=='string'&&typeof raw!=='object'))continue;
-          const sample=parse(raw);
+          if(!raw || (typeof raw!=='string'&&typeof raw!=='object')){
+            if(diagnose)sources.push({method:name,available:true,error:'未返回数据'});continue;
+          }
+          const sample=parse(raw),fields=latencyFieldNames(raw);
+          if(fields.length)rawLatencyFields=true;
+          if(diagnose)sources.push({method:name,available:true,fields,latencySeconds:sample.liveLatencySeconds});
           if(sample.bandwidthKbps!=null && data.bandwidthKbps==null){
             data.bandwidthKbps=sample.bandwidthKbps;
             source=name;
@@ -1702,7 +1731,7 @@
           if(source==='none' && (sample.resolution||sample.bufferSeconds!=null))
             source=name;
           // Continue: later APIs may expose latency even when other metrics are complete.
-        }catch{}
+        }catch{if(diagnose)sources.push({method:name,available:true,error:'调用失败'});}
       }
       // DOM is used only as a fallback, and only while YouTube says its
       // statistics panel is actively enabled. Hidden snapshots can be stale.
@@ -1718,17 +1747,25 @@
         if(!data.resolution) data.resolution=fromPanel.resolution;
         if(fromPanel.liveLatencySeconds!=null)data.liveLatencySeconds=fromPanel.liveLatencySeconds;
       }
-      const liveState=youtubeWatchLiveState(page.document,player,controls.video,page);
-      data.live=liveState.live;
-      if(!data.live){data.liveLatencySeconds=null;data.latencyReason='非直播';}
-      else {
-        // YouTube's explicit live-latency getter reports seconds. Missing/null
-        // must not become a misleading zero, and buffer length is not latency.
-        if(data.liveLatencySeconds==null&&typeof p.getLiveLatency==='function'){
-          try{data.liveLatencySeconds=nativeLatencySeconds({liveLatencySeconds:p.getLiveLatency()});}catch{}
+      const liveState=resolvePlaybackState(youtubeWatchLiveState(page.document,player,controls.video,page),statusHint);
+      data.live=liveState.live;data.liveReason=liveState.reason;
+      if(data.live===false){
+        data.liveLatencySeconds=null;data.latencyReason='非直播';data.latencyReasonCode='not-live';getter.status='录像不查询';
+      }else if(data.live==null){
+        data.liveLatencySeconds=null;data.latencyReason='状态未确认';data.latencyReasonCode='media-type-unknown';getter.status='类型未确认';
+      }else {
+        if(data.liveLatencySeconds==null&&getter.supported){
+          try{
+            data.liveLatencySeconds=nativeLatencySeconds({liveLatencySeconds:p.getLiveLatency()});
+            getter.status=data.liveLatencySeconds==null?'未返回有效秒值':'返回有效秒值';
+          }catch{getter.status='调用失败';}
         }
         data.latencyReason=data.liveLatencySeconds==null?'未提供':'';
+        data.latencyReasonCode=data.liveLatencySeconds!=null?'available':rawLatencyFields?'unrecognized-latency-units':
+          availableSourceCount===0&&!getter.supported?'no-latency-api':'latency-field-absent';
       }
+      if(diagnose)data.latencyDiagnostics={sources,getter,nativePanelVisible:isNativeVisible(p),
+        liveReason:liveState.reason,reasonCode:data.latencyReasonCode};
       if(!data.resolution) {
         // HTMLVideoElement intrinsic dimensions reflect the decoded video
         // frame; label them explicitly rather than inventing optimal resolution.
@@ -1754,8 +1791,11 @@
           event.origin
         );
       };
+      if(message.action==='statsDiagnostics'){
+        respond({ok:true,data:readStats(message.status,true)});return;
+      }
       if(message.action==='desktopPanelStatus'){
-        respond({ok:true,data:{version:'0.6.16',...desktopBridge.status()}});return;
+        respond({ok:true,data:{version:'0.6.17',...desktopBridge.status()}});return;
       }
       if(message.action==='desktopPanelConfig'){
         desktopBridge.configure(event,message);return;
@@ -1765,7 +1805,7 @@
         // Re-arm only if this script owns a silent monitoring session.
         if(monitor.active&&monitor.forced&&!monitor.manual&&
            isNativeVisible(player())===false)startMonitor();
-        respond({ok:true,data:readStats()});
+        respond({ok:true,data:readStats(message.status)});
         return;
       }
       if(message.action==='monitorStart') {
@@ -1786,7 +1826,7 @@
           if(!player())throw Error('YouTube 播放器尚未就绪');
           let info;
           if(message.action==='playbackClock')info=readFrameClock(
-            page.document,player,controls.video,page,videoId);
+            page.document,player,controls.video,page,videoId,message.status);
           if(message.action==='playbackInfo')info=controls.snapshot();
           if(message.action==='playbackRate')info=controls.setRate(message.rate);
           if(message.action==='qualityMenu')info=await controls.openQualityMenu();
@@ -1812,7 +1852,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.16', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.17', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -2261,7 +2301,7 @@
         rows.push({index,layoutId,videoId,
           title:String(vm.video?.title||vm.video?.channel?.name||videoId).slice(0,140),
           volume:Number.isFinite(Number(vm.volume))?Math.max(0,Math.min(100,Math.round(Number(vm.volume)))):50,
-          muted:!!vm.muted,ready:!!vm.ytPlayer,live:vm.video?.status==='live'
+          muted:!!vm.muted,ready:!!vm.ytPlayer,status:String(vm.video?.status||''),live:vm.video?.status==='live'?true:vm.video?.status==='past'?false:null
         });
       }
       return rows;
@@ -2282,7 +2322,8 @@
       const fields=['state','position','duration','fraction','rate','volume','muted'];
       const values=await Promise.allSettled(methods.map(x=>
         Promise.resolve().then(()=>typeof p[x]==='function'?p[x]():null)));
-      const data={ready:true,live:vm.video?.status==='live'};
+      const status=String(vm.video?.status||'');
+      const data={ready:true,status,live:status==='live'?true:status==='past'?false:null};
       values.forEach((v,i)=>{if(v.status==='fulfilled'&&v.value!=null)data[fields[i]]=v.value;});
       return data;
     }
@@ -3019,7 +3060,7 @@
     return null;
   }
   function nativeRequest(row,action,timeout=1800,extra={}) {
-    if(!['stats','nativeToggle','monitorStart','monitorStop','desktopPanelStatus',
+    if(!['stats','nativeToggle','monitorStart','monitorStop','desktopPanelStatus','statsDiagnostics',
           'playbackClock','playbackInfo','playbackRate','qualityMenu',
           'qualityOptions','selectQuality'].includes(action))
       return Promise.reject(new Error('不支持的 YouTube 指令'));
@@ -3034,7 +3075,7 @@
       nativePending.set(seq,{...target,videoId:row.videoId,action,timer,resolve,reject});
       try{
         target.frame.contentWindow.postMessage(
-          {tag:NATIVE_TAG,seq,videoId:row.videoId,action,...extra},
+          {tag:NATIVE_TAG,seq,videoId:row.videoId,action,status:row.status,...extra},
           target.origin
         );
       }catch(error){
@@ -3350,6 +3391,7 @@
       '<div class="hmtc-dismiss-zone" data-action="dismissHeader" title="轻点任意统计数据收起">',
       '<div class="head" data-action="dismissHeader" title="轻点标题收起">',
       '<div class="title" data-field="title">YouTube</div>',
+      '<span class="hmtc-media-kind" data-hmtc-media-kind>待确认</span>',
       '<button type="button" data-action="close" aria-label="关闭">✕</button></div>',
       '<div class="net"><div class="sub">连接速度</div>',
       '<div><span class="speed" data-field="speed">—</span><span class="unit">Mbps</span>',
@@ -3660,22 +3702,34 @@
     if(!v?.ready)return '—';
     const position=timestamp(v.position),duration=timestamp(v.duration);
     if(position==='—')return '—';
-    if(v.live)return position;
+    if(v.live===true)return position;
+    if(v.live!==false)return Number(v.position)===0&&!(Number(v.duration)>0)?'—':position+' / —';
     // IFrame API returns 0/0 before media metadata is available. That is not
     // a verified playback position or a real zero-length video.
     if(!(Number(v.duration)>0))return '—';
     return position+' / '+duration;
   }
+  function mergePlaybackClock(primary,fallback,row){
+    const hint=row?.status||fallback?.status;
+    let state=resolvePlaybackState(primary||{},hint);
+    if(state.live==null)state=resolvePlaybackState(fallback||{},hint);
+    const valid=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0;
+    const duration=valid(primary?.duration)&&primary.duration>0?primary.duration:
+      valid(fallback?.duration)&&fallback.duration>0?fallback.duration:null;
+    const position=valid(primary?.position)?primary.position:valid(fallback?.position)?fallback.position:null;
+    return {...primary,ready:primary?.ready===true||fallback?.ready===true,
+      live:state.live,liveReason:state.reason,duration,position,
+      durationSource:primary?.duration>0?primary.durationSource:duration>0?'holodex-api':''};
+  }
   async function readMultiviewClock(row){
-    // Start both reads together. Prefer the frame's actual media clock over
-    // Holodex's wrapper, which may retain its initial zero values.
-    const fallback=rpc('stats',{layoutId:row.layoutId,videoId:row.videoId},2200)
-      .then(v=>v,()=>null);
+    const fallback=rpc('stats',{layoutId:row.layoutId,videoId:row.videoId},2200).then(v=>v,()=>null);
+    let primary=null;
     try{
-      const v=await nativeRequest(row,'playbackClock',1300);
-      if(playbackTimeText(v)!=='—')return v;
+      primary=await nativeRequest(row,'playbackClock',1300);
+      const value=mergePlaybackClock(primary,null,row);
+      if(value.live!=null&&playbackTimeText(value)!=='—'&&(value.live||value.duration>0))return value;
     }catch{}
-    return await fallback;
+    return mergePlaybackClock(primary,await fallback,row);
   }
   async function stats(){
     if(statsBusy||!active||sheet.hidden)return;
@@ -3692,6 +3746,7 @@
       // be a sliding DVR window, so don't mislabel it as total stream length.
       field('positionLabel','播放时间');
       field('position',playbackTimeText(v));
+      renderMediaKind(sheet,v);
     }).catch(error=>{
       if(stillActive())field('position','暂时无法读取');
     });
@@ -3791,6 +3846,7 @@
     presentPanel(sheet,touchZonesAllowed()?anchor:desktopVideoAnchor(videoFrame));
     if(backdrop)backdrop.hidden=!touchZonesAllowed();
     field('title',row.title||row.videoId);
+    renderMediaKind(sheet,resolvePlaybackState({},row.status));
     field('note','');
     renderVolume(row);
     renderYouTubeStats(null,'正在读取 YouTube 嵌入播放器…');
@@ -3884,7 +3940,7 @@
           readMultiviewClock(row)
             .then(v=>{
               if(!stillHere())return;
-              cell.time=playbackTimeText(v);
+              cell.time=playbackKindLabel(v)+' '+playbackTimeText(v);
             }).catch(()=>{if(stillHere())cell.time='—';})
         );
         if(wantSpeed)jobs.push((async()=>{
@@ -3979,6 +4035,37 @@
     setInterval(()=>{
       if(isMulti()&&!document.hidden)for(const row of rowMap.values())configureDesktopFrame(row);
     },1800);
+    GM_registerMenuCommand('诊断视频类型／时长／延迟',async()=>{
+      const selected=active&&rowMap.get(active.layoutId+':'+active.videoId);
+      const rows=selected?[selected]:[...rowMap.values()].slice(0,12);
+      if(!rows.length)return alert('请先打开多视图视频。');
+      const reasons={'not-live':'已识别为录像，没有直播延迟','media-type-unknown':'当前直播／录像状态未确认',
+        'no-latency-api':'未开放直播延迟读取接口','latency-field-absent':'可用接口未返回明确的延迟字段',
+        'unrecognized-latency-units':'返回了延迟字段或文字，但单位无法确认','available':'已读取实际延迟'};
+      const typeReasons={'player-not-live':'播放器明确标记为非直播','past-broadcast':'直播结束标记',
+        'broadcast-details':'正在直播标记','player-live':'播放器明确标记直播','player-is-live':'播放器直播状态接口',
+        'player-live-class':'当前播放器直播界面','visible-player-live-badge':'当前播放器直播徽标',
+        'infinite-media':'直播媒体流','vod-details':'普通点播元数据','holodex-past':'Holodex录像状态',
+        'holodex-live':'Holodex直播状态','historic-live-flag-only':'只有历史直播标记，当前状态未确认',
+        'reported-live-state':'播放器类型返回值','unknown':'缺少判断依据'};
+      const durationSources={'media':'视频媒体','player-api':'播放器接口','video-details':'视频元数据','holodex-api':'Holodex接口'};
+      const reports=await Promise.all(rows.map(async row=>{
+        try{
+          const [clock,data]=await Promise.all([readMultiviewClock(row),nativeRequest(row,'statsDiagnostics',2200)]);
+          const d=data.latencyDiagnostics||{};
+          return [(row.title||row.videoId).slice(0,60),
+            '类型：'+playbackKindLabel(clock)+'；依据：'+(typeReasons[clock.liveReason]||clock.liveReason||'缺少判断依据'),
+            '播放时间：'+playbackTimeText(clock)+'；总时长来源：'+(durationSources[clock.durationSource]||'未读到'),
+            '延迟：'+(data.liveLatencySeconds!=null?data.liveLatencySeconds+' s':data.latencyReason)+'；'+(reasons[d.reasonCode]||'诊断未返回'),
+            'getLiveLatency：'+(d.getter?.supported?d.getter.status:'不存在'),
+            '原版统计：'+(d.nativePanelVisible===true?'开启':d.nativePanelVisible===false?'关闭':'状态不可读'),
+            ...(d.sources||[]).map(x=>x.method+'：'+(!x.available?'不存在':x.error||
+              (x.latencySeconds!=null?'延迟 '+x.latencySeconds+' s':'没有可解析延迟')+(x.fields?.length?'；字段 '+x.fields.join(','):'；无延迟字段')))
+          ].join('\n');
+        }catch(error){return (row.title||row.videoId)+'：'+String(error?.message||error);}
+      }));
+      alert('数据诊断 · v0.6.17\n'+reports.join('\n\n'));
+    });
     GM_registerMenuCommand('诊断多视图右键面板',async()=>{
       const rows=[...rowMap.values()];
       if(!rows.length)return alert('尚未识别多视图视频，请刷新页面后重试。');
@@ -3989,7 +4076,7 @@
             '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
         }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
       }));
-      alert('右键面板诊断 · v0.6.16\n'+reports.join('\n'));
+      alert('右键面板诊断 · v0.6.17\n'+reports.join('\n'));
     });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
@@ -4054,8 +4141,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.16 说明',()=>
-      alert('v0.6.16：只显示当前分辨率；补查直播延迟，未提供时明确标注；PC 面板内右键直接关闭。'));
+    GM_registerMenuCommand('Touch Controls v0.6.17 说明',()=>
+      alert('v0.6.17：区分正在直播与直播录像，显示类型标识并恢复录像总时长；新增视频类型、时长与延迟来源诊断。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();

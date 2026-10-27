@@ -5,6 +5,7 @@ const vm=require('node:vm');
 const {test}=require('node:test');
 const source=fs.readFileSync('userscripts/holodex-touch-controls.user.js','utf8');
 function section(start,end){return source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));}
+const stateHelpers=section('  function resolvePlaybackState(', '  function youtubeWatchLiveState(');
 const policy=section('  let mouseInputSeen=false;',"  const DESKTOP_TAG=");
 function mediaEnv(coarse,fine){
   const media=new Map();
@@ -153,7 +154,7 @@ test('desktop iframe monitor stays passive while explicit native toggle remains 
   const p={isVideoInfoVisible:()=>visible,showVideoInfo(){shows++;visible=true;},hideVideoInfo(){hides++;visible=false;}};
   const ctx=vm.createContext({player:()=>p,touchZonesAllowed:()=>false,
     monitor:{active:false,forced:false,manual:false},silent:on=>{silentState=on;},watchTouchZonePolicy(){}});
-  vm.runInContext(section('    function isNativeVisible(p){','    function readStats() {'),ctx);
+  vm.runInContext(section('    function isNativeVisible(p){','    function readStats(statusHint,diagnose=false) {'),ctx);
   vm.runInContext('startMonitor();stopMonitor();',ctx);assert.equal(shows,0);assert.equal(hides,0);
   vm.runInContext('toggleNative();startMonitor();stopMonitor();',ctx);
   assert.equal(visible,true);assert.equal(shows,1);assert.equal(hides,0);assert.equal(silentState,false);
@@ -163,11 +164,11 @@ test('desktop iframe monitor stays passive while explicit native toggle remains 
 test('multiview formatting distinguishes missing metadata, real start, VOD and live',()=>{
   const ctx=vm.createContext({});vm.runInContext(section('  function timestamp(n){','  async function readMultiviewClock(row){'),ctx);
   for(const value of [null,undefined,'',false,NaN,-1])assert.equal(ctx.timestamp(value),'—');
-  assert.equal(ctx.playbackTimeText({ready:true,position:0,duration:0}),'—');
-  assert.equal(ctx.playbackTimeText({ready:true,position:null,duration:3600}),'—');
-  assert.equal(ctx.playbackTimeText({ready:true,position:0,duration:3600}),'00:00:00 / 01:00:00');
-  assert.equal(ctx.playbackTimeText({ready:true,position:4085,duration:7674}),'01:08:05 / 02:07:54');
-  assert.equal(ctx.playbackTimeText({ready:true,position:4085,duration:3600,live:true}),'01:08:05');
+  assert.equal(ctx.playbackTimeText({ready:true,live:false,position:0,duration:0}),'—');
+  assert.equal(ctx.playbackTimeText({ready:true,live:false,position:null,duration:3600}),'—');
+  assert.equal(ctx.playbackTimeText({ready:true,live:false,position:0,duration:3600}),'00:00:00 / 01:00:00');
+  assert.equal(ctx.playbackTimeText({ready:true,live:false,position:4085,duration:7674}),'01:08:05 / 02:07:54');
+  assert.equal(ctx.playbackTimeText({ready:true,live:false,position:4085,duration:3600,live:true}),'01:08:05');
 });
 test('frame media clock requires metadata and rejects recycled video identity',()=>{
   let video={readyState:0,currentTime:0,duration:NaN},id='abcdefghijk',live=false;
@@ -181,12 +182,12 @@ test('frame media clock requires metadata and rejects recycled video identity',(
 });
 test('multiview clock prefers actual media over stale wrapper zero and falls back without iframe access',async()=>{
   let fail=false;
-  const ctx=vm.createContext({rpc:async()=>({ready:true,position:0,duration:0}),
-    nativeRequest:async()=>{if(fail)throw Error('no injection');return {ready:true,position:120,duration:600};}});
-  vm.runInContext(section('  function timestamp(n){','  async function stats(){'),ctx);
+  const ctx=vm.createContext({rpc:async()=>({ready:true,live:false,position:0,duration:0}),
+    nativeRequest:async()=>{if(fail)throw Error('no injection');return {ready:true,live:false,position:120,duration:600};}});
+  vm.runInContext(stateHelpers+section('  function timestamp(n){','  async function stats(){'),ctx);
   assert.equal(ctx.playbackTimeText(await ctx.readMultiviewClock({})), '00:02:00 / 00:10:00');
   fail=true;assert.equal(ctx.playbackTimeText(await ctx.readMultiviewClock({})),'—');
-  ctx.rpc=async()=>({ready:true,position:60,duration:600});
+  ctx.rpc=async()=>({ready:true,live:false,position:60,duration:600});
   assert.equal(ctx.playbackTimeText(await ctx.readMultiviewClock({})),'00:01:00 / 00:10:00');
 });
 test('one failing wrapper method does not discard other playback fields',async()=>{
@@ -361,8 +362,8 @@ function frameStatsContext(p,live=true){
   const ctx=vm.createContext({document:doc,page:{document:doc},player:()=>p,videoId:'abcdefghijk',
     controls:{video:()=>null},monitor:{active:false,forced:false,manual:false},isNativeVisible:()=>false,
     youtubeWatchLiveState:()=>({live})});
-  vm.runInContext(metricHelpers+section('    const number = value => {','    // YouTube sometimes computes')+
-    section('    function readStats() {',"    window.addEventListener('message',async event"),ctx);
+  vm.runInContext(metricHelpers+stateHelpers+section('    const number = value => {','    // YouTube sometimes computes')+
+    section('    function readStats(statusHint,diagnose=false) {',"    window.addEventListener('message',async event"),ctx);
   return ctx;
 }
 test('complete early metrics do not skip a later API carrying live latency',()=>{
@@ -395,4 +396,72 @@ test('sheet renders a single current resolution and explicit missing-latency rea
   ctx.renderYouTubeStats({resolution:'1280x720@60 / 1280x720@60',liveLatencySeconds:null,latencyReason:'未提供'});
   assert.equal(fields.resolution,'1280×720@60');assert.equal(fields.latency,'未提供');
   ctx.renderYouTubeStats({liveLatencySeconds:1.25});assert.equal(fields.latency,'1.25 s');
+});
+
+test('archived live streams are recordings even when isLiveContent remains true',()=>{
+  const ctx=vm.createContext({});vm.runInContext(section('  function readFrameClock(','  // YouTube\'s own watch/live/shorts'),ctx);
+  const p={getVideoData:()=>({video_id:'abcdefghijk',isLiveContent:true,isLive:false}),
+    getPlayerResponse:()=>({videoDetails:{videoId:'abcdefghijk',isLiveContent:true,lengthSeconds:'7674'}})};
+  const v={readyState:4,currentTime:4085,duration:7674};
+  const state=ctx.youtubeWatchLiveState({},()=>p,()=>v,{});
+  assert.equal(state.live,false);assert.equal(ctx.playbackKindLabel(state),'录像');
+  vm.runInContext(section('  function timestamp(n){','  function mergePlaybackClock('),ctx);
+  assert.equal(ctx.playbackTimeText(ctx.readFrameClock({},()=>p,()=>v,{},'abcdefghijk')),'01:08:05 / 02:07:54');
+});
+test('current broadcast metadata preserves live classification with finite DVR duration',()=>{
+  const ctx=vm.createContext({});vm.runInContext(section('  function readFrameClock(','  // YouTube\'s own watch/live/shorts'),ctx);
+  const p={getVideoData:()=>({video_id:'abcdefghijk',isLiveContent:true}),getPlayerResponse:()=>({videoDetails:{videoId:'abcdefghijk'},
+    microformat:{playerMicroformatRenderer:{liveBroadcastDetails:{isLiveNow:true}}}})};
+  const v={readyState:4,currentTime:3000,duration:3600};
+  assert.equal(ctx.readFrameClock({},()=>p,()=>v,{},'abcdefghijk').live,true);
+});
+test('historical flag and unrelated recommended live badges do not prove the current video is live',()=>{
+  const ctx=vm.createContext({});vm.runInContext(section('  function readFrameClock(','  // YouTube\'s own watch/live/shorts'),ctx);
+  let globalQueries=0;const doc={querySelector(){globalQueries++;return {getBoundingClientRect:()=>({width:20,height:20})};}};
+  const p={getVideoData:()=>({video_id:'abcdefghijk',isLiveContent:true}),querySelector:()=>null};
+  const state=ctx.youtubeWatchLiveState(doc,()=>p,()=>({readyState:4,duration:3600}),{});
+  assert.equal(state.live,null);assert.equal(state.reason,'historic-live-flag-only');assert.equal(globalQueries,0);
+});
+test('stale SPA response cannot classify another video as live; ended broadcasts override old live flags',()=>{
+  const ctx=vm.createContext({});vm.runInContext(section('  function readFrameClock(','  // YouTube\'s own watch/live/shorts'),ctx);
+  const p={getVideoData:()=>({video_id:'abcdefghijk',isLiveContent:true}),getPlayerResponse:()=>({videoDetails:{videoId:'zyxwvutsrqp'},
+    microformat:{playerMicroformatRenderer:{liveBroadcastDetails:{isLiveNow:true}}}}),querySelector:()=>null};
+  assert.equal(ctx.youtubeWatchLiveState({},()=>p,()=>({}),{}).live,null);
+  p.getVideoData=()=>({video_id:'abcdefghijk',isLive:true});
+  p.getPlayerResponse=()=>({videoDetails:{videoId:'abcdefghijk'},microformat:{playerMicroformatRenderer:{liveBroadcastDetails:{endTimestamp:'2026-10-20T00:00:00Z'}}}});
+  assert.equal(ctx.youtubeWatchLiveState({},()=>p,()=>({}),{}).live,false);
+});
+test('recording duration falls back to player API then matching video details, without losing current position',()=>{
+  const ctx=vm.createContext({});vm.runInContext(section('  function readFrameClock(','  // YouTube\'s own watch/live/shorts'),ctx);
+  const p={getVideoData:()=>({video_id:'abcdefghijk',isLive:false}),getDuration:()=>7200,
+    getPlayerResponse:()=>({videoDetails:{videoId:'abcdefghijk',lengthSeconds:'7674'}})};
+  const v={readyState:1,currentTime:4085,duration:NaN};
+  let clock=ctx.readFrameClock({},()=>p,()=>v,{},'abcdefghijk');
+  assert.equal(clock.duration,7200);assert.equal(clock.durationSource,'player-api');assert.equal(clock.position,4085);
+  p.getDuration=()=>null;clock=ctx.readFrameClock({},()=>p,()=>v,{},'abcdefghijk');
+  assert.equal(clock.duration,7674);assert.equal(clock.durationSource,'video-details');
+});
+test('Holodex past status and wrapper duration fill unknown frame data; confirmed live evidence takes precedence',()=>{
+  const ctx=vm.createContext({});vm.runInContext(stateHelpers+section('  function timestamp(n){','  async function stats(){'),ctx);
+  const result=ctx.mergePlaybackClock({ready:true,position:300,duration:null,live:null},
+    {ready:true,status:'past',duration:7200,live:false},{status:'past'});
+  assert.equal(result.live,false);assert.equal(result.liveReason,'holodex-past');assert.equal(result.duration,7200);assert.equal(result.durationSource,'holodex-api');
+  assert.equal(ctx.playbackTimeText(result),'00:05:00 / 02:00:00');
+  const live=ctx.mergePlaybackClock({ready:true,live:true,liveReason:'broadcast-details',duration:3600},null,{status:'past'});
+  assert.equal(live.live,true);assert.equal(live.liveReason,'broadcast-details');
+});
+test('latency diagnostics distinguish absent APIs, ambiguous units, recordings and unknown classification',()=>{
+  let ctx=frameStatsContext({});let report=ctx.readStats(undefined,true);
+  assert.equal(report.latencyDiagnostics.reasonCode,'no-latency-api');assert.equal(report.latencyDiagnostics.getter.supported,false);
+  ctx=frameStatsContext({getVideoStats:()=>({live_latency:7})});report=ctx.readStats(undefined,true);
+  assert.equal(report.latencyDiagnostics.reasonCode,'unrecognized-latency-units');
+  assert.ok(report.latencyDiagnostics.sources.some(s=>s.fields?.includes('live_latency')));
+  ctx=frameStatsContext({},null);assert.equal(ctx.readStats('past',true).latencyDiagnostics.reasonCode,'not-live');
+  assert.equal(ctx.readStats(undefined,true).latencyDiagnostics.reasonCode,'media-type-unknown');
+});
+test('panel badge explicitly labels live, recording and unknown states',()=>{
+  const badge={dataset:{}};const panel={querySelector:()=>badge};const ctx=vm.createContext({});
+  vm.runInContext(stateHelpers,ctx);ctx.renderMediaKind(panel,{live:false});assert.equal(badge.textContent,'录像');assert.equal(badge.dataset.kind,'vod');
+  ctx.renderMediaKind(panel,{live:true});assert.equal(badge.textContent,'直播');
+  ctx.renderMediaKind(panel,{live:null});assert.equal(badge.textContent,'待确认');
 });

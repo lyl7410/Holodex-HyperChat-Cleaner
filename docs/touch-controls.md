@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.16 延迟补查、单项分辨率与右键收起
+# Holodex / YouTube Touch Controls — v0.6.17 直播／录像识别、总时长与延迟诊断
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 v0.6.16](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装／更新 v0.6.17](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,35 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.17：区分直播与录像，恢复总时长并解释延迟缺失
+
+### 已确认的代码问题
+
+- isLiveContent 表示视频属于／曾属于直播内容，直播结束后的录像也可能保留 true。旧版把它直接当成当前正在直播，导致录像时间只显示位置、隐藏总时长，同时去查询不适用于录像的直播延迟。
+- 旧版还会搜索整个网页的直播徽标，推荐栏里其他直播也可能干扰当前视频判断。现在只检查当前播放器自己的直播界面，并检查返回元数据的视频 ID，避免 SPA 切换后使用上一条视频的状态。
+- 面板一直使用固定「播放时间」标签，没有显示实际识别类型；原生媒体 duration 不可读时，iframe 时钟也没有完整使用播放器 API、视频元数据和 Holodex 后备时长。
+
+### 新的显示和判定
+
+- 面板标题旁明确显示 **直播／录像／待确认**，HUD 时间模式也带同样类型文字。
+- 根据当前直播标记、直播结束标记、播放器明确的 isLive／isLive() 状态及当前播放器直播徽标判定。历史 isLiveContent 单独存在时为待确认；多视图可用当前格子的 Holodex past／live 状态补充未知结果，但不覆盖已确认的播放器状态。
+- 录像显示 **当前位置 / 总时长**。时长优先实际媒体，缺失时依次读取播放器 getDuration、匹配视频的 lengthSeconds，以及 Holodex 包装接口；当前位置和时长可以从不同可靠来源组合，不再因 iframe 只有位置而丢弃后备总时长。
+- 真正直播仍只显示媒体播放位置，不将有限 DVR 窗口当成直播总时长；状态未知时不猜测成直播／录像，也不冒充已知总时长。
+
+### 为什么有网速却没有延迟
+
+这些指标是不同字段。能读到网速、分辨率或缓冲，不代表相同接口返回了直播延迟。旧版「未提供」还混合了误判录像、接口不存在、接口有数据但无延迟字段、字段单位不明确等情况，单凭这个词无法确定用户当前视频的具体原因。
+
+脚本菜单新增 **「诊断视频类型／时长／延迟」**。有打开面板时诊断当前视频，否则列出最多 12 格。报告类型依据、时间与总时长来源、明确的延迟缺失原因、getLiveLatency 是否存在及返回状态、各统计接口是否存在／有延迟字段，以及原版统计是否开启。只读取数据，不自动开关或隐藏原版统计，不上传报告；不收集整段原始调试数据。
+
+录像显示「非直播」；类型未知显示「状态未确认」；真正直播没有可解析字段才显示「未提供」。对于真实直播，准确缺失原因需读取该视频的诊断报告，不能从截图反推。普通 YouTube 面板同步修复类型标识和录像时长；详细延迟诊断菜单位于 Holodex。
+
+### 验证与安装
+
+- 脚本语法、差异空白检查与 **41 项 Node 回归测试通过**。新增历史直播录像、明确正在直播与有限 DVR、推荐直播徽标隔离、过期 SPA 元数据、播放器／元数据时长后备、Holodex 合并时长、分类依据保留、四类延迟诊断及类型徽标。
+- 本地双端口模拟播放器：录像保留 isLiveContent=true 且媒体时长为 NaN 时，显示「录像」、当前位置／总时长，诊断指出时长来自播放器接口；真实直播型夹具只显示位置，缺少延迟字段时诊断明确报告接口存在但字段缺失、getter 不存在。测试夹具不代表用户实际直播；真实视频数据可用性仍待安装验证。
+- 安装 **v0.6.17** 后完整刷新多视图／YouTube，使 iframe 同样加载新版。若标识为直播而延迟仍「未提供」，打开「诊断视频类型／时长／延迟」并提供该视频报告，即可继续定位，而不是再次猜测接口限制。
 
 ## v0.6.16：直播延迟、单项分辨率与面板右键收起
 
