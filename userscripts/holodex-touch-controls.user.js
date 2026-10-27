@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.5
-// @description  Holodex／YouTube：连接速度字段兼容性增强、精简直播状态、五档倍速、音量手势及智能自动播放。
+// @version      0.6.6
+// @description  恢复 YouTube/Holodex 播放时间，直播时间与状态分别显示；增强真实连接速度采集，保留五档倍速、触控和自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -37,8 +37,14 @@
   // Quality changes use the real, visible YouTube settings menu instead.
   function youtubePlaybackTools(pageDoc,getPlayer){
     const rates=[.25,.5,.75,1,1.25,1.5,1.75,2];
-    const video=()=>pageDoc.querySelector('video.html5-main-video')||
-      getPlayer()?.querySelector?.('video')||pageDoc.querySelector('video');
+    const video=()=>{
+      const selected=getPlayer();
+      // After Shorts/swipe/SPA navigation there may be old <video> elements.
+      // Prefer the video INSIDE the same player used by gestures and speed.
+      const attached=selected?.querySelector?.('video.html5-main-video, video');
+      return attached||pageDoc.querySelector('video.html5-main-video')||
+        selected?.querySelector?.('video')||pageDoc.querySelector('video');
+    };
     const allowedRates=()=>{
       const p=getPlayer();
       let options=[];
@@ -476,6 +482,8 @@
       '#hmtc-yt-panel .metric{padding:10px;border-radius:13px;background:#ffffff0b;min-width:0}',
       '#hmtc-yt-panel .metric label{display:block;font-size:11px;color:#afc2d1}',
       '#hmtc-yt-panel .metric b{font-size:15px;overflow-wrap:anywhere}',
+      '#hmtc-yt-panel .hmtc-yt-time-metric b{font-size:clamp(15px,3.9vw,21px);',
+      'font-variant-numeric:tabular-nums;line-height:1.35;color:#fcffff}',
       '#hmtc-yt-panel .metric small{display:block;color:#93d9d4;font-size:10px;',
       'font-weight:400;margin-top:3px;overflow-wrap:anywhere}',
       '#hmtc-yt-panel .row{display:flex;gap:7px;align-items:center;margin-top:10px}',
@@ -520,13 +528,31 @@
         .replace(/\s*-\s*YouTube\s*$/,'').trim().slice(0,120));
       text('resolution',snapshot.resolution+' · 实际帧');
       text('quality',snapshot.resolution);
+      // Playback time is the primary metric, EVEN FOR LIVE videos. v0.6.5
+      // incorrectly replaced the entire clock with "LIVE". Keep live status
+      // separate; a rolling DVR window must not be shown as total runtime.
       const live=watchLive();
-      text('timeLabel',live.live?'状态':'播放时间');
-      text('time',live.live?'🔴 直播中':
-        clock(Number(v?.currentTime))+' / '+
-          (Number.isFinite(v?.duration)&&v.duration>=0?
-            clock(v.duration):'—'));
-      text('timeInfo','');
+      const player=p();
+      const validClock=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0;
+      const mediaTime=Number(v?.currentTime);
+      let current=validClock(mediaTime)?mediaTime:null;
+      if(current===null||(current===0&&Number(v?.readyState)===0)){
+        try{
+          const fromPlayer=Number(player?.getCurrentTime?.());
+          if(validClock(fromPlayer))current=fromPlayer;
+        }catch{}
+      }
+      let duration=Number(v?.duration);
+      if(!validClock(duration)||duration===0){
+        try{duration=Number(player?.getDuration?.());}catch{duration=NaN;}
+      }
+      const elapsed=clock(current);
+      text('timeLabel','播放时间');
+      text('time',live.live?elapsed:
+        elapsed+' / '+(validClock(duration)&&duration>0?clock(duration):'—'));
+      text('timeInfo',live.live?
+        '🔴 直播中 · 播放位置（非直播总时长）':
+        '当前播放位置 / 总时长');
       text('vol',vol()+'%');text('mute',muted()?'🔇':'🔊');
       const vslider=sheet.querySelector('[data-id="slider"]');
       if(vslider&&document.activeElement!==vslider)vslider.value=String(vol());
@@ -662,9 +688,9 @@
         '<div class="head"><strong data-id="title">YouTube</strong>',
         '<button data-action="close" aria-label="关闭面板">✕</button></div>',
         '<div class="grid">',
-        '<div class="metric"><label data-id="timeLabel">播放时间</label>',
-        '<b data-id="time">—</b>',
-        '<small data-id="timeInfo"></small></div>',
+        '<div class="metric hmtc-yt-time-metric"><label data-id="timeLabel">播放时间</label>',
+        '<b data-id="time" aria-live="off">—</b>',
+        '<small data-id="timeInfo">当前播放位置 / 总时长</small></div>',
         '<div class="metric"><label>实际分辨率</label><b data-id="resolution">—</b></div>',
         '<div class="metric"><label>连接速度</label><b data-id="speed">—</b>',
         '<small data-id="speedInfo">读取 YouTube 实时数据…</small></div>',
@@ -1219,7 +1245,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.5', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.6', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -2717,7 +2743,9 @@
       '<div class="grid">',
       '<div class="metric"><label>缓冲健康度 · Buffer</label><strong data-field="health">—</strong></div>',
       '<div class="metric"><label>直播延迟 · Latency</label><strong data-field="latency">—</strong></div>',
-      '<div class="metric"><label data-field="positionLabel">播放时间</label><strong data-field="position">—</strong></div>',
+      '<div class="metric"><label data-field="positionLabel">播放时间</label>',
+      '<strong data-field="position">—</strong>',
+      '<small data-field="positionInfo"></small></div>',
       '<div class="metric"><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
       '</div></div>',
       '<div class="hmtc-play-controls">',
@@ -3016,11 +3044,15 @@
       layoutId:row.layoutId,videoId:row.videoId
     },3500).then(v=>{
       if(!stillActive())return;
-      field('positionLabel',v.live?'状态':'播放时间');
+      // Live must NOT hide time. getDuration() on a live YouTube player can
+      // be a sliding DVR window, so don't mislabel it as total stream length.
+      field('positionLabel','播放时间');
       field('position',v.ready
-        ? (v.live?'🔴 直播中':
+        ? (v.live?timestamp(v.position):
           timestamp(v.position)+' / '+timestamp(v.duration))
         : '尚未就绪');
+      field('positionInfo',v.live?
+        '🔴 直播中 · 当前播放器位置':'当前 / 总时长');
     }).catch(error=>{
       if(stillActive())field('position','暂时无法读取');
     });
@@ -3055,6 +3087,7 @@
     field('qualityStatus','当前：待读取');
     updateSheetRate({rate:1,rates:[.5,1,1.5,2]});
     field('position','读取中…');
+    field('positionInfo','正在读取播放时间…');
     const qualityLink=sheet.querySelector('[data-field="youtubeQualityLink"]');
     if(qualityLink&&/^[\w-]{11}$/.test(row.videoId||'')){
       qualityLink.href='https://www.youtube.com/watch?v='+encodeURIComponent(row.videoId);
