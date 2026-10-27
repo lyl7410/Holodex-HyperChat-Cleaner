@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.7 左上角常驻时间与原生连接速度
+# Holodex / YouTube Touch Controls — v0.6.8 画质接口测试版
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装 / 更新 v0.6.7](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[下载安装 v0.6.8 测试版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/fix/youtube-quality-direct-api-v068/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,20 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.8：不依赖齿轮的画质选择（测试分支）
+
+目标：解决 Android 普通 YouTube 页面找不到设置齿轮而无法由自定义面板调整画质的问题。借鉴开源 `yt4k`、`yt-force-max`、`Leta` 的内部播放器接口控制，**不再把找不到齿轮等同于不可尝试控制画质**。
+
+1. 打开普通 YouTube 视频，展开 Touch Controls 统计面板；新出现「目标画质」下拉框、「应用画质」、「刷新档位」和「原生设置」三个操作。
+2. 下拉框优先列出页面播放器通过 `getAvailableQualityLevels()` 与 `getAvailableQualityData()` 返回的真实档位；如果内部范围接口存在但画质列表缺失，仅显示 1080p/720p/480p **（尝试）**，不是已确认可用档位。
+3. 点击「应用画质」后调用 `setPlaybackQualityRange(quality,quality[,formatId])`，检查 `getPlaybackQuality()` 或 `getVideoStats().fmt` 是否反映请求；未确认就明确提示，不会把按钮点击当作成功。
+4. 还可在 Tampermonkey 菜单运行「YouTube：画质接口诊断」，检查是否有内部范围接口、列出的分辨率和播放器报告的当前质量。
+5. 若设备不开放内部 API，可用「原生设置」作为后备；若手机版确实不存在可操作的原生齿轮，此路径仍可能失败。Holodex iframe 不保证能使用同一内部接口。
+
+**来源**：https://github.com/LyKhoris/yt4k · https://github.com/yowmamasita/yt-force-max · https://github.com/LetaLab/Leta-Change-YouTube-Quality-Firefox
+
+**验证状态**：通过 JavaScript 编译、真实档位枚举、普通画质优先、API 调用与确认、缺少画质列表时标明测试档位等模拟测试。尚未在实际 Android Tampermonkey + YouTube 页面复现和确认成功，因此暂留 PR 测试，不合并 main。
 
 ## v0.6.7：视频左上角常驻信息
 
