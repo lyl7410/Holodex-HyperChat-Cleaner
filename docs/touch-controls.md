@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.2 五档倍速与手机版原生画质入口
+# Holodex / YouTube Touch Controls — v0.6.3 实时连接速度恢复与播放时间说明
 
-独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.2 改进单排五档倍速与 YouTube 手机画质入口，保留播放后的触控修复，保留原生直播统计、音量手势、灵敏度与 Holodex 智能自动播放；不增加第二个重复脚本。
+独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.3 恢复普通 YouTube 页实时连接速度，保留单排五档倍速与手机画质入口，保留播放后的触控修复，保留原生直播统计、音量手势、灵敏度与 Holodex 智能自动播放；不增加第二个重复脚本。
 
-**[安装 / 更新 v0.6.2](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装 / 更新 v0.6.3](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -11,7 +11,23 @@
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
 
-## v0.6.2：YouTube 面板移除无效画质列表、五档速度只占一排
+## v0.6.3：恢复普通 YouTube 面板实时连接速度
+
+根据用户反馈，普通 YouTube 视频的「播放时间」「实际分辨率」「缓冲时长」都有数据，但「连接速度」始终是 `—`。问题不是宽带真的为零：Holodex iframe 使用的是较完整的 YouTube 原生统计采集，而 v0.6.2 的普通 YouTube 面板仅读取 `getStatsForNerdsData`、`getStatsForNerds` 返回对象中的少数键，**没有持续启用和采集 YouTube 原版 Stats for nerds**。
+
+现在普通 YouTube 面板采用与 Holodex 之前有效方案同类的机制：
+
+1. 打开面板时，若当前播放器支持 `isVideoInfoVisible()`／`showVideoInfo()` 且原生统计尚未开启，则先将原版统计覆盖层设置为不可见、不可触控（仍保持 DOM 可更新），再开启原版 Stats for nerds。
+2. 从 `getStatsForNerdsData()`、`getStatsForNerds()`、`getDebugText()` 中读取有明确 Kbps 单位的连接速度；原生统计在更新时，优先使用原版实时 DOM 中标注 `Connection Speed`／`连接速度` 的数值。
+3. 面板打开期间持续更新实时值。普通 YouTube 切换视频或替换播放器时，重新检查原生统计状态；如果 YouTube 内部重置了原版统计，会尝试恢复采集。
+4. 关闭快捷面板、切换到不支持的页面或离开网页后，关闭**本脚本主动开启的**原版统计，并移除静默遮盖；原先由用户自己打开的原版统计不会被关闭。
+5. YouTube 当前不提供可用连接速度时仍显示 `—`，不把视频码率、缓冲增长速度、网络测速结果伪装成 Connection Speed。显示的 Mbps 是原生 Kbps 数值换算。
+
+**播放时间两项的含义：** `0:01:41 / 0:03:35` 表示「当前播放到 1 分 41 秒 / 总时长 3 分 35 秒」。这是两种含义，不是两个播放计时器。对于直播，浏览器提供的第二个时间有时是 DVR 可回看区间长度，不应视为主播实际开播时长。
+
+**回归测试：** 在模拟的 YouTube 原版统计 DOM 中，将 `4,300 Kbps` 改为 `14,700 Kbps`，可验证自定义面板每次读取都跟随更新；验证打开时静默开启，关闭时恢复原版状态；验证播放器有直接 Kbps 数据时不依赖 DOM，缺少数据则不捏造值。**实际安卓 Tampermonkey 的网页行为仍需用户实测**。
+
+## v0.6.2：上一版本记录
 
 这次用户提供的 **普通 YouTube 手机播放页** 截图显示：当前实际解码分辨率约为 `1280×720`，`1×` 倍速已高亮，但「原生菜单 ↗」不可用，「画质选择」一直显示无法读取。并且用户明确希望速度只保留**一排**，去掉 `0.5×` 与 `0.75×`。
 
@@ -373,4 +389,4 @@ Connection Speed 与 Live Latency 并不是 YouTube 官方公开的稳定 IFrame
 
 已完成 JavaScript 语法检查及独立模拟测试：左右轻点/滑动、双倍区域、不误触、长按 600ms 与移动取消、三种统计触发模式、灵敏度倍率、多指取消、旧视频保护、YouTube 原生速率/缓冲/直播延迟解析及来源校验。
 
-**v0.6.2 的手机画质入口与五档倍速仍需真实安卓 Tampermonkey 回归**。此前 v0.5.6 静音回退修复也仍需要实测。已用带浏览器拦截事件的模拟播放器验证：先原生静音、后更新 Vue、延时播放；原本已播放的视频保持不变；即使静音仍被拦截也有限次重试。目前只通过模拟篡改猴 GM 记录、网站存储不可用、延迟异步读写、刷新及跨标签事件的验证。已针对 v0.5.1 的刷新初始 `-1` / `5`、浏览器拦截、错误暂停缓存、播放后误静音其他格子、逐路诊断进行模拟测试；已用模拟播放器验证动态带宽值变化、隐藏式采集的启停与原版统计恢复、标题/画面外部区域快速关闭；不同 Android 浏览器可能限制嵌入播放器音量软件调节，所有跨域原生数据也仍有兼容性限制。
+**v0.6.3 恢复的实时连接速度功能仍需真实安卓 Tampermonkey 回归**。此前 v0.5.6 静音回退修复也仍需要实测。已用带浏览器拦截事件的模拟播放器验证：先原生静音、后更新 Vue、延时播放；原本已播放的视频保持不变；即使静音仍被拦截也有限次重试。目前只通过模拟篡改猴 GM 记录、网站存储不可用、延迟异步读写、刷新及跨标签事件的验证。已针对 v0.5.1 的刷新初始 `-1` / `5`、浏览器拦截、错误暂停缓存、播放后误静音其他格子、逐路诊断进行模拟测试；已用模拟播放器验证动态带宽值变化、隐藏式采集的启停与原版统计恢复、标题/画面外部区域快速关闭；不同 Android 浏览器可能限制嵌入播放器音量软件调节，所有跨域原生数据也仍有兼容性限制。
