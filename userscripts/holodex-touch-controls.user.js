@@ -1827,22 +1827,21 @@
   #hmtc-sheet .head{min-height:43px;cursor:pointer}
   #hmtc-sheet .head button{cursor:pointer}
   #hmtc-sheet .net{
-    padding:17px 16px 15px;background:linear-gradient(135deg,#17454b,#193450 86%);
-    border-radius:17px;border:1px solid #7fe4e038;margin-top:14px;
+    padding:10px 12px 9px;background:linear-gradient(135deg,#17454b,#193450 86%);
+    border-radius:13px;border:1px solid #7fe4e038;margin-top:8px;
     box-shadow:inset 0 1px 0 #ffffff13}
-  #hmtc-sheet .speed{font-size:clamp(30px,8vw,39px);line-height:1.16;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-.02em;margin:5px 0}
-  #hmtc-sheet .unit{font-size:14px;font-weight:600;color:#b2e9e7;margin-left:5px}
+  #hmtc-sheet .speed{font-size:clamp(24px,7vw,32px);line-height:1.12;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-.02em;margin:3px 0}
+  #hmtc-sheet .unit{font-size:13px;font-weight:600;color:#b2e9e7;margin-left:5px}
+  #hmtc-sheet .speedFreshness{font-size:10px;color:#b2e9e7;margin-left:7px}
   #hmtc-sheet .sub{font-size:11px;color:#b7d1db;line-height:1.5;overflow-wrap:anywhere}
-  #hmtc-sheet .grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:11px}
-  #hmtc-sheet .metric{padding:13px 12px;border-radius:14px;
+  #hmtc-sheet .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+  #hmtc-sheet .metric{padding:9px 10px;border-radius:11px;
     background:rgba(255,255,255,.065);border:1px solid #ffffff16;min-width:0}
   #hmtc-sheet .metric label{display:block;font-size:11px;color:#b8c7d7;margin-bottom:5px}
   #hmtc-sheet .metric strong{font-size:16px;font-weight:700;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
   #hmtc-sheet .hmtc-playtime-metric strong{font-size:clamp(16px,4vw,21px);
     line-height:1.35;color:#f4ffff}
-  #hmtc-sheet .hmtc-playtime-metric small{display:block;color:#9ee3dd;
-    margin-top:5px;font-size:10px;line-height:1.4}
-  #hmtc-sheet .hmtc-play-controls{margin-top:13px;padding:10px 12px;border-radius:15px;
+  #hmtc-sheet .hmtc-play-controls{margin-top:8px;padding:9px 10px;border-radius:12px;
     background:#243549b8;border:1px solid #ffffff22}
   #hmtc-sheet .hmtc-play-row{display:flex;gap:6px;align-items:center;margin:5px 0}
   #hmtc-sheet .hmtc-play-row label{color:#cbd8e6;font-size:12px;min-width:64px;font-weight:650}
@@ -1867,7 +1866,8 @@
   #hmtc-sheet .value{min-width:50px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
   #hmtc-sheet .actions{display:flex;gap:7px;margin-top:9px}
   #hmtc-sheet .actions button{flex:1}
-  #hmtc-sheet .note{font-size:11px;color:#adbdc9;line-height:1.5;margin-top:12px}
+  #hmtc-sheet .note{font-size:11px;color:#adbdc9;line-height:1.5;margin-top:6px}
+  #hmtc-sheet .note[hidden]{display:none!important}
   #hmtc-sheet .footer{display:flex;gap:8px;margin-top:13px}
   #hmtc-sheet .footer button{flex:1;background:#26354c}
   #hmtc-sheet .footer button[data-action="settings"]{flex:0 0 auto}
@@ -1887,7 +1887,7 @@
   @media(orientation:landscape){
     #hmtc-sheet,#hmtc-settings{left:auto;right:9px;bottom:8px;margin:0;
       max-width:min(390px,68vw);max-height:calc(100vh - 16px);padding:13px;border-radius:16px}
-    #hmtc-sheet .net{margin-top:8px;padding:12px}
+    #hmtc-sheet .net{margin-top:6px;padding:10px}
     #hmtc-sheet .grid{gap:6px;margin-top:7px}
     #hmtc-sheet .metric{padding:8px 10px}
     #hmtc-sheet .volume{margin:7px 0}
@@ -2737,7 +2737,10 @@
 
   function field(name,text){
     const el=sheet?.querySelector('[data-field="'+name+'"]');
-    if(el)el.textContent=String(text);
+    if(el){
+      el.textContent=String(text);
+      if(name==='note')el.hidden=!text;
+    }
   }
   function renderVolume(row){
     if(!sheet||sheet.hidden||!active)return;
@@ -2982,15 +2985,14 @@
       '<div class="head" data-action="dismissHeader" title="轻点标题收起">',
       '<div class="title" data-field="title">YouTube</div>',
       '<button type="button" data-action="close" aria-label="关闭">✕</button></div>',
-      '<div class="net"><div class="sub">YouTube 当前视频 · Connection Speed</div>',
-      '<div><span class="speed" data-field="speed">—</span><span class="unit">Mbps</span></div>',
-      '<div class="sub" data-field="network">正在读取 YouTube 原生详细统计…</div></div>',
+      '<div class="net"><div class="sub">连接速度</div>',
+      '<div><span class="speed" data-field="speed">—</span><span class="unit">Mbps</span>',
+      '<span class="speedFreshness" data-field="speedFreshness"></span></div></div>',
       '<div class="grid">',
       '<div class="metric"><label>缓冲健康度 · Buffer</label><strong data-field="health">—</strong></div>',
       '<div class="metric"><label>直播延迟 · Latency</label><strong data-field="latency">—</strong></div>',
       '<div class="metric hmtc-playtime-metric"><label data-field="positionLabel">播放时间</label>',
-      '<strong data-field="position">—</strong>',
-      '<small data-field="positionInfo"></small></div>',
+      '<strong data-field="position">—</strong></div>',
       '<div class="metric"><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
       '</div></div>',
       '<div class="hmtc-play-controls">',
@@ -3019,8 +3021,7 @@
       '<div class="footer">',
       '<button type="button" data-action="native">YouTube 原版统计</button>',
       '<button type="button" data-action="settings" aria-label="触控设置">⚙ 设置</button></div>',
-      '<div class="note" data-field="note">',
-      '连接速度与直播延迟来自 YouTube 内部统计，字段缺失时显示 —，不是 0。</div>'
+      '<div class="note" data-field="note" hidden></div>'
     ].join('');
     document.body.appendChild(sheet);
     const slider=sheet.querySelector('[data-field="slider"]');
@@ -3253,15 +3254,15 @@
     if(measured){
       lastHolodexSpeed={key,kbps,source:data.source||'原生统计',at:now};
       field('speed','≈ '+(kbps/1000).toFixed(2));
-      field('network','当前视频 · YouTube '+lastHolodexSpeed.source+' · 实时');
+      field('speedFreshness','');
     }else if(lastHolodexSpeed&&lastHolodexSpeed.key===key&&
              now-lastHolodexSpeed.at>=0&&now-lastHolodexSpeed.at<=6000){
       const age=Math.round((now-lastHolodexSpeed.at)/1000);
       field('speed','≈ '+(lastHolodexSpeed.kbps/1000).toFixed(2));
-      field('network','上次真实采样 · '+age+' 秒前（等待新数据）');
+      field('speedFreshness','上次 '+age+'s');
     }else{
       field('speed','—');
-      field('network',reason||data?.reason||'YouTube 原生连接统计不可用');
+      field('speedFreshness','');
     }
     field('health',typeof data?.bufferSeconds==='number'
       ? data.bufferSeconds.toFixed(1)+' s':'—');
@@ -3306,8 +3307,6 @@
         ? (v.live?timestamp(v.position):
           timestamp(v.position)+' / '+timestamp(v.duration))
         : '尚未就绪');
-      field('positionInfo',v.live?
-        '🔴 直播中 · 当前播放器位置':'当前 / 总时长');
     }).catch(error=>{
       if(stillActive())field('position','暂时无法读取');
     });
@@ -3337,12 +3336,12 @@
     sheet.hidden=false;
     if(backdrop)backdrop.hidden=false;
     field('title',row.title||row.videoId);
+    field('note','');
     renderVolume(row);
     renderYouTubeStats(null,'正在读取 YouTube 嵌入播放器…');
     field('qualityStatus','当前：待读取');
     updateSheetRate({rate:1,rates:[.5,1,1.5,2]});
     field('position','读取中…');
-    field('positionInfo','正在读取播放时间…');
     const qualityLink=sheet.querySelector('[data-field="youtubeQualityLink"]');
     if(qualityLink&&/^[\w-]{11}$/.test(row.videoId||'')){
       qualityLink.href='https://www.youtube.com/watch?v='+encodeURIComponent(row.videoId);
@@ -3562,8 +3561,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.8 说明',()=>
-      alert('v0.6.7：播放画面左上角可轻点切换时间、原生连接速度、同时显示或隐藏为小入口；保留 v0.6.6 的时间、测速修复和原有手势、倍速、智能自动播放。'));
+    GM_registerMenuCommand('Touch Controls v0.6.9 说明',()=>
+      alert('v0.6.9：精简统计面板，移除播放时间与连接速度下方的长说明；普通 YouTube 画质下拉选择后立即切换，不再需要应用按钮，移除 144p。保留 HUD、五档倍速、手势和智能自动播放。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
