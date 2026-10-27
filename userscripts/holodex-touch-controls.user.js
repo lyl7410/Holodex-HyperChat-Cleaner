@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.9
-// @description  画质下拉即选即切；精简播放时间与连接速度面板，保留左上角 HUD、五档倍速、手势及智能自动播放。
+// @version      0.6.10
+// @description  画质与倍速统一按钮网格，即点即切；统计数字去冗余说明，保留 HUD、手势及自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -239,7 +239,7 @@
       const confirmed=actual===name||!!(item.formatId&&format===item.formatId);
       return {requested:name,confirmed,reported:actual,
         actualResolution:snapshot().resolution,
-        message:confirmed?'播放器报告已选 '+QUALITY_HEIGHT[name]+'p；实际帧可能稍后变化':
+        message:confirmed?'已切换 '+QUALITY_HEIGHT[name]+'p':
           '已请求 '+QUALITY_HEIGHT[name]+'p，但播放器尚未确认；可能被 YouTube 忽略'};
     }
     async function openQualityMenu(){
@@ -628,8 +628,12 @@
       '#hmtc-yt-panel .row{display:flex;gap:7px;align-items:center;margin-top:8px}',
       '#hmtc-yt-panel .row label{min-width:45px;font-weight:700}',
       '#hmtc-yt-panel .row select,#hmtc-yt-panel .row input{flex:1;min-width:0}',
-      '#hmtc-yt-panel [data-id="qualitySelect"]{min-height:40px;',
-      'color:#f5faff;background:#30465b;border-radius:9px}',
+      '#hmtc-yt-panel .hmtc-yt-qualities{display:grid;',
+      'grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;margin:6px 0 8px}',
+      '#hmtc-yt-panel .hmtc-yt-qualities button{min-width:0;min-height:44px;',
+      'padding:6px 1px;white-space:nowrap;font-size:clamp(10px,2.6vw,12px)}',
+      '#hmtc-yt-panel .hmtc-yt-qualities button.hmtc-yt-quality-active{',
+      'background:#12766c!important;border-color:#78ead5!important;color:#fff!important}',
       '#hmtc-yt-panel .hmtc-yt-rates{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));',
       'gap:5px;margin:6px 0 8px}',
       '#hmtc-yt-panel .hmtc-yt-rates button{min-width:0;min-height:44px;',
@@ -722,7 +726,7 @@
         const net=bandwidth.read();
         if(net.available)
           speed=(net.bandwidthKbps/1000).toFixed(2)+' Mbps'+
-            (net.stale?' (上次)':'');
+            (net.stale?' · 上次':'');
       }else if(!sheet||sheet.hidden)bandwidth.stop();
       displayCornerHud(watchHud,time,speed);
     }
@@ -732,7 +736,7 @@
       text('title',(document.querySelector('h1.ytd-watch-metadata')?.textContent||
         document.querySelector('h1.title')?.textContent||document.title||'YouTube')
         .replace(/\s*-\s*YouTube\s*$/,'').trim().slice(0,120));
-      text('resolution',snapshot.resolution+' · 实际帧');
+      text('resolution',snapshot.resolution);
       const currentClock=readWatchClock();
       text('timeLabel','播放时间');
       text('time',currentClock.time);
@@ -749,8 +753,8 @@
       // Stats-for-nerds engine, so speed stayed "—" while time/buffer worked.
       const net=bandwidth.read();
       text('speed',net.available?
-        '≈ '+(net.bandwidthKbps/1000).toFixed(2)+' Mbps'+
-        (net.stale?'（上次）':''):'—');
+        (net.bandwidthKbps/1000).toFixed(2)+' Mbps'+
+        (net.stale?' · 上次':''):'—');
       const speedValue=sheet.querySelector('[data-id="speed"]');
       if(speedValue)speedValue.title=net.available?
         (net.stale?'最近一次真实连接速度（非实时）':'实时连接速度')+
@@ -858,8 +862,10 @@
     }
 
 
+
     let qualitySwitching=false;
     let qualityFeedbackTimer=null;
+    let qualityChosen='';
     function showQualityFeedback(message,hold=false){
       const el=sheet?.querySelector('[data-id="qualityTip"]');
       if(!el)return;
@@ -868,64 +874,73 @@
       el.hidden=!message;
       if(message&&!hold)qualityFeedbackTimer=setTimeout(()=>{
         if(el.isConnected)el.hidden=true;
-      },3600);
+      },2600);
     }
-    async function refreshQualityChoices(){
-      const sel=sheet?.querySelector('[data-id="qualitySelect"]');
-      if(!sel||qualitySwitching)return;
-      sel.disabled=true;
-      sel.replaceChildren();
-      const placeholder=document.createElement('option');
-      placeholder.value='';placeholder.textContent='正在读取';
-      sel.appendChild(placeholder);
-      try{
-        const catalog=await controls.qualityOptions();
-        if(!sel.isConnected)return;
-        sel.replaceChildren();
-        const available=catalog.choices.filter(choice=>choice.value!=='tiny');
-        if(!available.length){
-          placeholder.textContent='当前播放器没有画质档位';
-          sel.appendChild(placeholder);
-          showQualityFeedback(catalog.reason||'请使用播放器原生画质设置',true);
-        }else{
-          // A blank selection ensures selecting the topmost 1080p entry
-          // fires "change" even when the player reports no selected level.
-          if(!available.some(choice=>choice.value===catalog.selected)){
-            const none=document.createElement('option');
-            none.value='';none.textContent='请选择画质';sel.appendChild(none);
-          }
-          for(const choice of available){
-            const opt=document.createElement('option');
-            opt.value=choice.value;opt.textContent=choice.label;
-            sel.appendChild(opt);
-          }
-          sel.value=available.some(x=>x.value===catalog.selected)?
-            catalog.selected:'';
-          sel.disabled=catalog.method!=='internal-range';
-          if(sel.disabled)showQualityFeedback('当前播放器不支持画质接口',true);
-          else showQualityFeedback('',false);
-        }
-      }catch(error){
-        showQualityFeedback('读取画质失败：'+error.message,true);
+    function highlightQuality(value){
+      for(const button of sheet?.querySelectorAll('[data-action="qualityPreset"]')||[]){
+        const active=!!value&&button.dataset.quality===value;
+        button.classList.toggle('hmtc-yt-quality-active',active);
+        button.setAttribute('aria-pressed',active?'true':'false');
       }
     }
-    async function applyQualitySelection(){
-      const sel=sheet?.querySelector('[data-id="qualitySelect"]');
-      if(!sel||sel.disabled||qualitySwitching||!sel.value)return;
+    async function refreshQualityChoices(){
+      const grid=sheet?.querySelector('.hmtc-yt-qualities');
+      if(!grid||qualitySwitching)return;
+      grid.replaceChildren();
+      try{
+        const catalog=await controls.qualityOptions();
+        if(!grid.isConnected)return;
+        const available=catalog.choices.filter(x=>x.value!=='tiny');
+        if(!available.length||catalog.method!=='internal-range'){
+          const empty=document.createElement('span');
+          empty.textContent='暂不可选';
+          grid.appendChild(empty);
+          showQualityFeedback(catalog.reason||'画质接口不可用',true);
+          return;
+        }
+        for(const choice of available){
+          const button=document.createElement('button');
+          button.type='button';
+          button.dataset.action='qualityPreset';
+          button.dataset.quality=choice.value;
+          button.textContent=choice.label;
+          button.setAttribute('aria-pressed','false');
+          grid.appendChild(button);
+        }
+        // Only highlight a confirmed player level, not a guessed preference.
+        qualityChosen=catalog.selected;
+        highlightQuality(qualityChosen);
+        showQualityFeedback('',false);
+      }catch(error){
+        showQualityFeedback('画质读取失败：'+error.message,true);
+      }
+    }
+    async function applyQualitySelection(requested){
+      if(qualitySwitching||!requested)return;
+      const grid=sheet?.querySelector('.hmtc-yt-qualities');
+      const button=[...(grid?.querySelectorAll('[data-action="qualityPreset"]')||[])]
+        .find(el=>el.dataset.quality===requested);
+      if(!button||button.disabled)return;
       qualitySwitching=true;
-      sel.disabled=true;
-      const requested=sel.value;
-      showQualityFeedback('正在切换画质…',true);
+      for(const el of grid.querySelectorAll('button'))el.disabled=true;
+      showQualityFeedback('',false);
       try{
         const result=await controls.setQuality(requested);
-        showQualityFeedback(result.message,!result.confirmed);
-        refreshSheet();
-        setTimeout(refreshSheet,700);
+        if(result.confirmed){
+          qualityChosen=requested;
+          highlightQuality(qualityChosen);
+          // Successful selection should not expand the compact layout.
+        }else{
+          if(result.reported)qualityChosen=result.reported;
+          highlightQuality(qualityChosen);
+          showQualityFeedback('未确认 '+button.textContent,true);
+        }
+        refreshSheet();setTimeout(refreshSheet,700);
       }catch(error){
-        showQualityFeedback('画质切换失败：'+error.message,true);
+        showQualityFeedback('画质失败：'+error.message,true);
       }finally{
         qualitySwitching=false;
-        if(sel.isConnected)sel.disabled=false;
+        for(const el of grid.querySelectorAll('button'))el.disabled=false;
       }
     }
     function makePanel(){
@@ -942,9 +957,9 @@
         '<div class="grid">',
         '<div class="metric hmtc-yt-time-metric"><label data-id="timeLabel">播放时间</label>',
         '<b data-id="time" aria-live="off">—</b></div>',
-        '<div class="metric"><label>实际分辨率</label><b data-id="resolution">—</b></div>',
+        '<div class="metric"><label>分辨率</label><b data-id="resolution">—</b></div>',
         '<div class="metric"><label>连接速度</label><b data-id="speed">—</b></div>',
-        '<div class="metric"><label>已缓冲时长（估计）</label><b data-id="buffer">—</b></div></div>',
+        '<div class="metric"><label>缓冲</label><b data-id="buffer">—</b></div></div>',
         '<div class="row"><label>播放速度</label></div>',
         '<div class="hmtc-yt-rates" role="group" aria-label="常用播放倍速">',
         '<button type="button" data-action="ratePreset" data-rate="1">1×</button>',
@@ -952,9 +967,8 @@
         '<button type="button" data-action="ratePreset" data-rate="1.5">1.5×</button>',
         '<button type="button" data-action="ratePreset" data-rate="1.75">1.75×</button>',
         '<button type="button" data-action="ratePreset" data-rate="2">2×</button></div>',
-        '<div class="row"><label>画质</label>',
-        '<select data-id="qualitySelect" aria-label="选择视频画质后立即切换">',
-        '<option value="">加载中…</option></select></div>',
+        '<div class="row"><label>画质</label></div>',
+        '<div class="hmtc-yt-qualities" role="group" aria-label="画质快捷档位"></div>',
         '<div class="hmtc-yt-quality-tip" data-id="qualityTip"',
         ' role="status" aria-live="polite" hidden></div>',
         '<div class="row"><button data-action="mute" data-id="mute">🔊</button>',
@@ -980,9 +994,6 @@
         if(['tap','hold','both'].includes(event.target.value))
           GM_setValue('hmtc_stats_trigger_v1',event.target.value);
       });
-      sheet.querySelector('[data-id="qualitySelect"]').addEventListener('change',()=>{
-        applyQualitySelection();
-      });
       const senseInput=sheet.querySelector('[data-id="sense"]');
       senseInput.value=String(sense());
       text('senseText',sense().toFixed(1)+'×');
@@ -1003,6 +1014,10 @@
         if(action==='close'){close();return;}
         try{
 
+          if(action==='qualityPreset'){
+            await applyQualitySelection(e.target.closest('button[data-action]').dataset.quality);
+            return;
+          }
           if(action==='mute')toggleMute();
           if(action==='minus')volume(vol()-10);
           if(action==='plus')volume(vol()+10);
@@ -1494,7 +1509,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.9', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.10', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
