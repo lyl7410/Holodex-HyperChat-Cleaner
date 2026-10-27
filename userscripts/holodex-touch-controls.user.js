@@ -3062,6 +3062,10 @@
       if(action==='settings'){openSettings();return;}
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
       if(!row)return;
+      if(action==='qualityPreset'){
+        await applyHolodexQuality(row,btn);
+        return;
+      }
       if(action==='ratePreset'){
         const requested=Number(btn.dataset.rate);
         if(!COMMON_RATES.includes(requested))return;
@@ -3349,6 +3353,71 @@
     try {await Promise.allSettled([playback,rate,native]);}
     finally {statsBusy=false;}
   }
+
+  // Read current video's levels through the iframe bridge; keep a small
+  // fallback link if the browser disallows injection into the embed.
+  let qualityRenderEpoch=0,qualityBusy=false;
+  function markHolodexQuality(value){
+    for(const button of sheet?.querySelectorAll('[data-action="qualityPreset"]')||[]){
+      const selected=!!value&&button.dataset.quality===value;
+      button.classList.toggle('hmtc-quality-selected',selected);
+      button.setAttribute('aria-pressed',selected?'true':'false');
+    }
+  }
+  async function renderHolodexQualities(row){
+    const epoch=++qualityRenderEpoch,key=row.layoutId+':'+row.videoId;
+    const grid=sheet?.querySelector('.hmtc-quality-presets');
+    const link=sheet?.querySelector('[data-field="youtubeQualityLink"]');
+    if(!grid||!link)return;
+    grid.replaceChildren();
+    link.hidden=true;
+    const same=()=>!!active&&!sheet.hidden&&qualityRenderEpoch===epoch&&
+      active.layoutId+':'+active.videoId===key;
+    const showLink=()=>{grid.replaceChildren();link.hidden=false;};
+    try{
+      const catalog=await nativeRequest(row,'qualityOptions',2700);
+      if(!same())return;
+      const choices=(catalog?.choices||[]).filter(x=>x.value!=='tiny');
+      if(catalog?.method!=='internal-range'||!choices.length){
+        showLink();return;
+      }
+      for(const choice of choices){
+        const button=document.createElement('button');
+        button.type='button';
+        button.dataset.action='qualityPreset';
+        button.dataset.quality=choice.value;
+        button.textContent=choice.label;
+        button.setAttribute('aria-pressed','false');
+        grid.appendChild(button);
+      }
+      markHolodexQuality(catalog.selected);
+    }catch{
+      if(same())showLink();
+    }
+  }
+  async function applyHolodexQuality(row,button){
+    if(qualityBusy||!button?.dataset.quality)return;
+    const grid=sheet?.querySelector('.hmtc-quality-presets');
+    if(!grid)return;
+    const key=row.layoutId+':'+row.videoId;
+    qualityBusy=true;
+    for(const item of grid.querySelectorAll('button'))item.disabled=true;
+    const still=()=>!!active&&!sheet.hidden&&active.layoutId+':'+active.videoId===key;
+    try{
+      const result=await nativeRequest(row,'selectQuality',4300,{quality:button.dataset.quality});
+      if(!still())return;
+      if(result.confirmed)markHolodexQuality(button.dataset.quality);
+      else{
+        markHolodexQuality(result.reported);
+        field('note','画质未确认');
+      }
+    }catch(error){
+      if(still())field('note','画质失败：'+error.message);
+    }finally{
+      qualityBusy=false;
+      if(still())for(const item of grid.querySelectorAll('button'))item.disabled=false;
+    }
+  }
   function openSheet(row){
     makeSheet();
     if(active&&(active.layoutId!==row.layoutId||active.videoId!==row.videoId))
@@ -3366,10 +3435,12 @@
     if(qualityLink&&/^[\w-]{11}$/.test(row.videoId||'')){
       qualityLink.href='https://www.youtube.com/watch?v='+encodeURIComponent(row.videoId);
     }
+    renderHolodexQualities(row);
     stats();
     clearInterval(statsInterval);statsInterval=setInterval(stats,1800);
   }
   function closeSheet(){
+    ++qualityRenderEpoch;
     active=null;
     if(sheet)sheet.hidden=true;
     if(backdrop)backdrop.hidden=true;
