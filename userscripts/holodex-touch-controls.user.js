@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.8
-// @description  增加网页播放器画质档位读取与内部画质接口切换，保留左上角 HUD、五档倍速、手势及智能自动播放。
+// @version      0.6.9
+// @description  画质下拉即选即切；精简播放时间与连接速度面板，保留左上角 HUD、五档倍速、手势及智能自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -178,7 +178,7 @@
     // Based on independent implementations (yt4k, yt-force-max, Leta).
     const QUALITY_HEIGHT={hd4320:4320,hd2880:2880,hd2160:2160,
       hd1440:1440,hd1080:1080,hd720:720,large:480,medium:360,
-      small:240,tiny:144};
+      small:240};
     function qualityCatalog(){
       const p=getPlayer();
       if(!p)return {choices:[],selected:'',enumerated:false,
@@ -606,9 +606,9 @@
       'html.hmtc-yt-debug .hmtc-yt-right{background:#40cfa533!important;outline:1px dashed #82f5da}',
       '#hmtc-yt-backdrop{position:fixed;inset:0;z-index:2147482990;background:transparent}',
       '#hmtc-yt-backdrop[hidden],#hmtc-yt-panel[hidden],#hmtc-yt-toast[hidden]{display:none!important}',
-      '#hmtc-yt-panel{position:fixed;bottom:calc(10px + env(safe-area-inset-bottom,0px));',
-      'left:10px;right:10px;z-index:2147482991;max-width:460px;max-height:82vh;margin:0 auto;',
-      'overflow:auto;padding:16px;border-radius:20px;background:linear-gradient(135deg,#20334b,#131b2a);',
+      '#hmtc-yt-panel{position:fixed;bottom:calc(8px + env(safe-area-inset-bottom,0px));',
+      'left:8px;right:8px;z-index:2147482991;max-width:460px;max-height:88vh;margin:0 auto;',
+      'overflow:auto;padding:12px;border-radius:17px;background:linear-gradient(135deg,#20334b,#131b2a);',
       'border:1px solid #83ced43d;box-shadow:0 18px 58px #000b;color:#f3f9ff;',
       'font:14px/1.5 system-ui,-apple-system,sans-serif;box-sizing:border-box;',
       'touch-action:pan-y;overscroll-behavior:contain}',
@@ -619,34 +619,33 @@
       '#hmtc-yt-panel .head{display:flex;gap:10px;align-items:center}',
       '#hmtc-yt-panel .head strong{flex:1;min-width:0;white-space:nowrap;',
       'overflow:hidden;text-overflow:ellipsis;font-size:16px}',
-      '#hmtc-yt-panel .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}',
-      '#hmtc-yt-panel .metric{padding:10px;border-radius:13px;background:#ffffff0b;min-width:0}',
+      '#hmtc-yt-panel .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}',
+      '#hmtc-yt-panel .metric{padding:8px;border-radius:11px;background:#ffffff0b;min-width:0}',
       '#hmtc-yt-panel .metric label{display:block;font-size:11px;color:#afc2d1}',
       '#hmtc-yt-panel .metric b{font-size:15px;overflow-wrap:anywhere}',
       '#hmtc-yt-panel .hmtc-yt-time-metric b{font-size:clamp(15px,3.9vw,21px);',
       'font-variant-numeric:tabular-nums;line-height:1.35;color:#fcffff}',
-      '#hmtc-yt-panel .metric small{display:block;color:#93d9d4;font-size:10px;',
-      'font-weight:400;margin-top:3px;overflow-wrap:anywhere}',
-      '#hmtc-yt-panel .row{display:flex;gap:7px;align-items:center;margin-top:10px}',
+      '#hmtc-yt-panel .row{display:flex;gap:7px;align-items:center;margin-top:8px}',
       '#hmtc-yt-panel .row label{min-width:45px;font-weight:700}',
       '#hmtc-yt-panel .row select,#hmtc-yt-panel .row input{flex:1;min-width:0}',
       '#hmtc-yt-panel [data-id="qualitySelect"]{min-height:40px;',
       'color:#f5faff;background:#30465b;border-radius:9px}',
       '#hmtc-yt-panel .hmtc-yt-rates{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));',
-      'gap:5px;margin:7px 0 12px}',
+      'gap:5px;margin:6px 0 8px}',
       '#hmtc-yt-panel .hmtc-yt-rates button{min-width:0;min-height:44px;',
       'padding:6px 1px;white-space:nowrap;font-size:clamp(10px,2.6vw,12px)}',
       '#hmtc-yt-panel .hmtc-yt-rates button.hmtc-yt-rate-active{',
       'background:#12766c!important;border-color:#78ead5!important;color:white!important}',
       '#hmtc-yt-panel .row input{height:36px;accent-color:#66dad1;touch-action:pan-x}',
       '#hmtc-yt-panel .row .quality{flex:1;min-width:0;font-size:12px;color:#9ee3df}',
-      '#hmtc-yt-panel .hmtc-yt-quality-tip{font-size:11px;line-height:1.5;',
-      'margin:6px 0;color:#b8d5df;padding:8px 10px;border:1px solid #ffffff22;',
-      'border-radius:10px;background:#ffffff0a}',
-      '#hmtc-yt-panel .actions{display:flex;gap:6px;margin:10px 0}',
+      '#hmtc-yt-panel .hmtc-yt-quality-tip{font-size:11px;line-height:1.35;',
+      'margin:4px 0 0;color:#b8d5df;overflow-wrap:anywhere}',
+      '#hmtc-yt-panel .hmtc-yt-quality-tip[hidden]{display:none!important}',
+      '#hmtc-yt-panel .actions{display:flex;gap:6px;margin:7px 0}',
       '#hmtc-yt-panel .actions button{flex:1}',
-      '#hmtc-yt-panel .hint{font-size:11px;color:#bdd0db;margin-top:10px}',
-      '#hmtc-yt-panel details{margin-top:12px;border-top:1px solid #ffffff20;padding-top:10px}',
+      '#hmtc-yt-panel .hint{font-size:11px;color:#bdd0db;margin-top:6px}',
+      '#hmtc-yt-panel .hint[hidden]{display:none!important}',
+      '#hmtc-yt-panel details{margin-top:8px;border-top:1px solid #ffffff20;padding-top:7px}',
       '#hmtc-yt-panel details summary{cursor:pointer;font-size:12px;font-weight:650;color:#b9dfdf}',
       '#hmtc-yt-panel details .row input{accent-color:#66dad1}',
       '#hmtc-yt-toast{position:fixed;z-index:2147482992;pointer-events:none;',
@@ -726,11 +725,9 @@
         document.querySelector('h1.title')?.textContent||document.title||'YouTube')
         .replace(/\s*-\s*YouTube\s*$/,'').trim().slice(0,120));
       text('resolution',snapshot.resolution+' · 实际帧');
-      text('quality',snapshot.resolution);
       const currentClock=readWatchClock();
       text('timeLabel','播放时间');
       text('time',currentClock.time);
-      text('timeInfo',currentClock.info);
       text('vol',vol()+'%');text('mute',muted()?'🔇':'🔊');
       const vslider=sheet.querySelector('[data-id="slider"]');
       if(vslider&&document.activeElement!==vslider)vslider.value=String(vol());
@@ -744,14 +741,8 @@
       // Stats-for-nerds engine, so speed stayed "—" while time/buffer worked.
       const net=bandwidth.read();
       text('speed',net.available?
-        '≈ '+(net.bandwidthKbps/1000).toFixed(2)+' Mbps':'—');
-      text('speedInfo',net.available?
-        (net.stale?
-          '最近一次原生测速 · '+net.sampleAgeSeconds.toFixed(0)+'秒前（等待更新）':
-          net.source==='native-panel-dom'?'YouTube 原版统计 · 实时':
-          'YouTube 连接速度 · '+net.source):
-        (net.monitoring?
-          '等待 YouTube 提供带宽数据':'此播放器尚未提供带宽数据'));
+        '≈ '+(net.bandwidthKbps/1000).toFixed(2)+' Mbps'+
+        (net.stale?'（上次）':''):'—');
       const speedValue=sheet.querySelector('[data-id="speed"]');
       if(speedValue)speedValue.title=net.available?
         (net.stale?'最近一次真实连接速度（非实时）':'实时连接速度')+
@@ -858,9 +849,22 @@
       if(backdrop)backdrop.hidden=true;
     }
 
+
+    let qualitySwitching=false;
+    let qualityFeedbackTimer=null;
+    function showQualityFeedback(message,hold=false){
+      const el=sheet?.querySelector('[data-id="qualityTip"]');
+      if(!el)return;
+      clearTimeout(qualityFeedbackTimer);
+      el.textContent=message||'';
+      el.hidden=!message;
+      if(message&&!hold)qualityFeedbackTimer=setTimeout(()=>{
+        if(el.isConnected)el.hidden=true;
+      },3600);
+    }
     async function refreshQualityChoices(){
       const sel=sheet?.querySelector('[data-id="qualitySelect"]');
-      if(!sel)return;
+      if(!sel||qualitySwitching)return;
       sel.disabled=true;
       sel.replaceChildren();
       const placeholder=document.createElement('option');
@@ -870,23 +874,51 @@
         const catalog=await controls.qualityOptions();
         if(!sel.isConnected)return;
         sel.replaceChildren();
-        if(!catalog.choices.length){
-          placeholder.textContent='没有可用档位';sel.appendChild(placeholder);
+        const available=catalog.choices.filter(choice=>choice.value!=='tiny');
+        if(!available.length){
+          placeholder.textContent='当前播放器没有画质档位';
+          sel.appendChild(placeholder);
+          showQualityFeedback(catalog.reason||'请使用播放器原生画质设置',true);
         }else{
-          for(const choice of catalog.choices){
+          // A blank selection ensures selecting the topmost 1080p entry
+          // fires "change" even when the player reports no selected level.
+          if(!available.some(choice=>choice.value===catalog.selected)){
+            const none=document.createElement('option');
+            none.value='';none.textContent='请选择画质';sel.appendChild(none);
+          }
+          for(const choice of available){
             const opt=document.createElement('option');
             opt.value=choice.value;opt.textContent=choice.label;
             sel.appendChild(opt);
           }
-          const current=catalog.choices.find(x=>x.value===catalog.selected);
-          sel.value=(current||catalog.choices[0]).value;sel.disabled=false;
+          sel.value=available.some(x=>x.value===catalog.selected)?
+            catalog.selected:'';
+          sel.disabled=catalog.method!=='internal-range';
+          if(sel.disabled)showQualityFeedback('当前播放器不支持画质接口',true);
+          else showQualityFeedback('',false);
         }
-        text('qualityTip',catalog.enumerated?
-          '档位来自当前播放器；内部接口可能被 YouTube 忽略，需确认返回值':
-          catalog.reason);
-        const btn=sheet.querySelector('[data-action="qualityApply"]');
-        if(btn)btn.disabled=!catalog.choices.length||catalog.method!=='internal-range';
-      }catch(error){text('qualityTip','读取档位失败：'+error.message);}
+      }catch(error){
+        showQualityFeedback('读取画质失败：'+error.message,true);
+      }
+    }
+    async function applyQualitySelection(){
+      const sel=sheet?.querySelector('[data-id="qualitySelect"]');
+      if(!sel||sel.disabled||qualitySwitching||!sel.value)return;
+      qualitySwitching=true;
+      sel.disabled=true;
+      const requested=sel.value;
+      showQualityFeedback('正在切换画质…',true);
+      try{
+        const result=await controls.setQuality(requested);
+        showQualityFeedback(result.message,!result.confirmed);
+        refreshSheet();
+        setTimeout(refreshSheet,700);
+      }catch(error){
+        showQualityFeedback('画质切换失败：'+error.message,true);
+      }finally{
+        qualitySwitching=false;
+        if(sel.isConnected)sel.disabled=false;
+      }
     }
     function makePanel(){
       if(sheet?.isConnected)return;
@@ -901,11 +933,9 @@
         '<button data-action="close" aria-label="关闭面板">✕</button></div>',
         '<div class="grid">',
         '<div class="metric hmtc-yt-time-metric"><label data-id="timeLabel">播放时间</label>',
-        '<b data-id="time" aria-live="off">—</b>',
-        '<small data-id="timeInfo">当前播放位置 / 总时长</small></div>',
+        '<b data-id="time" aria-live="off">—</b></div>',
         '<div class="metric"><label>实际分辨率</label><b data-id="resolution">—</b></div>',
-        '<div class="metric"><label>连接速度</label><b data-id="speed">—</b>',
-        '<small data-id="speedInfo">读取 YouTube 实时数据…</small></div>',
+        '<div class="metric"><label>连接速度</label><b data-id="speed">—</b></div>',
         '<div class="metric"><label>已缓冲时长（估计）</label><b data-id="buffer">—</b></div></div>',
         '<div class="row"><label>播放速度</label></div>',
         '<div class="hmtc-yt-rates" role="group" aria-label="常用播放倍速">',
@@ -914,23 +944,17 @@
         '<button type="button" data-action="ratePreset" data-rate="1.5">1.5×</button>',
         '<button type="button" data-action="ratePreset" data-rate="1.75">1.75×</button>',
         '<button type="button" data-action="ratePreset" data-rate="2">2×</button></div>',
-        '<div class="row"><label>当前画质</label>',
-        '<span class="quality" data-id="quality">—</span></div>',
-        '<div class="row"><label>目标画质</label>',
-        '<select data-id="qualitySelect" aria-label="选择视频画质">',
+        '<div class="row"><label>画质</label>',
+        '<select data-id="qualitySelect" aria-label="选择视频画质后立即切换">',
         '<option value="">加载中…</option></select></div>',
-        '<div class="row"><button data-action="qualityApply">应用画质</button>',
-        '<button data-action="qualityRefresh">刷新档位</button>',
-        '<button data-action="quality">原生设置</button></div>',
-        '<div class="hmtc-yt-quality-tip" data-id="qualityTip">',
-        '优先使用网页播放器内部画质接口，应用后核验结果。原生设置是后备路径。',
-        '</div>',
+        '<div class="hmtc-yt-quality-tip" data-id="qualityTip"',
+        ' role="status" aria-live="polite" hidden></div>',
         '<div class="row"><button data-action="mute" data-id="mute">🔊</button>',
         '<input type="range" data-id="slider" min="0" max="100" step="1">',
         '<strong data-id="vol">—</strong></div>',
         '<div class="actions"><button data-action="minus">−10</button>',
         '<button data-action="plus">＋10</button><button data-action="full">100%</button></div>',
-        '<div class="hint" data-id="hint">实际分辨率来自视频帧；内部画质请求可能被 YouTube 忽略。</div>',
+        '<div class="hint" data-id="hint" hidden></div>',
         '<details class="hmtc-yt-preferences"><summary>⚙ 手势设置</summary>',
         '<div class="row"><label>统计</label><select data-id="mode">',
         '<option value="tap">左侧轻点打开</option>',
@@ -947,6 +971,9 @@
       modeSelect.addEventListener('change',event=>{
         if(['tap','hold','both'].includes(event.target.value))
           GM_setValue('hmtc_stats_trigger_v1',event.target.value);
+      });
+      sheet.querySelector('[data-id="qualitySelect"]').addEventListener('change',()=>{
+        applyQualitySelection();
       });
       const senseInput=sheet.querySelector('[data-id="sense"]');
       senseInput.value=String(sense());
@@ -968,38 +995,6 @@
         if(action==='close'){close();return;}
         try{
 
-          if(action==='qualityRefresh'){
-            await refreshQualityChoices();return;
-          }
-          if(action==='qualityApply'){
-            const selected=sheet.querySelector('[data-id="qualitySelect"]')?.value;
-            if(!selected)return;
-            const btn=e.target.closest('button[data-action]');
-            btn.disabled=true;
-            try{
-              const result=await controls.setQuality(selected);
-              text('qualityTip',result.message);
-              text('hint',result.message);
-              refreshSheet();setTimeout(refreshSheet,700);
-            }catch(error){
-              text('qualityTip','画质切换失败：'+error.message);
-            }finally{btn.disabled=false;}
-            return;
-          }
-          if(action==='quality'){
-            try{
-              const result=await openYoutubeNativeQuality();
-              console.info('[Holodex Touch Controls]',result.message);
-            }catch(error){
-              // Do not leave a phantom dropdown with an enabled Apply button.
-              // The browser itself can expose Quality in its normal player UI.
-              if(sheet.hidden){sheet.hidden=false;backdrop.hidden=false;}
-              text('qualityTip',
-                '当前页面未找到原生设置按钮。可优先使用上方「目标画质」列表尝试内部画质接口；若该接口也不存在，请切换浏览器桌面模式。');
-              text('hint','当前无法由脚本直接打开画质：'+error.message);
-            }
-            return;
-          }
           if(action==='mute')toggleMute();
           if(action==='minus')volume(vol()-10);
           if(action==='plus')volume(vol()+10);
@@ -1491,7 +1486,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.8', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.9', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
