@@ -641,7 +641,6 @@
       '#hmtc-yt-panel .hmtc-yt-rates button.hmtc-yt-rate-active{',
       'background:#12766c!important;border-color:#78ead5!important;color:white!important}',
       '#hmtc-yt-panel .row input{height:36px;accent-color:#66dad1;touch-action:pan-x}',
-      '#hmtc-yt-panel .row .quality{flex:1;min-width:0;font-size:12px;color:#9ee3df}',
       '#hmtc-yt-panel .hmtc-yt-quality-tip{font-size:11px;line-height:1.35;',
       'margin:4px 0 0;color:#b8d5df;overflow-wrap:anywhere}',
       '#hmtc-yt-panel .hmtc-yt-quality-tip[hidden]{display:none!important}',
@@ -1882,8 +1881,6 @@
     padding:11px 8px;font:700 12px system-ui}
   #hmtc-sheet .hmtc-play-row select{color:#f1f9ff;background:#17283b;border:1px solid #8296a64a;
     min-height:42px;min-width:75px;flex:1;border-radius:10px;padding:8px;font:650 13px system-ui}
-  #hmtc-sheet .hmtc-play-row .hmtc-quality-current{flex:1;min-width:0;overflow:hidden;
-    text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#8bdedb}
   #hmtc-sheet .hmtc-youtube-quality-link[hidden]{display:none!important}
   #hmtc-sheet .volume{display:flex;gap:9px;align-items:center;margin:14px 0 11px}
   #hmtc-sheet .volume input{flex:1;width:100%;min-width:0;height:40px;accent-color:#61d7d1;touch-action:pan-x}
@@ -3005,7 +3002,6 @@
     sheet.setAttribute('aria-label','YouTube 当前视频控制和详细统计');
     sheet.innerHTML=[
       '<div class="hmtc-dismiss-zone" data-action="dismissHeader" title="轻点任意统计数据收起">',
-      '<div class="eyebrow">HOLODEX · LIVE MONITOR　⌄ 轻点收起</div>',
       '<div class="head" data-action="dismissHeader" title="轻点标题收起">',
       '<div class="title" data-field="title">YouTube</div>',
       '<button type="button" data-action="close" aria-label="关闭">✕</button></div>',
@@ -3499,7 +3495,7 @@
     }
     const last=cell.lastSpeed;
     return last&&now-last.at>=0&&now-last.at<=6000?
-      (last.kbps/1000).toFixed(2)+' Mbps (上次)':'—';
+      (last.kbps/1000).toFixed(2)+' Mbps · 上次':'—';
   }
   async function pollCornerHuds(){
     if(hudBusy||!installed||!isMulti()||document.hidden)return;
