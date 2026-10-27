@@ -3022,17 +3022,27 @@
     return state.pending;
   }
 
+  // The actual Connection Speed field can disappear for one iframe sample
+  // even while YouTube's network estimator is running. Hold a genuine
+  // reading for <= 6s, with an explicit stale label; never estimate Mbps.
+  let lastHolodexSpeed=null;
   function renderYouTubeStats(data,reason) {
-    if(!data?.available){
+    const key=active?active.layoutId+':'+active.videoId:'';
+    const now=Date.now();
+    const kbps=Number(data?.bandwidthKbps);
+    const measured=!!data?.available&&Number.isFinite(kbps)&&kbps>0;
+    if(measured){
+      lastHolodexSpeed={key,kbps,source:data.source||'原生统计',at:now};
+      field('speed','≈ '+(kbps/1000).toFixed(2));
+      field('network','当前视频 · YouTube '+lastHolodexSpeed.source+' · 实时');
+    }else if(lastHolodexSpeed&&lastHolodexSpeed.key===key&&
+             now-lastHolodexSpeed.at>=0&&now-lastHolodexSpeed.at<=6000){
+      const age=Math.round((now-lastHolodexSpeed.at)/1000);
+      field('speed','≈ '+(lastHolodexSpeed.kbps/1000).toFixed(2));
+      field('network','上次真实采样 · '+age+' 秒前（等待新数据）');
+    }else{
       field('speed','—');
       field('network',reason||data?.reason||'YouTube 原生连接统计不可用');
-    }else {
-      const kbps=data.bandwidthKbps;
-      field('speed',typeof kbps==='number'&&Number.isFinite(kbps)&&kbps>0
-        ? '≈ '+(kbps/1000).toFixed(2):'—');
-      field('network',kbps!=null
-        ? '当前视频 · YouTube '+(data.source||'原生统计')
-        : '已连接 YouTube，但本播放器未提供带宽数值');
     }
     field('health',typeof data?.bufferSeconds==='number'
       ? data.bufferSeconds.toFixed(1)+' s':'—');
