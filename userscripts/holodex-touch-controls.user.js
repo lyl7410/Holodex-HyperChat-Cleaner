@@ -2644,7 +2644,7 @@
       '<div class="grid">',
       '<div class="metric"><label>缓冲健康度 · Buffer</label><strong data-field="health">—</strong></div>',
       '<div class="metric"><label>直播延迟 · Latency</label><strong data-field="latency">—</strong></div>',
-      '<div class="metric"><label>播放时间</label><strong data-field="position">—</strong></div>',
+      '<div class="metric"><label data-field="positionLabel">播放时间</label><strong data-field="position">—</strong></div>',
       '<div class="metric"><label>当前 / 推荐分辨率</label><strong data-field="resolution">—</strong></div>',
       '</div></div>',
       '<div class="hmtc-play-controls">',
@@ -2943,8 +2943,10 @@
       layoutId:row.layoutId,videoId:row.videoId
     },3500).then(v=>{
       if(!stillActive())return;
+      field('positionLabel',v.live?'直播状态':'播放时间');
       field('position',v.ready
-        ? timestamp(v.position)+(v.live?' · 直播':' / '+timestamp(v.duration))
+        ? (v.live?'🔴 正在直播':
+          timestamp(v.position)+' / '+timestamp(v.duration))
         : '尚未就绪');
     }).catch(error=>{
       if(stillActive())field('position','暂时无法读取');
