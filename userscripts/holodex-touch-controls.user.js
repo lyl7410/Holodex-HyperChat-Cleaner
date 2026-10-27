@@ -177,9 +177,15 @@
         monitor.active=true;
         monitor.forced=false;
       }
-      const visible=playerInfoVisible(p);
-      if(visible===null||typeof p.showVideoInfo!=='function')
-        return {started:false,reason:'此播放器不开放原生带宽监视接口'};
+      // In mobile YouTube, isVideoInfoVisible() may be absent even when
+      // native showVideoInfo() works and the original stats DOM exists.
+      const apiVisibility=playerInfoVisible(p);
+      const existing=pageDoc.querySelector(
+        '.html5-video-info-panel-content, .html5-video-info-panel, .ytp-stats-for-nerds');
+      const rect=existing?.getClientRects?.();
+      const visible=apiVisibility===null?!!rect?.length:apiVisibility;
+      if(!visible&&typeof p.showVideoInfo!=='function')
+        return {started:false,reason:'播放器未开放原生统计显示接口'};
       if(!visible&&!monitor.forced){
         // The user may already have hidden their own native stats since the
         // custom panel opened. Only take ownership on the first activation.
@@ -292,15 +298,24 @@
           }
         }catch{}
       }
-      // YouTube may update bandwidth ONLY in its original Stats-for-nerds
-      // DOM. Read that DOM only if its native panel is logically visible.
-      if(playerInfoVisible(p)===true){
-        const panel=pageDoc.querySelector(
-          '.html5-video-info-panel-content, .ytp-stats-for-nerds');
-        const fromPanel=parse(panel?.textContent||'');
-        if(fromPanel.bandwidthKbps!=null){
-          bandwidthKbps=fromPanel.bandwidthKbps;
-          source='native-panel-dom';
+      // Mobile YouTube often has no isVideoInfoVisible() API. Use real
+      // native diagnostic DOM while our monitoring session is active,
+      // or while the user is visibly showing YouTube's own statistics.
+      const panelEls=[...(pageDoc.querySelectorAll?.(
+        '.html5-video-info-panel-content, .html5-video-info-panel,'+
+        ' .ytp-stats-for-nerds, [class*="video-info-panel"]')||[])];
+      const nativeVisible=panelEls.some(el=>{
+        const style=pageDoc.defaultView?.getComputedStyle?.(el);
+        return !!el.getClientRects?.().length &&
+          style?.display!=='none'&&style?.visibility!=='hidden';
+      });
+      if(monitor.active||playerInfoVisible(p)===true||nativeVisible){
+        for(const panel of panelEls){
+          const result=parse(panel.textContent||'');
+          if(result.bandwidthKbps!=null){
+            bandwidthKbps=result.bandwidthKbps;
+            source='native-panel-dom';break;
+          }
         }
       }
       return {available:bandwidthKbps!=null,bandwidthKbps,source,
@@ -489,14 +504,12 @@
       text('resolution',snapshot.resolution+' · 实际帧');
       text('quality',snapshot.resolution);
       const live=watchLive();
-      text('timeLabel',live.live?'直播状态':'播放时间');
-      text('time',live.live?
-        '🔴 正在直播':
+      text('timeLabel',live.live?'状态':'播放时间');
+      text('time',live.live?'🔴 直播中':
         clock(Number(v?.currentTime))+' / '+
           (Number.isFinite(v?.duration)&&v.duration>=0?
             clock(v.duration):'—'));
-      text('timeInfo',live.live?
-        '时间轴位置 '+clock(Number(v?.currentTime))+'（非直播总时长）':'');
+      text('timeInfo','');
       text('vol',vol()+'%');text('mute',muted()?'🔇':'🔊');
       const vslider=sheet.querySelector('[data-id="slider"]');
       if(vslider&&document.activeElement!==vslider)vslider.value=String(vol());
@@ -2972,9 +2985,9 @@
       layoutId:row.layoutId,videoId:row.videoId
     },3500).then(v=>{
       if(!stillActive())return;
-      field('positionLabel',v.live?'直播状态':'播放时间');
+      field('positionLabel',v.live?'状态':'播放时间');
       field('position',v.ready
-        ? (v.live?'🔴 正在直播':
+        ? (v.live?'🔴 直播中':
           timestamp(v.position)+' / '+timestamp(v.duration))
         : '尚未就绪');
     }).catch(error=>{
@@ -3117,8 +3130,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.4 说明',()=>
-      alert('v0.6.4：修复普通 YouTube 直播被错误显示为「当前时间 / 1:00:00」的问题。现在通过直播状态标志识别真正正在播出的直播，显示「正在直播」及时间轴位置，不把动态 DVR 窗口长度当作直播总时长。保留 v0.6.3 的实时连接速度与五档倍速、音量手势及 Holodex 智能自动播放。'));
+    GM_registerMenuCommand('Touch Controls v0.6.5 说明',()=>
+      alert('v0.6.5：连接速度支持新版 YouTube 原生统计字段、嵌套数据和统计面板文字；手机版不再因缺少 isVideoInfoVisible() 而跳过读取。直播状态精简为「直播中」，去除冗长时间轴说明。保留五档倍速、音量手势及多视图自动播放。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
