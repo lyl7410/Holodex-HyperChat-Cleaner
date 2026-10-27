@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.3
-// @description  Holodex／YouTube 实时连接速度恢复：多接口+静默原生统计监测，五档倍速、手势音量和智能自动播放。
+// @version      0.6.4
+// @description  Holodex／YouTube：直播状态识别和时间显示修复、实时连接速度、五档倍速、手势音量及智能自动播放。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -283,6 +283,54 @@
     return {start,stop,read};
   }
 
+  // HTMLMediaElement.duration is often a rolling DVR-window length for
+  // YouTube LIVE (e.g. precisely 1:00:00), NOT the stream's total duration.
+  // Prefer YouTube's explicit live flags and visible live-badge state.
+  function youtubeWatchLiveState(pageDoc,getPlayer,getVideo,mainPage){
+    const player=getPlayer();
+    if(!player)return {live:false,reason:'no-player'};
+    const safe=(fn,fallback=null)=>{try{return fn()??fallback;}catch{return fallback;}};
+    const data=safe(()=>player.getVideoData?.(),{})||{};
+    const playerId=data.video_id||data.videoId||'';
+    let response=safe(()=>player.getPlayerResponse?.());
+    if(!response){
+      // ytInitialPlayerResponse may refer to an earlier video after YouTube
+      // SPA navigation; never trust it if the video IDs do not match.
+      const candidate=mainPage?.ytInitialPlayerResponse;
+      const responseId=candidate?.videoDetails?.videoId||'';
+      if(candidate&&playerId&&responseId===playerId)response=candidate;
+    }
+    const details=response?.videoDetails||{};
+    const liveInfo=response?.microformat?.playerMicroformatRenderer?.liveBroadcastDetails;
+    // A replay of a past live stream may still carry isLiveContent=true:
+    // a definitive "isLiveNow:false" must win over that stale designation.
+    if(liveInfo?.isLiveNow===false)return {live:false,reason:'past-broadcast'};
+    if(liveInfo?.isLiveNow===true)return {live:true,reason:'broadcast-details'};
+    if(data.isLive===true||details.isLive===true)
+      return {live:true,reason:'player-live'};
+    if(data.isLiveContent===true||details.isLiveContent===true)
+      return {live:true,reason:'video-details-live'};
+    if(player.classList?.contains?.('ytp-live')||
+       player.classList?.contains?.('ytp-live-streaming'))
+      return {live:true,reason:'player-live-class'};
+    for(const selector of [
+      '.ytp-live-badge','.ytm-live-badge',
+      '.badge-style-type-live-now','.ytp-live'
+    ]){
+      const node=pageDoc.querySelector(selector);
+      if(!node)continue;
+      const rect=safe(()=>node.getBoundingClientRect?.());
+      const style=safe(()=>mainPage?.getComputedStyle?.(node));
+      if((rect&&rect.width>0&&rect.height>0)&&
+         style?.display!=='none'&&style?.visibility!=='hidden')
+        return {live:true,reason:'visible-live-badge'};
+    }
+    const video=getVideo();
+    if(video?.duration===Infinity)
+      return {live:true,reason:'infinite-media'};
+    return {live:false,reason:'vod'};
+  }
+
   // YouTube's own watch/live/shorts interface: no Holodex Vue bridge and no
   // persistent floating icon. Invisible edges exist only on touch devices.
   function youtubeWatchControls(){
@@ -306,6 +354,8 @@
     };
     const controls=youtubePlaybackTools(page.document,p);
     const bandwidth=youtubeWatchBandwidth(page.document,p);
+    const watchLive=()=>youtubeWatchLiveState(page.document,p,
+      controls.video,page);
     const coarse=matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>0;
     const enabledKey='hmtc_youtube_edges_v1';
     const setting=(key,def)=>GM_getValue(key,def);
@@ -409,8 +459,15 @@
         .replace(/\s*-\s*YouTube\s*$/,'').trim().slice(0,120));
       text('resolution',snapshot.resolution+' · 实际帧');
       text('quality',snapshot.resolution);
-      text('time',clock(Number(v?.currentTime))+' / '+
-        (Number.isFinite(v?.duration)?clock(v.duration):'直播'));
+      const live=watchLive();
+      text('timeLabel',live.live?'直播状态':'播放时间');
+      text('time',live.live?
+        '🔴 正在直播':
+        clock(Number(v?.currentTime))+' / '+
+          (Number.isFinite(v?.duration)&&v.duration>=0?
+            clock(v.duration):'—'));
+      text('timeInfo',live.live?
+        '时间轴位置 '+clock(Number(v?.currentTime))+'（非直播总时长）':'');
       text('vol',vol()+'%');text('mute',muted()?'🔇':'🔊');
       const vslider=sheet.querySelector('[data-id="slider"]');
       if(vslider&&document.activeElement!==vslider)vslider.value=String(vol());
@@ -546,7 +603,9 @@
         '<div class="head"><strong data-id="title">YouTube</strong>',
         '<button data-action="close" aria-label="关闭面板">✕</button></div>',
         '<div class="grid">',
-        '<div class="metric"><label>播放时间</label><b data-id="time">—</b></div>',
+        '<div class="metric"><label data-id="timeLabel">播放时间</label>',
+        '<b data-id="time">—</b>',
+        '<small data-id="timeInfo"></small></div>',
         '<div class="metric"><label>实际分辨率</label><b data-id="resolution">—</b></div>',
         '<div class="metric"><label>连接速度</label><b data-id="speed">—</b>',
         '<small data-id="speedInfo">读取 YouTube 实时数据…</small></div>',
@@ -1087,7 +1146,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.3', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.4', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -3027,8 +3086,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.3 说明',()=>
-      alert('v0.6.3：恢复普通 YouTube 面板实时连接速度：打开面板期间尝试开启隐藏的原版详细统计，读取真实连接带宽并定时刷新，关闭时恢复原版统计状态。仍保留五档单排倍速、左右音量手势和 Holodex 智能自动播放。浏览器不提供带宽数据时仍显示不可用，不会虚报网速。'));
+    GM_registerMenuCommand('Touch Controls v0.6.4 说明',()=>
+      alert('v0.6.4：修复普通 YouTube 直播被错误显示为「当前时间 / 1:00:00」的问题。现在通过直播状态标志识别真正正在播出的直播，显示「正在直播」及时间轴位置，不把动态 DVR 窗口长度当作直播总时长。保留 v0.6.3 的实时连接速度与五档倍速、音量手势及 Holodex 智能自动播放。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
