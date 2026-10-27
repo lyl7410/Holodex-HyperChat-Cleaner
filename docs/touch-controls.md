@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.4 直播时间识别与实时带宽修复
+# Holodex / YouTube Touch Controls — v0.6.5 连接速度增强与直播状态精简
 
-独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.4 修正普通 YouTube 直播播放时间的误判，并保留 v0.6.3 恢复的实时连接速度、单排五档倍速与手机画质入口，保留播放后的触控修复，保留原生直播统计、音量手势、灵敏度与 Holodex 智能自动播放；不增加第二个重复脚本。
+独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.5 增强安卓 YouTube 原生 Connection Speed 字段的读取、加入诊断入口，并精简直播状态；保留 v0.6.4 的直播识别与此前的实时连接速度机制、单排五档倍速与手机画质入口，保留播放后的触控修复，保留原生直播统计、音量手势、灵敏度与 Holodex 智能自动播放；不增加第二个重复脚本。
 
-**[安装 / 更新 v0.6.4](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装 / 更新 v0.6.5](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,28 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.5：连接速度再次不显示时的修复与排查
+
+用户再次报告：在实际安卓 Tampermonkey 浏览器中，普通 YouTube 面板连接速度仍为 `—`，并希望直播状态描述更简短。本次修复针对**读取器漏认真实数据**，不改用网络测速或假定带宽。
+
+### 本次修复
+
+- **更多 YouTube 原生字段**：除 `bandwidth_kbps` 外，也检查播放器 `getStatsForNerds()`、`getStatsForNerdsData()` 和 `getDebugText()` 返回的 `connection_speed`、`bandwidth`、不同驼峰拼写及嵌套对象；支持包含明确 Mbps / Kbps 单位的文字和多语言 `Connection Speed / 连接速度 / 接続速度`。
+- **适配手机版统计接口缺失**：旧版严格要求 `isVideoInfoVisible()`，部分手机播放器即使能更新原生统计面板也没有这个方法。新版允许存在 `showVideoInfo()` 的播放器静默启动统计，并在脚本已经监视或原生统计元素可见时从真正的 DOM 提取速度。
+- **数据缺失明确报告**：只要 YouTube 没提供能确认的原生数值，就继续显示 `—`；不将缓冲时间、视频码率、页面下载速度伪装为 YouTube 的 Connection Speed。
+- **新增可直接使用的诊断**：普通 YouTube 视频页面的 Tampermonkey 菜单提供 **「YouTube：连接速度诊断」**。它会报告播放器是否识别、支持的统计方法、原版统计节点是否存在、是否正在采集、是否有 Mbps 读数和当前数据来源。诊断只报告读取状态，不把播放器识别信息、视频标题或账号信息复制到报告中。
+- **直播卡片简化**：普通 YouTube 和 Holodex 都显示 **「状态｜🔴 直播中」**，移除「时间轴位置……非直播总时长」的小字；普通视频及已结束直播回放依然显示当前时间与视频总时长。视频是否仍在直播，继续使用 v0.6.4 的直播状态检测，不恢复之前的错误时间轴判断。
+
+### 建议的安卓实机复测
+
+1. Tampermonkey 更新到 **v0.6.5**，确保没有同时开启两份旧脚本，并完整刷新 YouTube 视频页。
+2. 打开正在播放的 YouTube 视频或直播，再打开左侧快捷统计面板，查看连接速度是否出现真实的 Mbps 数值。启动原生统计后，可能需要视频已经加载部分数据才有速度。
+3. 若仍是 `—`，从 Tampermonkey 菜单选择 **「YouTube：连接速度诊断」**，保留诊断结果；它可以区分「页面根本没有原生统计 API」与「已有 API 但无法获得带宽」。
+4. 可对照 YouTube 自己的「详细统计信息／Stats for nerds」中 **Connection Speed** 是否真的有数值。若原生统计面板也缺失速度，用户脚本无法保证自行生成相同读数。
+5. 直播状态应只显示简短的 **「🔴 直播中」**，不再增加长篇解释。
+
+**验证边界**：在模拟播放器中覆盖了 9 类 YouTube 原生统计返回格式（含中文/日文、Kbps/Mbps、嵌套数据）、隐藏原版统计 DOM、`isVideoInfoVisible()` 缺失，以及没有任何速度数据的情况。全部通过，**但安卓真实 YouTube 版本与 Tampermonkey 隔离环境仍未实测**。
 
 ## v0.6.4：修正直播被错误显示为普通视频时长
 
