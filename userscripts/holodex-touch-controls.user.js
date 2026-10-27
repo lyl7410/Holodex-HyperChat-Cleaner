@@ -654,8 +654,16 @@
       '@media(orientation:landscape){#hmtc-yt-panel{left:auto;right:8px;',
       'max-width:min(385px,69vw);max-height:calc(100vh - 16px)}}'
     ].join(''));
+    let hintHideTimer=null;
     const text=(key,value)=>{const el=sheet?.querySelector('[data-id="'+key+'"]');
-      if(el)el.textContent=String(value);};
+      if(!el)return;
+      el.textContent=String(value);
+      if(key==='hint'){
+        el.hidden=!value;
+        clearTimeout(hintHideTimer);
+        if(value)hintHideTimer=setTimeout(()=>{if(el.isConnected)el.hidden=true;},3200);
+      }
+    };
     const clock=n=>{
       if(!Number.isFinite(n)||n<0)return '—';
       const a=Math.floor(n);return Math.floor(a/3600)+':'+
