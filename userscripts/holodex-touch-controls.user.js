@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.17
-// @description  PC 视频居中面板，明确直播／录像标识与录像总时长，提供延迟来源诊断；保留手势、HUD 与自动播放。
+// @version      0.6.18
+// @description  PC 视频居中面板，兼容原生 live_latency_secs 延迟字段；画面时间标签精简，面板保留类型与录像总时长。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -246,6 +246,9 @@
     const m=value.match(/(\d{2,5})\s*[x×]\s*(\d{2,5})(?:\s*@\s*(\d+(?:\.\d+)?))?/i);
     return m?m[1]+'×'+m[2]+(m[3]?'@'+m[3]:''):'';
   }
+  const LATENCY_SECONDS_KEYS=new Set(['live_latency_seconds','liveLatencySeconds','live_latency_sec',
+    'live_latency_secs','latency_to_live_seconds','latencyToLiveEdgeSeconds']);
+  const LATENCY_MS_KEYS=new Set(['live_latency_ms','liveLatencyMs','latency_to_live_ms']);
   function nativeLatencySeconds(raw){
     const numeric=value=>{
       if(value==null||typeof value==='boolean'||typeof value==='object'||
@@ -253,9 +256,7 @@
       const n=Number(typeof value==='string'?value.replace(/,/g,''):value);
       return Number.isFinite(n)&&n>=0?n:null;
     };
-    const seconds=new Set(['live_latency_seconds','liveLatencySeconds','live_latency_sec',
-      'latency_to_live_seconds','latencyToLiveEdgeSeconds']);
-    const millis=new Set(['live_latency_ms','liveLatencyMs','latency_to_live_ms']);
+    const seconds=LATENCY_SECONDS_KEYS,millis=LATENCY_MS_KEYS;
     let decoded=raw;
     if(typeof raw==='string')try{decoded=JSON.parse(raw);}catch{}
     const queue=[{value:decoded,depth:0}],seen=new Set();let visited=0;
@@ -985,7 +986,7 @@
     function readWatchClock(){
       let id=null;try{id=p()?.getVideoData?.()?.video_id;}catch{}
       const data=readFrameClock(page.document,p,video,page,id);
-      return {time:playbackTimeText(data),hudTime:playbackKindLabel(data)+' '+playbackTimeText(data),state:data};
+      return {time:playbackTimeText(data),state:data};
     }
     let watchHud=null;
     function refreshWatchHud(player){
@@ -1008,7 +1009,7 @@
       watchHud.style.left=Math.max(0,rect.left+Math.min(7,rect.width/20))+'px';
       watchHud.style.top=Math.max(0,rect.top+6)+'px';
       watchHud.style.maxWidth=Math.max(28,Math.min(240,rect.width-14))+'px';
-      const time=hudWantsTime()?readWatchClock().hudTime:'—';
+      const time=hudWantsTime()?readWatchClock().time:'—';
       let speed='—';
       if(hudWantsSpeed()){
         bandwidth.start();
@@ -1694,7 +1695,7 @@
       if(actualId&&actualId!==videoId)
         return {available:false,reason:'播放视频已切换'};
       let source='none';
-      const data=parse(null),sources=[];let rawLatencyFields=false,availableSourceCount=0;
+      const data=parse(null),sources=[];let rawLatencyFields=false,rawExplicitLatencyField=false,availableSourceCount=0;
       const getter={supported:typeof p.getLiveLatency==='function',status:'未查询'};
       // Prefer fresh API output; previous versions wrongly read old panel DOM first.
       // Combine compatible fields instead of stopping at an API which happens
@@ -1715,6 +1716,7 @@
           }
           const sample=parse(raw),fields=latencyFieldNames(raw);
           if(fields.length)rawLatencyFields=true;
+          if(fields.some(path=>{const key=path.split('.').pop();return LATENCY_SECONDS_KEYS.has(key)||LATENCY_MS_KEYS.has(key);}))rawExplicitLatencyField=true;
           if(diagnose)sources.push({method:name,available:true,fields,latencySeconds:sample.liveLatencySeconds});
           if(sample.bandwidthKbps!=null && data.bandwidthKbps==null){
             data.bandwidthKbps=sample.bandwidthKbps;
@@ -1761,7 +1763,7 @@
           }catch{getter.status='调用失败';}
         }
         data.latencyReason=data.liveLatencySeconds==null?'未提供':'';
-        data.latencyReasonCode=data.liveLatencySeconds!=null?'available':rawLatencyFields?'unrecognized-latency-units':
+        data.latencyReasonCode=data.liveLatencySeconds!=null?'available':rawExplicitLatencyField?'latency-value-invalid':rawLatencyFields?'unrecognized-latency-units':
           availableSourceCount===0&&!getter.supported?'no-latency-api':'latency-field-absent';
       }
       if(diagnose)data.latencyDiagnostics={sources,getter,nativePanelVisible:isNativeVisible(p),
@@ -1795,7 +1797,7 @@
         respond({ok:true,data:readStats(message.status,true)});return;
       }
       if(message.action==='desktopPanelStatus'){
-        respond({ok:true,data:{version:'0.6.17',...desktopBridge.status()}});return;
+        respond({ok:true,data:{version:'0.6.18',...desktopBridge.status()}});return;
       }
       if(message.action==='desktopPanelConfig'){
         desktopBridge.configure(event,message);return;
@@ -1852,7 +1854,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.17', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.18', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -3940,7 +3942,7 @@
           readMultiviewClock(row)
             .then(v=>{
               if(!stillHere())return;
-              cell.time=playbackKindLabel(v)+' '+playbackTimeText(v);
+              cell.time=playbackTimeText(v);
             }).catch(()=>{if(stillHere())cell.time='—';})
         );
         if(wantSpeed)jobs.push((async()=>{
@@ -4041,7 +4043,7 @@
       if(!rows.length)return alert('请先打开多视图视频。');
       const reasons={'not-live':'已识别为录像，没有直播延迟','media-type-unknown':'当前直播／录像状态未确认',
         'no-latency-api':'未开放直播延迟读取接口','latency-field-absent':'可用接口未返回明确的延迟字段',
-        'unrecognized-latency-units':'返回了延迟字段或文字，但单位无法确认','available':'已读取实际延迟'};
+        'unrecognized-latency-units':'返回了延迟字段或文字，但单位无法确认','latency-value-invalid':'有明确单位的延迟字段，但值为空、无效或为负数','available':'已读取实际延迟'};
       const typeReasons={'player-not-live':'播放器明确标记为非直播','past-broadcast':'直播结束标记',
         'broadcast-details':'正在直播标记','player-live':'播放器明确标记直播','player-is-live':'播放器直播状态接口',
         'player-live-class':'当前播放器直播界面','visible-player-live-badge':'当前播放器直播徽标',
@@ -4064,7 +4066,7 @@
           ].join('\n');
         }catch(error){return (row.title||row.videoId)+'：'+String(error?.message||error);}
       }));
-      alert('数据诊断 · v0.6.17\n'+reports.join('\n\n'));
+      alert('数据诊断 · v0.6.18\n'+reports.join('\n\n'));
     });
     GM_registerMenuCommand('诊断多视图右键面板',async()=>{
       const rows=[...rowMap.values()];
@@ -4076,7 +4078,7 @@
             '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
         }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
       }));
-      alert('右键面板诊断 · v0.6.17\n'+reports.join('\n'));
+      alert('右键面板诊断 · v0.6.18\n'+reports.join('\n'));
     });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
@@ -4141,8 +4143,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.17 说明',()=>
-      alert('v0.6.17：区分正在直播与直播录像，显示类型标识并恢复录像总时长；新增视频类型、时长与延迟来源诊断。'));
+    GM_registerMenuCommand('Touch Controls v0.6.18 说明',()=>
+      alert('v0.6.18：补上 YouTube live_latency_secs 秒字段解析；画面上的时间 HUD 不再带直播／录像文字，面板类型标识保留。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();

@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.17 直播／录像识别、总时长与延迟诊断
+# Holodex / YouTube Touch Controls — v0.6.18 原生延迟字段与纯时间 HUD
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 v0.6.17](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
+**[安装／更新 v0.6.18](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)** · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,18 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.18：实际延迟字段适配与纯时间 HUD
+
+用户诊断已明确返回 getStatsForNerds 的 live_latency_style、live_latency_secs、live_latency_samples；getLiveLatency 不存在且原版统计关闭。此前解析器支持 live_latency_seconds / live_latency_sec，却遗漏实际返回的 **live_latency_secs**，因此错误报告「单位无法确认」。这是脚本字段适配遗漏，不能据此断言播放器没有提供延迟；secs 字段本身明确以秒为单位。
+
+- 将 live_latency_secs 加入明确秒字段集合，支持数值、数字字符串与嵌套 JSON。直接读取 getStatsForNerds 的实际秒值，不依赖不存在的 getter，不需要打开或隐藏原版统计。
+- live_latency_style、latency_class、lowlatency 是模式／类别，live_latency_samples 是样本集合；不把这些内容直接当成当前延迟值。
+- 明确单位的字段若为空、非法或为负数，诊断改为「有明确单位的延迟字段，但值为空、无效或为负数」，不再误报单位不明；真实 0 秒仍是合法值。
+- **视频画面左上角 HUD 去掉直播／录像／待确认文字**，只显示原来的时间／速度内容；录像仍显示当前位置／总时长。控制面板标题旁的类型标识与分类修复保留。
+- 语法、差异检查与 **43 项 Node 回归测试通过**。新增按用户诊断字段组合构造的测试，覆盖 getter 缺失、样式／样本不作延迟、数字字符串、真实 0 和非法值诊断。本地双端口模拟浏览器用 live_latency_secs=2.75 验证面板显示 2.75s、画面 HUD 无类型文字；该数值为测试夹具数据，不是用户实际延迟。
+
+安装 **v0.6.18** 并完整刷新多视图／YouTube，使 iframe 同步更新。若 secs 字段自身没有有效数值，将继续明确报告实际缺失原因，不使用缓冲或其他估计代替。
 
 ## v0.6.17：区分直播与录像，恢复总时长并解释延迟缺失
 

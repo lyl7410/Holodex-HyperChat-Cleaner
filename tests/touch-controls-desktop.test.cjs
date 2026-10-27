@@ -465,3 +465,23 @@ test('panel badge explicitly labels live, recording and unknown states',()=>{
   ctx.renderMediaKind(panel,{live:true});assert.equal(badge.textContent,'直播');
   ctx.renderMediaKind(panel,{live:null});assert.equal(badge.textContent,'待确认');
 });
+
+test('reported YouTube live_latency_secs payload is parsed without a getter or native overlay',()=>{
+  const payload={bandwidth_kbps:42000,live_latency_style:'LOW_LATENCY',live_latency_secs:'3.125',live_latency_samples:[3.1,3.15]};
+  const ctx=frameStatsContext({getStatsForNerds:()=>payload,getVideoStats:()=>({latency_class:2,lowlatency:true})});
+  const result=ctx.readStats(undefined,true);
+  assert.equal(result.liveLatencySeconds,3.125);assert.equal(result.latencyDiagnostics.reasonCode,'available');
+  assert.equal(result.latencyDiagnostics.getter.supported,false);
+  assert.ok(result.latencyDiagnostics.sources.some(x=>x.method==='getStatsForNerds'&&x.latencySeconds===3.125));
+});
+test('explicit secs key accepts real zero and distinguishes an invalid value from unknown units',()=>{
+  const ctx=vm.createContext({});vm.runInContext(metricHelpers,ctx);
+  assert.equal(ctx.nativeLatencySeconds({live_latency_secs:0}),0);
+  assert.equal(ctx.nativeLatencySeconds('{"stats":{"live_latency_secs":"2.75"}}'),2.75);
+  for(const value of [null,'',-1,NaN]){
+    const frame=frameStatsContext({getStatsForNerds:()=>({live_latency_secs:value})});
+    const result=frame.readStats(undefined,true);
+    assert.equal(result.liveLatencySeconds,null);assert.equal(result.latencyDiagnostics.reasonCode,'latency-value-invalid');
+  }
+  assert.equal(ctx.nativeLatencySeconds({live_latency_style:'LOW_LATENCY',live_latency_samples:[3],latency_class:2,lowlatency:true}),null);
+});
