@@ -244,3 +244,31 @@ test('a hidden target iframe is not mistaken for the visible chat having switche
   const report=f.trace.report();assert.ok(report.includes('尚未识别到带视频 ID'));
   assert.ok(report.includes('"visible":false'));
 });
+
+test('trace reports render dependency failures and layout identity without leaking exception details',()=>{
+  const f=traceFixture();f.chat.layoutContent=f.rows;
+  Object.defineProperty(f.chat,'currentTime',{get(){throw new TypeError('PRIVATE_URL_TOKEN');}});
+  f.chat.videoCellId='a';f.chat.channels=f.select.items;
+  f.trace.start();f.emit(1);f.change();const report=f.trace.report();
+  assert.ok(report.includes('"identityMatches":1'));
+  assert.ok(report.includes('"currentTime":{"ok":false,"error":"TypeError"}'));
+  assert.ok(report.includes('"channels":{"ok":true,"value":2}'));
+  assert.ok(!report.includes('PRIVATE_URL_TOKEN'));
+});
+
+test('report uses a readonly selectable text area and closes without changing chat',()=>{
+  const f=traceFixture(),nodes=[];let removed=false;
+  f.doc.getElementById=()=>null;
+  f.doc.createElement=tag=>{const node={tag,style:{},events:{},children:[],
+    setAttribute(){},addEventListener(event,fn){this.events[event]=fn;},
+    append(...children){this.children.push(...children);},showModal(){this.open=true;},
+    close(){this.events.close();},remove(){removed=true;},focus(){this.focused=true;},select(){this.selected=true;}};
+    nodes.push(node);return node;};
+  f.doc.body={append(){}};f.ctx.V='2.6.5';
+  vm.runInContext(section('    function showChatSwitchReport(','    const chatSwitchTrace=')+
+    '\nshowChatSwitchReport("Report contents");',f.ctx);
+  const text=nodes.find(n=>n.tag==='textarea'),buttons=nodes.filter(n=>n.tag==='button');
+  assert.equal(text.readOnly,true);assert.equal(text.value,'Report contents');
+  buttons[0].events.click();assert.equal(text.focused,true);assert.equal(text.selected,true);
+  buttons[1].events.click();assert.equal(removed,true);assert.equal(f.chat.currentTab,0);
+});

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Channel Name Fix
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      2.6.4
+// @version      2.6.5
 // @description  安全补全 Holodex 频道资料与头像，保留视频对象及聊天切换状态。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -20,7 +20,7 @@
 (() => {
     'use strict';
 
-    const V = '2.6.4';
+    const V = '2.6.5';
     const VIDEO = /^[\w-]{11}$/;
     const CHANNEL = /^UC[\w-]{22}$/;
     const KEY = 'hcnf_video_metadata_v25';
@@ -507,7 +507,21 @@
                     /(chrome|moz)-extension:/.test(url.protocol)?'扩展 iframe':'其他 iframe',
                     id:youtube?id(url.searchParams.get('v')):'未提供',visible};
             });
-            return {chatFound:!!chat&&!chat._isDestroyed,selectFound:!!select&&!select._isDestroyed,tab:scalar(read(()=>chat.currentTab)),
+            // Probe only render dependencies, retaining error names rather than
+            // arbitrary exception messages that could contain page data.
+            const dependencies={};
+            for(const key of ['videoCellId','currentTime','channels']) {
+                try {
+                    const value=chat?.[key];
+                    dependencies[key]={ok:true,value:key==='channels'?(Array.isArray(value)?value.length:null):
+                        key==='currentTime'?(typeof value==='number'&&Number.isFinite(value)?value:null):
+                        (typeof value==='string'?value.slice(0,32):null)};
+                } catch(error) { dependencies[key]={ok:false,error:['TypeError','ReferenceError','RangeError'].includes(error?.name)?error.name:'Error'}; }
+            }
+            const current=read(()=>chat.currentVideo);
+            const layout=read(()=>chat.layoutContent);
+            const identityMatches=layout&&current?read(()=>Object.values(layout).filter(row=>row?.video===current).length):null;
+            return {dependencies,identityMatches,chatFound:!!chat&&!chat._isDestroyed,selectFound:!!select&&!select._isDestroyed,tab:scalar(read(()=>chat.currentTab)),
                 selectValue:scalar(read(()=>select.internalValue)),videoId:id(read(()=>chat.currentVideo?.id)),
                 watchVideoId:id(read(()=>watch.video?.id)),
                 videos:Array.isArray(videos)?videos.slice(0,16).map((v,index)=>({index,id:id(v?.id),
@@ -572,6 +586,21 @@
         }
         return {start,report,stop};
     }
+    function showChatSwitchReport(report) {
+        doc.getElementById('hcnf-chat-report')?.remove();
+        const dialog=doc.createElement('dialog');dialog.id='hcnf-chat-report';
+        dialog.style.cssText='width:min(760px,90vw);max-height:85vh;box-sizing:border-box;padding:16px;background:#20242b;color:#f5faff;border:1px solid #8ca6bd;border-radius:10px;';
+        const title=doc.createElement('h3');title.textContent='聊天切换诊断 · '+V;
+        const hint=doc.createElement('p');hint.textContent='点击“选中全部”，按 Ctrl+C 复制，再粘贴到对话中。报告不会自动上传。';
+        const text=doc.createElement('textarea');text.readOnly=true;text.value=report;text.setAttribute('aria-label','聊天切换诊断报告');
+        text.style.cssText='width:100%;height:50vh;box-sizing:border-box;resize:vertical;background:#121820;color:#f5faff;font:13px/1.5 monospace;';
+        const select=doc.createElement('button');select.textContent='选中全部';select.type='button';
+        select.addEventListener('click',()=>{text.focus();text.select();});
+        const close=doc.createElement('button');close.textContent='关闭';close.type='button';close.style.marginLeft='12px';
+        close.addEventListener('click',()=>dialog.close());
+        dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+        dialog.append(title,hint,text,select,close);doc.body.append(dialog);dialog.showModal();
+    }
     const chatSwitchTrace=createChatSwitchDiagnostics();
     window.addEventListener('pagehide',()=>chatSwitchTrace.stop('页面离开'),{once:true});
     GM_registerMenuCommand('🔎 开始聊天切换诊断',()=>{
@@ -579,7 +608,7 @@
         alert(count?'已开始诊断 '+count+' 个聊天格子（最多2分钟）。\n请展开聊天下拉菜单，选择另一条视频，等待几秒，再从脚本菜单选择“查看聊天切换诊断”。':
             '尚未找到聊天选择器。请先打开 Holodex 多视图及聊天栏。');
     });
-    GM_registerMenuCommand('📋 查看聊天切换诊断',()=>alert(chatSwitchTrace.report()));
+    GM_registerMenuCommand('📋 查看聊天切换诊断',()=>showChatSwitchReport(chatSwitchTrace.report()));
     let lastPath='';
     function tick() {
         if (!/^\/multiview(?:\/|$)/.test(location.pathname)) return;
