@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Channel Name Fix
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      2.6.2
-// @description  修复 Holodex 多视图频道名、直播标题、频道ID，以及媒体控制/布局面板头像。
+// @version      2.6.6
+// @description  安全补全 Holodex 频道资料与头像，保留视频对象及聊天切换状态。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 (() => {
     'use strict';
 
-    const V = '2.6.2';
+    const V = '2.6.6';
     const VIDEO = /^[\w-]{11}$/;
     const CHANNEL = /^UC[\w-]{22}$/;
     const KEY = 'hcnf_video_metadata_v25';
@@ -37,7 +37,7 @@
     const AVATAR_MEMORY_LIMIT = 80;
     const pending = new Map(), channelPending = new Map(), failures = new Map();
     const queue = [];
-    let running = 0, storeCache = null, debounce = null;
+    let running = 0, storeCache = null, storeOwner = null, debounce = null;
 
     const isVideo = id => typeof id === 'string' && VIDEO.test(id);
     const isChannel = id => typeof id === 'string' && CHANNEL.test(id);
@@ -151,10 +151,10 @@
     function avatarFor(video) {
         if (!isVideo(video?.id)) return null;
         const metadata = videoCache[video.id] || {};
-        const channelId = isChannel(metadata.channelId) ? metadata.channelId : video.channel?.id;
+        const channelId = isChannel(video.channel?.id) ? video.channel.id : metadata.channelId;
         // Prefer the newest channel-level avatar across multiple streams.
         return (isChannel(channelId) ? imageUrl(avatarByChannel[channelId]?.url) : null) ||
-            imageUrl(metadata.avatar);
+            (!isChannel(metadata.channelId) || metadata.channelId===channelId ? imageUrl(metadata.avatar) : null);
     }
     function saveVideo(id, data) {
         videoCache[id] = { ...data, updated: Date.now() };
@@ -163,7 +163,10 @@
         preloadAvatar(avatarByChannel[data.channelId]?.url || data.avatar);
     }
     function saveChannel(url, data) {
-        channelCache[url] = { ...data, updated: Date.now() };
+        // Channel entries may be shared by live and archived videos. Never
+        // put a per-video title, status, or chat state into that shared record.
+        channelCache[url] = { name:data.name, channelId:data.channelId,
+            avatar:data.avatar, updated: Date.now() };
         GM_setValue(CHANNEL_KEY,channelCache);
         rememberAvatar(data.channelId, data.avatar, channelCache[url].updated);
     }
@@ -273,41 +276,102 @@
         return null;
     }
     function store() {
-        if (storeCache?.state?.multiview?.layoutContent) return storeCache;
+        if (storeCache?.state?.multiview?.layoutContent &&
+            storeOwner?.$store===storeCache && !storeOwner._isDestroyed) return storeCache;
+        storeCache=null;storeOwner=null;
         for (const selector of ['#app','.multiview','.tabbed-chat-select',
             '.layout-preview','.media-controls-list','.mv-cell']) {
             const el=doc.querySelector(selector);
             const vm=el && findVue(el);
-            if (vm?.$store?.state?.multiview?.layoutContent) {
-                storeCache=vm.$store;return storeCache;
+            if (!vm?._isDestroyed && vm?.$store?.state?.multiview?.layoutContent) {
+                storeCache=vm.$store;storeOwner=vm;return storeCache;
             }
         }
         return null;
     }
     function writeStore(s,id,info) {
-        if (!s || !info) return;
+        const owner=storeOwner;
+        // Do not invoke Holodex's bulk setVideoData mutation: it replaces video
+        // objects and marks OTHER incomplete videos noData. A reactive setter
+        // from this store's live Vue component can fill only the allowed fields.
+        if (!s || !isVideo(id) || !info || owner?.$store!==s || owner._isDestroyed ||
+            typeof owner.$set!=='function' || s.strict===true) return;
         const values=Object.values(s.state.multiview.layoutContent||{});
-        const old=values.find(x=>x?.type==='video' && x.video?.id===id)?.video;
-        if (!old) return;
-        const channel={...(old.channel||{})};
-        let changed=false;
-        if (validName(info.name) && channel.name!==info.name) {
-            channel.name=info.name;changed=true;
+        // Resolve current objects when the request finishes, never write back
+        // the captured snapshot from before a chat switch or native refresh.
+        const videos=new Set(values.filter(x=>x?.type==='video' && x.video?.id===id).map(x=>x.video));
+        for (const video of videos) {
+            const channel=video.channel;
+            if (channel!=null && (typeof channel!=='object' || Array.isArray(channel))) continue;
+            const oldName=channel?.name, updates=[];
+            if (!validName(oldName) && validName(info.name)) updates.push(['name',info.name.trim()]);
+            if (!isChannel(channel?.id) && isChannel(info.channelId)) updates.push(['id',info.channelId]);
+            const preference=s.state.settings?.nameProperty;
+            if (['english_name','native_name'].includes(preference) &&
+                !validName(channel?.[preference]) && validName(info.name)) {
+                updates.push([preference,info.name.trim()]);
+            }
+            const needsTitle=(!validTitle(video.title,id) || video.title===oldName) && validTitle(info.title,id);
+            if (!updates.length && !needsTitle) continue;
+            try {
+                if (updates.length && !channel) owner.$set(video,'channel',{});
+                for (const [key,value] of updates) owner.$set(video.channel,key,value);
+                if (needsTitle && video.title!==info.title.trim()) owner.$set(video,'title',info.title.trim());
+            } catch (e) { console.warn('[Holodex Metadata Fix] Reactive update skipped',e); }
         }
-        if (isChannel(info.channelId) && channel.id!==info.channelId) {
-            channel.id=info.channelId;changed=true;
-        }
-        const preference=s.state.settings?.nameProperty;
-        if (preference && preference!=='name' &&
-            !validName(channel[preference]) && validName(info.name)) {
-            channel[preference]=info.name;changed=true;
-        }
-        const title=validTitle(info.title,id) ? info.title : old.title;
-        if (old.title!==title) changed=true;
-        if (changed) {
-            // Preserve status, start time, player flags, and every other video field.
-            try { s.commit('multiview/setVideoData',[{...old,title,channel}]); }
-            catch (e) { console.warn('[Holodex Metadata Fix] Vuex update failed',e); }
+    }
+
+    // Vuex may expose a stale/cloned active video while layoutContent holds a
+    // different object for the same ID. ChatCell's strict identity lookup then
+    // makes currentTime throw, aborting render before WatchLiveChat can switch.
+    const guardedChats=new WeakSet();
+    function resolveChatVideoCell(chat) {
+        const video=chat.currentVideo,layout=chat.layoutContent||{};
+        if (!video) return undefined;
+        const keys=Object.keys(layout).filter(key=>layout[key]?.type==='video');
+        return keys.find(key=>layout[key].video===video) ??
+            (isVideo(video.id)?keys.find(key=>layout[key].video?.id===video.id):undefined);
+    }
+    function guardChatProgress(chat) {
+        if (!chat || chat._isDestroyed || guardedChats.has(chat) ||
+            chat.$options?.name!=='ChatCell') return false;
+        const watchers=chat._computedWatchers;
+        const cell=watchers?.videoCellId,time=watchers?.currentTime;
+        if (typeof cell?.getter!=='function' || typeof time?.getter!=='function' ||
+            typeof cell.update!=='function' || typeof time.update!=='function' ||
+            typeof chat.$forceUpdate!=='function') return false;
+        let broken=false;
+        try {
+            const key=chat.videoCellId;
+            broken=!!chat.currentVideo && !chat.layoutContent?.[key];
+            void chat.currentTime;
+        } catch { broken=true; }
+        if (!broken) return false;
+        // Patch only this affected Vue 2 instance's two read-only computed
+        // getters. Never replace videos, selection, status, or iframe URLs.
+        const nativeCell=cell.getter,nativeTime=time.getter;
+        cell.getter=function() {
+            try {
+                const key=nativeCell.call(this,this);
+                const row=this.layoutContent?.[key],video=this.currentVideo;
+                if (row?.type==='video' && video && row.video?.id===video.id) return key;
+            } catch {}
+            return resolveChatVideoCell(this);
+        };
+        time.getter=function() {
+            // Establish dependencies even when the native lookup used to throw.
+            const key=this.videoCellId,row=this.layoutContent?.[key];
+            if (!row || !this.currentVideo) return 0;
+            try { return nativeTime.call(this,this); }
+            catch { return typeof row.currentTime==='number'&&Number.isFinite(row.currentTime)?row.currentTime:0; }
+        };
+        guardedChats.add(chat);cell.update();time.update();chat.$forceUpdate();
+        return true;
+    }
+    function guardChatCells() {
+        for (const node of doc.querySelectorAll('.tabbed-chat-select')) {
+            const chat=findVue(node,'ChatCell');
+            if (chat) guardChatProgress(chat);
         }
     }
 
@@ -437,22 +501,174 @@
             });
         }
     }
-    function fixNameFallback() {
-        // Used only if Holodex Vue is unavailable in the userscript realm.
-        for (const node of doc.querySelectorAll('.tabbed-chat-select .v-select__selection')) {
-            const id=node.textContent?.trim();
-            const name=isVideo(id)&&(videoCache[id]?.name||legacyName(id));
-            if (!validName(name)) continue;
-            const text=[...node.childNodes].find(n=>n.nodeType===3 && n.nodeValue.trim()===id);
-            if (text) text.nodeValue=name;
+    function chatSwitchConclusion(record,current) {
+        const inputs=record.events.filter(e=>e.kind==='input');
+        const last=inputs[inputs.length-1];
+        if (!current.chatFound || !current.selectFound) return '组件未完整识别，暂不能判断切换阶段';
+        if (!last) return '未记录到下拉框 input 事件；请先开始诊断，再选择另一条视频';
+        const target=event=>(event.snapshot?.videos||record.initial.videos).find(v=>
+            String(v.index)===String(event.value) || v.id===event.value)?.id;
+        const expected=target(last);
+        if (!isVideo(expected)) return '选项值无法映射到视频，请查看选项值与视频列表';
+        if (expected===record.initial.videoId && !inputs.some(e=>isVideo(target(e))&&target(e)!==record.initial.videoId))
+            return '本次选中的仍是原视频；请根据视频 ID 选择另一条';
+        if (current.videoId!==expected) {
+            if (String(current.tab)!==String(last.value)) return '第1步：已发出选择事件，但聊天 currentTab 没有保持目标值（可能未更新或被重置）';
+            return '第2步：currentTab 已变化，但 currentVideo 没有对应到目标视频';
         }
+        if (isVideo(current.watchVideoId) && current.watchVideoId!==expected) return '第3步：聊天模型已切换，但 WatchLiveChat 仍绑定旧视频';
+        const known=current.frames.filter(f=>isVideo(f.id)&&f.visible!==false);
+        if (!known.length) return '第3步：模型已切换，尚未识别到带视频 ID 的聊天 iframe';
+        if (!known.some(f=>f.id===expected)) return '第3步：模型已切换，但聊天 iframe 地址仍是旧视频';
+        return '选择事件、聊天模型和外层 iframe 视频 ID 一致；若内容仍不变，应继续检查 iframe 内部／HyperChat 显示层';
     }
-
+    function createChatSwitchDiagnostics() {
+        let records=[],cleanups=[],startedAt=0,active=false,stopReason='尚未开始';
+        const read=(fn,fallback=null)=>{try{return fn()??fallback;}catch{return fallback;}};
+        const scalar=value=>typeof value==='number'&&Number.isFinite(value)?value:
+            typeof value==='string'&&(isVideo(value)||/^\d{1,5}$/.test(value))?value:'未提供';
+        const id=value=>isVideo(value)?value:'未提供';
+        const named=(component,name)=>String(component?.$options?.name||'').replace(/[-_]/g,'').toLowerCase()===name;
+        function ancestor(node,name) {
+            for(let depth=0;node&&depth<12;node=node.parentElement,depth++) {
+                let component=read(()=>node.__vue__);
+                for(let n=0;component&&n<30;component=component.$parent,n++)
+                    if(named(component,name))return component;
+            }
+            return null;
+        }
+        function watchComponent(root) {
+            const pending=[root],seen=new Set();
+            for(let i=0;i<pending.length&&i<80;i++) {
+                const component=pending[i];if(!component||component._isDestroyed||seen.has(component))continue;seen.add(component);
+                if(named(component,'watchlivechat'))return component;
+                const children=read(()=>component.$children,[]);if(Array.isArray(children))pending.push(...children.slice(0,30));
+            }
+            return null;
+        }
+        function snapshot(record) {
+            const chat=record.chat,select=record.select;
+            const videos=read(()=>chat.activeVideos,[]),items=read(()=>select.items,[]);
+            const watch=watchComponent(chat);
+            const frames=read(()=>[...record.cell.querySelectorAll('iframe')],[]).slice(0,8).map(frame=>{
+                const style=read(()=>doc.defaultView.getComputedStyle(frame));
+                const visible=typeof frame.getClientRects==='function'?
+                    read(()=>frame.getClientRects().length>0&&style?.display!=='none'&&style?.visibility!=='hidden'):null;
+                const url=read(()=>new URL(frame.getAttribute('src'),location.href));
+                if(!url)return {kind:'未识别',id:'未提供',visible};
+                const youtube=/^(www\.|m\.)?youtube\.com$/.test(url.hostname);
+                return {kind:youtube?(['/live_chat','/live_chat_replay','/redirect_replay_chat'].includes(url.pathname)?url.pathname:'YouTube其他页面'):
+                    /(chrome|moz)-extension:/.test(url.protocol)?'扩展 iframe':'其他 iframe',
+                    id:youtube?id(url.searchParams.get('v')):'未提供',visible};
+            });
+            // Probe only render dependencies, retaining error names rather than
+            // arbitrary exception messages that could contain page data.
+            const dependencies={};
+            for(const key of ['videoCellId','currentTime','channels']) {
+                try {
+                    const value=chat?.[key];
+                    dependencies[key]={ok:true,value:key==='channels'?(Array.isArray(value)?value.length:null):
+                        key==='currentTime'?(typeof value==='number'&&Number.isFinite(value)?value:null):
+                        (typeof value==='string'?value.slice(0,32):null)};
+                } catch(error) { dependencies[key]={ok:false,error:['TypeError','ReferenceError','RangeError'].includes(error?.name)?error.name:'Error'}; }
+            }
+            const current=read(()=>chat.currentVideo);
+            const layout=read(()=>chat.layoutContent);
+            const identityMatches=layout&&current?read(()=>Object.values(layout).filter(row=>row?.video===current).length):null;
+            return {dependencies,identityMatches,chatFound:!!chat&&!chat._isDestroyed,selectFound:!!select&&!select._isDestroyed,tab:scalar(read(()=>chat.currentTab)),
+                selectValue:scalar(read(()=>select.internalValue)),videoId:id(read(()=>chat.currentVideo?.id)),
+                watchVideoId:id(read(()=>watch.video?.id)),
+                videos:Array.isArray(videos)?videos.slice(0,16).map((v,index)=>({index,id:id(v?.id),
+                    status:['live','past','upcoming'].includes(v?.status)?v.status:'未知'})):[],
+                items:Array.isArray(items)?items.slice(0,16).map(item=>({value:scalar(read(()=>select.getValue(item),item?.value)),
+                    text:typeof item?.text==='string'?item.text.slice(0,40):'未提供'})):[],frames};
+        }
+        function log(record,kind,value=null) {
+            if(!active)return;
+            record.events.push({ms:Date.now()-startedAt,kind,value:scalar(value),snapshot:snapshot(record)});
+            if(record.events.length>30)record.events.shift();
+        }
+        function stop(reason='已结束') {
+            if(!active)return;
+            for(const record of records)record.final=snapshot(record);
+            active=false;stopReason=reason;
+            for(const cleanup of cleanups.splice(0))read(cleanup);
+        }
+        function start() {
+            stop();records=[];startedAt=Date.now();active=true;stopReason='录制中';
+            const selectors=[...doc.querySelectorAll('.tabbed-chat-select')].slice(0,8),seen=new Set();
+            for(const node of selectors) {
+                const chat=ancestor(node,'chatcell');if(chat&&seen.has(chat))continue;if(chat)seen.add(chat);
+                const record={chat,select:ancestor(node,'vselect'),cell:node.closest('.cell-content')||node,
+                    label:String(read(()=>chat.item?.i,records.length+1)).slice(0,32),events:[]};
+                record.initial=snapshot(record);records.push(record);log(record,'开始');
+                if(typeof record.select?.$on==='function'&&typeof record.select?.$off==='function') {
+                    for(const kind of ['input','change']) {
+                        const listener=value=>log(record,kind,value);record.select.$on(kind,listener);
+                        cleanups.push(()=>record.select.$off(kind,listener));
+                    }
+                }
+                if(typeof chat?.$watch==='function') {
+                    for(const [kind,getter] of [['模型',()=>chat.currentTab],['视频',()=>chat.currentVideo?.id]]) {
+                        const remove=read(()=>chat.$watch(getter,value=>log(record,kind,value)));
+                        if(typeof remove==='function')cleanups.push(remove);
+                    }
+                }
+                const observer=new MutationObserver(()=>log(record,'iframe'));
+                observer.observe(record.cell,{childList:true,subtree:true,attributes:true,attributeFilter:['src']});
+                cleanups.push(()=>observer.disconnect());
+            }
+            const timer=setTimeout(()=>stop('已自动结束（2分钟）'),120000);cleanups.push(()=>clearTimeout(timer));
+            return records.length;
+        }
+        function report() {
+            if(!startedAt)return '尚未录制。请先从脚本菜单选择“开始聊天切换诊断”，再切换到另一个视频。';
+            stop('已结束');
+            const lines=['Channel Name Fix '+V+' · 聊天切换诊断',stopReason+'；格子 '+records.length,
+                '仅含选择值、公开视频ID及 iframe 类型；不含聊天消息或完整请求地址。'];
+            const touched=records.filter(record=>record.events.some(e=>e.kind==='input'));
+            for(const record of touched.length?touched:records) {
+                const current=record.final;
+                lines.push('\n格子 '+record.label+'：'+chatSwitchConclusion(record,current),
+                    '视频列表：'+JSON.stringify(current.videos),'下拉选项：'+JSON.stringify(current.items),
+                    '起点：'+JSON.stringify(record.initial), '终点：'+JSON.stringify(current));
+                for(const event of record.events)lines.push(event.ms+'ms '+event.kind+'='+event.value+
+                    '｜选框 '+event.snapshot.selectValue+'｜tab '+event.snapshot.tab+'｜video '+event.snapshot.videoId+
+                    '｜组件 '+event.snapshot.watchVideoId+'｜iframe '+JSON.stringify(event.snapshot.frames));
+            }
+            return lines.join('\n');
+        }
+        return {start,report,stop};
+    }
+    function showChatSwitchReport(report) {
+        doc.getElementById('hcnf-chat-report')?.remove();
+        const dialog=doc.createElement('dialog');dialog.id='hcnf-chat-report';
+        dialog.style.cssText='width:min(760px,90vw);max-height:85vh;box-sizing:border-box;padding:16px;background:#20242b;color:#f5faff;border:1px solid #8ca6bd;border-radius:10px;';
+        const title=doc.createElement('h3');title.textContent='聊天切换诊断 · '+V;
+        const hint=doc.createElement('p');hint.textContent='点击“选中全部”，按 Ctrl+C 复制，再粘贴到对话中。报告不会自动上传。';
+        const text=doc.createElement('textarea');text.readOnly=true;text.value=report;text.setAttribute('aria-label','聊天切换诊断报告');
+        text.style.cssText='width:100%;height:50vh;box-sizing:border-box;resize:vertical;background:#121820;color:#f5faff;font:13px/1.5 monospace;';
+        const select=doc.createElement('button');select.textContent='选中全部';select.type='button';
+        select.addEventListener('click',()=>{text.focus();text.select();});
+        const close=doc.createElement('button');close.textContent='关闭';close.type='button';close.style.marginLeft='12px';
+        close.addEventListener('click',()=>dialog.close());
+        dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+        dialog.append(title,hint,text,select,close);doc.body.append(dialog);dialog.showModal();
+    }
+    const chatSwitchTrace=createChatSwitchDiagnostics();
+    window.addEventListener('pagehide',()=>chatSwitchTrace.stop('页面离开'),{once:true});
+    GM_registerMenuCommand('🔎 开始聊天切换诊断',()=>{
+        const count=chatSwitchTrace.start();
+        alert(count?'已开始诊断 '+count+' 个聊天格子（最多2分钟）。\n请展开聊天下拉菜单，选择另一条视频，等待几秒，再从脚本菜单选择“查看聊天切换诊断”。':
+            '尚未找到聊天选择器。请先打开 Holodex 多视图及聊天栏。');
+    });
+    GM_registerMenuCommand('📋 查看聊天切换诊断',()=>showChatSwitchReport(chatSwitchTrace.report()));
     let lastPath='';
     function tick() {
         if (!/^\/multiview(?:\/|$)/.test(location.pathname)) return;
+        guardChatCells();
         const s=store();
-        if (!s) {fixNameFallback();return;}
+        if (!s) return;
         const contents=Object.values(s.state.multiview.layoutContent||{});
         const videos=new Map();
         for (const cell of contents) {
@@ -478,7 +694,7 @@
                 if (data) {writeStore(s,id,data);schedule(120);}
             });
         }
-        fixLayout(s);fixMedia();fixNameFallback();
+        fixLayout(s);fixMedia();
     }
     function schedule(ms=150) {
         if (debounce) return;
