@@ -7,6 +7,12 @@ const source=fs.readFileSync('userscripts/holodex-touch-controls.user.js','utf8'
 function section(start,end){return source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));}
 const stateHelpers=section('  function resolvePlaybackState(', '  function youtubeWatchLiveState(');
 const policy=section('  let mouseInputSeen=false;',"  const DESKTOP_TAG=");
+function statusPanel(){
+  const badge={dataset:{}},metric={dataset:{}},value={},label={},time={};
+  const elements={'[data-hmtc-media-kind]':badge,'[data-hmtc-latency-metric]':metric,
+    '[data-hmtc-latency-value]':value,'[data-hmtc-latency-label]':label,'[data-hmtc-time-label]':time};
+  return {badge,metric,value,label,time,panel:{querySelector:q=>elements[q]||null}};
+}
 function mediaEnv(coarse,fine){
   const media=new Map();
   for(const [query,matches] of [['(pointer:coarse)',coarse],['(any-pointer:fine)',fine]])
@@ -391,11 +397,12 @@ test('normal desktop right-click inside panel closes without reaching video open
   touch=true;handler(contextEvent());assert.equal(closed,1);
 });
 test('sheet renders a single current resolution and explicit missing-latency reason',()=>{
-  const fields={};const ctx=vm.createContext({active:null,field:(k,v)=>fields[k]=v,Date});
-  vm.runInContext(metricHelpers+section('  let lastHolodexSpeed=null;','  function updateSheetRate(data){'),ctx);
-  ctx.renderYouTubeStats({resolution:'1280x720@60 / 1280x720@60',liveLatencySeconds:null,latencyReason:'未提供'});
-  assert.equal(fields.resolution,'1280×720@60');assert.equal(fields.latency,'未提供');
-  ctx.renderYouTubeStats({liveLatencySeconds:1.25});assert.equal(fields.latency,'1.25 s');
+  const fields={},ui=statusPanel();const ctx=vm.createContext({active:null,sheet:ui.panel,field:(k,v)=>fields[k]=v,Date});
+  vm.runInContext(metricHelpers+stateHelpers+section('  let lastHolodexSpeed=null;','  function updateSheetRate(data){'),ctx);
+  ctx.renderYouTubeStats({live:true,resolution:'1280x720@60 / 1280x720@60',liveLatencySeconds:null,latencyReason:'未提供'});
+  assert.equal(fields.resolution,'1280×720@60');assert.equal(ui.value.textContent,'暂未提供');
+  ctx.renderYouTubeStats({live:true,liveLatencySeconds:1.25});assert.equal(ui.value.textContent,'1.25 s');
+  ctx.renderYouTubeStats({live:false,liveLatencySeconds:1.25});assert.equal(ui.metric.hidden,true);
 });
 
 test('archived live streams are recordings even when isLiveContent remains true',()=>{
@@ -460,7 +467,7 @@ test('latency diagnostics distinguish absent APIs, ambiguous units, recordings a
   assert.equal(ctx.readStats(undefined,true).latencyDiagnostics.reasonCode,'media-type-unknown');
 });
 test('panel badge explicitly labels live, recording and unknown states',()=>{
-  const badge={dataset:{}};const panel={querySelector:()=>badge};const ctx=vm.createContext({});
+  const badge={dataset:{}};const panel={querySelector:q=>q==='[data-hmtc-media-kind]'?badge:null};const ctx=vm.createContext({});
   vm.runInContext(stateHelpers,ctx);ctx.renderMediaKind(panel,{live:false});assert.equal(badge.textContent,'录像');assert.equal(badge.dataset.kind,'vod');
   ctx.renderMediaKind(panel,{live:true});assert.equal(badge.textContent,'直播');
   ctx.renderMediaKind(panel,{live:null});assert.equal(badge.textContent,'待确认');
@@ -519,6 +526,44 @@ test('actual readStats diagnostics include value types and distinguish the zero-
   const sources=result.latencyDiagnostics.sources;
   assert.equal(sources.find(x=>x.method==='getStatsForNerds').values[0].type,'null');
   assert.equal(sources.find(x=>x.method==='getStatsForNerds(0)').values[0].preview,'"12.5 s"');
-  assert.equal(result.liveLatencySeconds,null);
+  assert.equal(result.liveLatencySeconds,12.5);
   assert.equal(ctx.readStats().latencyDiagnostics,undefined);
+});
+
+test('reported 0.00s and explicit unit suffixes parse with correct scaling without accepting junk or negative values',()=>{
+  const ctx=vm.createContext({});vm.runInContext(metricHelpers,ctx);
+  for(const [raw,want] of [['0.00s',0],['2.75 s',2.75],['1250ms',1.25],['2 seconds',2],['3 秒',3]]){
+    assert.equal(ctx.nativeLatencySeconds({live_latency_secs:raw}),want);
+  }
+  assert.equal(ctx.nativeLatencySeconds({live_latency_ms:'2s'}),2);
+  assert.equal(ctx.nativeLatencySeconds({live_latency_ms:'1250'}),1.25);
+  for(const raw of ['-1s','Infinitys','NaNs','2s junk','2frames','0x20s',''])
+    assert.equal(ctx.nativeLatencySeconds({live_latency_secs:raw}),null);
+  const result=frameStatsContext({getStatsForNerds:()=>({live_latency_secs:'0.00s',live_latency_samples:[]})}).readStats(undefined,true);
+  assert.equal(result.liveLatencySeconds,0);assert.equal(result.latencyDiagnostics.reasonCode,'available');
+});
+
+test('status row separates live latency from title, disappears on recordings and resets on unknown media',()=>{
+  const ctx=vm.createContext({});vm.runInContext(stateHelpers,ctx);const ui=statusPanel();
+  ctx.renderMediaKind(ui.panel,{live:true});ctx.renderLatency(ui.panel,{liveLatencySeconds:0});
+  assert.equal(ui.badge.textContent,'直播');assert.equal(ui.label.textContent,'直播延迟');
+  assert.equal(ui.value.textContent,'0.00 s');assert.equal(ui.metric.hidden,false);
+  assert.equal(ui.metric.dataset.state,'available');
+  ctx.renderLatency(ui.panel,{liveLatencySeconds:null});assert.equal(ui.value.textContent,'暂未提供');
+  ctx.renderMediaKind(ui.panel,{live:false});assert.equal(ui.metric.hidden,true);assert.equal(ui.time.textContent,'录像 · 播放时间');
+  ctx.renderMediaKind(ui.panel,{live:null});assert.equal(ui.metric.hidden,false);assert.equal(ui.value.textContent,'识别中');
+  assert.equal(ui.label.textContent,'视频状态');assert.equal(ui.time.textContent,'播放时间');
+  for(const fragment of [section('    function makePanel(){','    function open('),section('  function makeSheet(){','  function closeSheet(')]){
+    // Each title header ends before the media badge; a status badge cannot steal its width.
+    if(!fragment)continue;
+    assert.ok(fragment.indexOf('aria-label="关闭')<fragment.indexOf('data-hmtc-media-kind'));
+  }
+});
+
+test('watch page latency reader accepts the real payload, handles failing APIs and preserves missing values',()=>{
+  const ctx=vm.createContext({});vm.runInContext(metricHelpers+stateHelpers,ctx);
+  const p={getLiveLatency(){throw Error('unavailable');},getStatsForNerds:()=>({live_latency_secs:'0.00s'})};
+  assert.equal(ctx.readPlayerLatency(p).liveLatencySeconds,0);
+  assert.equal(ctx.readPlayerLatency({getStatsForNerds:()=>({live_latency_secs:null})}).liveLatencySeconds,null);
+  assert.ok(source.includes('if(currentClock.state.live===true)renderLatency(sheet,readPlayerLatency(p()))'));
 });

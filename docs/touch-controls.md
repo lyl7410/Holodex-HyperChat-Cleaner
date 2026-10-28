@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.19 延迟原值诊断
+# Holodex / YouTube Touch Controls — v0.6.20 直播状态与延迟同区
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 PR 测试版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/fix/touch-controls-desktop-v0.6.11/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.19；分支名保留旧编号） · [项目首页](../README.md)
+**[安装／更新 PR 测试版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/fix/touch-controls-desktop-v0.6.11/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.20；分支名保留旧编号） · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,20 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.20：带单位延迟与更清楚的状态区
+
+用户的 v0.6.19 实机报告已确认：getStatsForNerds 和 getStatsForNerds(0) 均返回 `live_latency_secs: "0.00s"`。此前解析器仅接受纯数字，该带单位字符串被当成无效值，造成「未提供」。现在识别明确的 s／秒／seconds 与 ms／毫秒／milliseconds 后缀，按值中明确单位换算；没有后缀时采用字段单位。负数、非有限数和混杂文本仍不当成当前延迟。
+
+- **直播**：标题下显示独立紧凑状态行「● 直播 · 直播延迟」，右侧显示原生秒值；没有有效值时显示「暂未提供」。标题最多显示两行，标识不再占用标题宽度。
+- **录像**：隐藏整行直播延迟，播放时间标签改为「录像 · 播放时间」，保留当前位置／总时长。
+- **尚未确认类型**：状态区显示「待确认／视频状态／识别中」，避免把类型未知误写成正在直播。
+- 普通 YouTube 与 Holodex 多视图使用相同状态组件；画面 HUD 继续只显示时间／速度，录像／直播文字只出现在打开的面板里。
+- `0.00 s` 如实反映播放器报告为零，**不据此宣称实际端到端延迟为零**，不使用缓冲值或样本数组估算。
+
+语法检查与 **49 项自动测试通过**；新增覆盖用户实际 `"0.00s"`、秒／毫秒后缀、无效字符串、直播／录像／未知状态切换、普通播放页被动读取。双源本地模拟浏览器验证多视图及普通 YouTube 面板显示 `0.00 s`、标题区没有标识、切换录像隐藏延迟并显示总时长，未见页面脚本错误。本地使用用户报告格式构造数据，并非对用户实站的观看延迟测量。
+
+安装 v0.6.20 后完整刷新 Holodex／YouTube，让 iframe 同步更新；如仍显示未提供，从「诊断视频类型／时长／延迟」菜单复制新版报告。
 
 ## v0.6.19：先取得实际延迟字段值
 
