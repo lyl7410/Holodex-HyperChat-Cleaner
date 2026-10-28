@@ -166,3 +166,81 @@ test('valid native channel identity takes precedence over conflicting cached ava
   f.ctx.avatarByChannel[CHANNEL]={url:'https://yt3.googleusercontent.com/correct'};
   assert.equal(f.ctx.avatarFor(f.live),'https://yt3.googleusercontent.com/correct');
 });
+
+function traceFixture(){
+  const f=fixture(),listeners=new Map(),watchers=[],observers=[],timers=new Map();let timerId=0;
+  let src='https://www.youtube.com/live_chat?v='+LIVE;
+  const frame={getAttribute:()=>src},cell={querySelectorAll:()=>[frame]};
+  const watch={$options:{name:'WatchLiveChat'},video:f.live,$children:[]};
+  const chat={$options:{name:'ChatCell'},item:{i:'chat-1'},activeVideos:[f.live,f.vod],
+    currentTab:0,currentVideo:f.live,$children:[watch],$watch(getter,callback){
+      const item={getter,callback};watchers.push(item);return ()=>watchers.splice(watchers.indexOf(item),1);
+    }};
+  const select={$options:{name:'v-select'},$parent:chat,internalValue:0,
+    items:[{text:'Same owner',value:0},{text:'Same owner',value:1}],getValue:item=>item.value,
+    $on(name,fn){if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name).add(fn);},
+    $off(name,fn){listeners.get(name)?.delete(fn);}};
+  const node={__vue__:select,closest:()=>cell};
+  f.doc.querySelectorAll=()=>[node];
+  Object.assign(f.ctx,{URL,V:'2.6.4',location:{href:'https://holodex.net/multiview'},
+    MutationObserver:class{constructor(fn){this.fn=fn;observers.push(this);}observe(){}disconnect(){this.disconnected=true;}},
+    setTimeout(fn){timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)});
+  vm.runInContext(section('    function chatSwitchConclusion(','    const chatSwitchTrace=')+
+    '\nthis.trace=createChatSwitchDiagnostics();',f.ctx);
+  const emit=(value)=>{for(const fn of listeners.get('input')||[])fn(value);};
+  const change=({tab=1,video=f.vod,watchVideo=video,url='https://www.youtube.com/live_chat_replay?v='+VOD}={})=>{
+    chat.currentTab=tab;chat.currentVideo=video;select.internalValue=tab;watch.video=watchVideo;src=url;
+    for(const {getter,callback} of watchers)callback(getter());
+    for(const observer of observers)if(!observer.disconnected)observer.fn();
+  };
+  return {...f,trace:f.ctx.trace,listeners,watchers,observers,timers,chat,select,frame,emit,change};
+}
+test('trace distinguishes missing selection, model, child binding and iframe transitions',()=>{
+  for(const [kind,expected] of [['none','未记录到下拉框 input'],['model','第1步'],['video','第2步'],
+    ['child','WatchLiveChat 仍绑定旧视频'],['frame','iframe 地址仍是旧视频'],['unknown','尚未识别到带视频 ID'],['ok','视频 ID 一致']]){
+    const f=traceFixture();assert.equal(f.trace.start(),1);
+    if(kind!=='none')f.emit(1);
+    if(kind==='video')f.change({video:f.live});
+    if(kind==='child')f.change({watchVideo:f.live});
+    if(kind==='frame')f.change({url:'https://www.youtube.com/live_chat?v='+LIVE});
+    if(kind==='unknown')f.change({url:'https://example.com/?secret=PRIVATE'});
+    if(kind==='ok')f.change();
+    assert.ok(f.trace.report().includes(expected),kind);
+  }
+});
+test('trace keeps same-name options distinct and omits continuation tokens and chat content',()=>{
+  const f=traceFixture();f.trace.start();f.emit(1);
+  f.change({url:'https://www.youtube.com/live_chat_replay?v='+VOD+'&continuation=PRIVATE_TOKEN&auth=PRIVATE'});
+  const report=f.trace.report();assert.ok(report.includes(LIVE));assert.ok(report.includes(VOD));
+  assert.ok(report.includes('Same owner'));assert.ok(report.includes('视频 ID 一致'));
+  for(const value of ['PRIVATE','continuation','auth='])assert.ok(!report.includes(value));
+});
+test('trace never switches chat state and removes only its own observers and event handlers',()=>{
+  const f=traceFixture(),before=JSON.stringify(f.rows);let existingCalls=0;
+  f.select.$on('input',()=>existingCalls++);
+  f.trace.start();f.trace.start();assert.equal(f.watchers.length,2);
+  assert.equal(f.listeners.get('input').size,2);assert.equal(f.timers.size,1);
+  f.emit(1);assert.equal(JSON.stringify(f.rows),before);f.trace.report();
+  assert.equal(f.watchers.length,0);assert.equal(f.listeners.get('input').size,1);assert.equal(f.timers.size,0);
+  assert.ok(f.observers.every(o=>o.disconnected));f.emit(1);assert.equal(existingCalls,2);
+});
+test('trace caps event history, expires recording, and does not mistake selecting the original video for failure',()=>{
+  const f=traceFixture();assert.ok(f.trace.report().includes('尚未录制'));
+  f.trace.start();for(let i=0;i<80;i++)f.emit(0);
+  for(const fn of [...f.timers.values()])fn();
+  const report=f.trace.report();assert.ok(report.includes('本次选中的仍是原视频'));
+  assert.ok(report.includes('已自动结束'));assert.ok((report.match(/ms input=/g)||[]).length<=30);
+});
+test('trace recognizes a completed switch back and maps reordered options at event time',()=>{
+  const f=traceFixture();f.trace.start();f.emit(1);f.change();
+  f.emit(0);f.change({tab:0,video:f.live,url:'https://www.youtube.com/live_chat?v='+LIVE});
+  assert.ok(f.trace.report().includes('视频 ID 一致'));
+  f.trace.start();f.chat.activeVideos=[f.vod,f.live];f.emit(0);f.change({tab:0});
+  assert.ok(f.trace.report().includes('视频 ID 一致'));
+});
+test('a hidden target iframe is not mistaken for the visible chat having switched',()=>{
+  const f=traceFixture();f.frame.getClientRects=()=>[];
+  f.trace.start();f.emit(1);f.change();
+  const report=f.trace.report();assert.ok(report.includes('尚未识别到带视频 ID'));
+  assert.ok(report.includes('"visible":false'));
+});
