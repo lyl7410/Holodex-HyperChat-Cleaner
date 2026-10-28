@@ -218,6 +218,16 @@ test('HUD remains and no constant statistics button is created',()=>{
   assert.doesNotMatch(source,/hmtc-panel-open|panelButton/);
 });
 
+test('HUD shortens each sub-hour clock independently and preserves hour boundaries and unknown values',()=>{
+  const {ctx}=cornerHudContext(),button=ctx.createCornerHud();
+  for(const [input,expected] of [['00:00:00','00:00'],['00:00:59','00:59'],['00:03:34','03:34'],
+    ['00:59:59','59:59'],['01:00:00','01:00:00'],['01:03:34','01:03:34'],['100:00:00','100:00:00'],
+    ['00:03:34 / 02:30:00','03:34 / 02:30:00'],['00:03:34 / 00:20:00','03:34 / 20:00'],['—','—'],['00:03:34 / —','03:34 / —']]){
+    ctx.displayCornerHud(button,input,ctx.hudSpeedReading(12340));
+    assert.equal(button._hmtcHudParts.time.textContent,expected);
+  }
+});
+
 function cornerHudContext(){
   let now=10000,mode='speed',nextTimer=0;
   const timers=new Map();

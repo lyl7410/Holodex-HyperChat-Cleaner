@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.27
+// @version      0.6.28
 // @description  左上角透明亮橙文字与黑色描边；未开始播放的封面隐藏标签，保留紧凑统计与播放控制。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -504,6 +504,9 @@
     if(typeof state==='number'&&Number.isFinite(state))return [1,2,3].includes(state);
     return clock.playing===true||typeof clock.position==='number'&&clock.position>0;
   }
+  function compactHudTime(value){
+    return String(value||'—').split(' / ').map(part=>part.replace(/^00:(\d{2}:\d{2})$/,'$1')).join(' / ');
+  }
   function displayCornerHud(button,time,speed){
     if(!button)return;
     clearTimeout(button._hmtcHudTimer);button._hmtcHudTimer=null;
@@ -516,7 +519,7 @@
     button.classList.toggle('hmtc-hud-cached',!!cached);
     parts.time.hidden=mode!=='time'&&mode!=='both';
     parts.speed.hidden=mode!=='speed'&&mode!=='both';parts.off.hidden=mode!=='off';
-    parts.time.textContent=time||'—';parts.value.textContent=value;
+    parts.time.textContent=compactHudTime(time);parts.value.textContent=value;
     const cacheNote=cached?'最近一次读取，距今 '+(age/1000).toFixed(1)+' 秒':'';
     button.title='轻点切换：时间 → 连接速度 → 同时 → 隐藏'+(cacheNote?'\n'+cacheNote:'');
     button.setAttribute('aria-label',mode==='off'?'显示左上角信息':
@@ -2039,7 +2042,7 @@
         respond({ok:true,data:readStats(message.status,true)});return;
       }
       if(message.action==='desktopPanelStatus'){
-        respond({ok:true,data:{version:'0.6.27',...desktopBridge.status()}});return;
+        respond({ok:true,data:{version:'0.6.28',...desktopBridge.status()}});return;
       }
       if(message.action==='desktopPanelConfig'){
         desktopBridge.configure(event,message);return;
@@ -2096,7 +2099,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.27', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.28', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -4315,7 +4318,7 @@
           ].join('\n');
         }catch(error){return (row.title||row.videoId)+'：'+String(error?.message||error);}
       }));
-      alert('数据诊断 · v0.6.27\n'+reports.join('\n\n'));
+      alert('数据诊断 · v0.6.28\n'+reports.join('\n\n'));
     });
     GM_registerMenuCommand('诊断多视图右键面板',async()=>{
       const rows=[...rowMap.values()];
@@ -4327,7 +4330,7 @@
             '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
         }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
       }));
-      alert('右键面板诊断 · v0.6.27\n'+reports.join('\n'));
+      alert('右键面板诊断 · v0.6.28\n'+reports.join('\n'));
     });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
@@ -4392,8 +4395,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.27 说明',()=>
-      alert('v0.6.27：左上角时间与速度改用亮橙色，保留透明背景、黑色描边和当前位置。'));
+    GM_registerMenuCommand('Touch Controls v0.6.28 说明',()=>
+      alert('v0.6.28：左上角时间不足1小时显示分:秒，满1小时显示时:分:秒；保留亮橙色和当前位置。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
