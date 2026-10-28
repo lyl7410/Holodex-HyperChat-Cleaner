@@ -209,12 +209,128 @@ test('HUD remains and no constant statistics button is created',()=>{
   const row={layoutId:1,videoId:'abcdefghijk'};
   const frame={getBoundingClientRect:()=>({width:500,height:300,left:10,top:20,right:510,bottom:320})};
   const ctx=vm.createContext({hudCells:new Map(),hudSessionStop(){},createCornerHud:()=>button,
-    document:{body:layer},innerHeight:1000,innerWidth:1200,displayCornerHud(){}});
+    document:{body:layer},innerHeight:1000,innerWidth:1200,displayCornerHud(){},clearTimeout(){}});
   vm.runInContext(section('  function hudCellDispose(cell){','  function hudSpeedValue(cell,kbps){'),ctx);
   ctx.attachCornerHud({querySelector:()=>frame},row);
   assert.equal(ctx.hudCells.get('1:abcdefghijk').button,button);
+  assert.equal(button.style.left,'12px');assert.equal(button.style.top,'22px');
   ctx.hudCellDispose(ctx.hudCells.get('1:abcdefghijk'));assert.ok(button.removed);
   assert.doesNotMatch(source,/hmtc-panel-open|panelButton/);
+});
+
+test('HUD shortens each sub-hour clock independently and preserves hour boundaries and unknown values',()=>{
+  const {ctx}=cornerHudContext(),button=ctx.createCornerHud();
+  for(const [input,expected] of [['00:00:00','00:00'],['00:00:59','00:59'],['00:03:34','03:34'],
+    ['00:59:59','59:59'],['01:00:00','01:00:00'],['01:03:34','01:03:34'],['100:00:00','100:00:00'],
+    ['00:03:34 / 02:30:00','03:34 / 02:30:00'],['00:03:34 / 00:20:00','03:34 / 20:00'],['—','—'],['00:03:34 / —','03:34 / —']]){
+    ctx.displayCornerHud(button,input,ctx.hudSpeedReading(12340));
+    assert.equal(button._hmtcHudParts.time.textContent,expected);
+  }
+});
+
+function cornerHudContext(){
+  let now=10000,mode='speed',nextTimer=0;
+  const timers=new Map();
+  const node=()=>({children:[],attributes:{},hidden:false,isConnected:true,
+    classList:{values:new Set(),toggle(k,on){on?this.values.add(k):this.values.delete(k);}},
+    append(...children){this.children.push(...children);},setAttribute(k,v){this.attributes[k]=v;},
+    addEventListener(k,fn){this.handlers??={};this.handlers[k]=fn;}});
+  const ctx=vm.createContext({document:{createElement:node,dispatchEvent(){}},Event,
+    GM_getValue:()=>mode,GM_setValue:(k,v)=>{mode=v;},Date:{now:()=>now},
+    setTimeout(fn,ms){timers.set(++nextTimer,{fn,at:now+ms});return nextTimer;},
+    clearTimeout:id=>timers.delete(id)});
+  vm.runInContext(section("  const HUD_KEY=","  GM_addStyle([")+
+    section('  function hudSpeedValue(cell,kbps){','  async function pollCornerHuds(){'),ctx);
+  return {ctx,timers,setMode:v=>{mode=v;},setNow:v=>{now=v;},runNext(){
+    const [id,t]=[...timers.entries()].sort((a,b)=>a[1].at-b[1].at)[0];
+    timers.delete(id);now=t.at;t.fn();
+  }};
+}
+test('HUD cache keeps original sample age, expires at six seconds and never leaks to a new video',()=>{
+  const f=cornerHudContext(),a={},b={};
+  assert.equal(f.ctx.hudSpeedValue(a,12340).text,'12.34 Mbps');
+  f.setNow(13000);const stale=f.ctx.hudSpeedValue(a,NaN);
+  assert.equal(stale.stale,true);assert.equal(stale.sampledAt,10000);
+  f.setNow(16000);assert.equal(f.ctx.hudSpeedValue(a,NaN).stale,true);
+  f.setNow(16001);assert.equal(f.ctx.hudSpeedValue(a,NaN).text,'—');
+  assert.equal(f.ctx.hudSpeedValue(b,NaN).text,'—');
+  f.setNow(9999);assert.equal(f.ctx.hudSpeedValue(a,NaN).text,'—');
+});
+test('HUD uses separate colored readings in all modes and cache timer expires without another request',()=>{
+  const f=cornerHudContext(),button=f.ctx.createCornerHud(),parts=button._hmtcHudParts;
+  const fresh=f.ctx.hudSpeedReading(12340);f.ctx.displayCornerHud(button,'01:02:03',fresh);
+  assert.equal(parts.time.hidden,true);assert.equal(parts.speed.hidden,false);
+  assert.equal(parts.value.textContent,'12.34 Mbps');
+  f.setNow(13000);const cached=f.ctx.hudSpeedReading(12340,true,10000);
+  f.ctx.displayCornerHud(button,'01:02:03',cached);
+  assert.equal(parts.value.textContent,fresh.text);assert.ok(button.classList.values.has('hmtc-hud-cached'));
+  assert.match(button.title,/距今 3\.0 秒/);assert.match(button.attributes['aria-label'],/最近一次读取/);
+  assert.ok(!parts.value.textContent.includes('上次'));
+  while(f.timers.size)f.runNext();
+  assert.equal(parts.value.textContent,'—');assert.ok(!button.classList.values.has('hmtc-hud-cached'));
+  for(const mode of ['time','both','off','speed']){
+    f.setMode(mode);f.ctx.displayCornerHud(button,'01:02:03',fresh);
+    assert.equal(parts.time.hidden,!['time','both'].includes(mode));
+    assert.equal(parts.speed.hidden,!['speed','both'].includes(mode));assert.equal(parts.off.hidden,mode!=='off');
+  }
+  f.ctx.displayCornerHud(button,'01:02:03',f.ctx.hudSpeedReading(12340,true,15000));
+  assert.equal(f.timers.size,1);f.ctx.displayCornerHud(button,'01:02:03',fresh);assert.equal(f.timers.size,0);
+});
+test('watch HUD forwards cache timestamp and uses the same two-pixel viewport-safe position',()=>{
+  const button={style:{},isConnected:true},layer={appendChild(b){b.parentNode=this;}};
+  let reading,rect={width:100,height:100,left:1150,top:20,right:1250,bottom:120};
+  const ctx=vm.createContext({watchHud:null,document:{body:layer},innerWidth:1200,innerHeight:800,
+    createCornerHud:()=>button,hudWantsTime:()=>true,hudWantsSpeed:()=>true,
+    hudPlaybackStarted:()=>true,readWatchClock:()=>({time:'01:02:03',state:{ready:true,playerState:1}}),bandwidth:{start(){},read:()=>({available:true,
+      bandwidthKbps:12340,stale:true,sampledAt:10000})},
+    hudSpeedReading:(kbps,stale,sampledAt)=>({kbps,stale,sampledAt}),
+    displayCornerHud:(b,t,s)=>{reading=s;},clearTimeout(){}});
+  vm.runInContext(section('    function refreshWatchHud(player){','    function refreshSheet(){'),ctx);
+  ctx.refreshWatchHud({getBoundingClientRect:()=>rect});
+  assert.equal(button.style.left,'1152px');assert.equal(button.style.top,'22px');
+  assert.equal(button.style.maxWidth,'46px');assert.equal(reading.sampledAt,10000);assert.equal(reading.stale,true);
+});
+
+test('HUD rejects unstarted thumbnails even with live metadata, duration and a nonzero clock',()=>{
+  const {ctx}=cornerHudContext();
+  for(const playerState of [-1,0,5])assert.equal(ctx.hudPlaybackStarted({ready:true,live:true,
+    position:4085,duration:7674,playerState}),false);
+  for(const playerState of [1,2,3])assert.equal(ctx.hudPlaybackStarted({ready:true,position:0,playerState}),true);
+  assert.equal(ctx.hudPlaybackStarted({ready:false,playerState:1}),false);
+  assert.equal(ctx.hudPlaybackStarted({ready:true,live:true,position:0}),false);
+  assert.equal(ctx.hudPlaybackStarted({ready:true,playing:true,position:0}),true);
+});
+test('ordinary watch HUD hides before playback and skips bandwidth reads until it starts',()=>{
+  const {ctx}=cornerHudContext(),button=ctx.createCornerHud();button.style={};
+  let playerState=5,reads=0;
+  const layer={appendChild(b){b.parentNode=this;}};
+  Object.assign(ctx,{watchHud:null,createCornerHud:()=>button,sheet:null,innerWidth:1200,innerHeight:800,
+    document:{body:layer},hudWantsTime:()=>false,hudWantsSpeed:()=>true,
+    readWatchClock:()=>({time:'01:02:03',state:{ready:true,live:true,playerState,position:3723}}),
+    bandwidth:{start(){},stop(){},read(){reads++;return {available:true,bandwidthKbps:12340};}}});
+  vm.runInContext(section('    function refreshWatchHud(player){','    function refreshSheet(){'),ctx);
+  const player={getBoundingClientRect:()=>({width:400,height:300,left:0,top:0,right:400,bottom:300})};
+  ctx.refreshWatchHud(player);assert.equal(button.hidden,true);assert.equal(reads,0);
+  playerState=1;ctx.refreshWatchHud(player);assert.equal(button.hidden,false);assert.equal(reads,1);
+  playerState=5;ctx.refreshWatchHud(player);assert.equal(button.hidden,true);assert.equal(reads,1);
+});
+test('speed-only multiview polls hidden thumbnails for playback but never reads their bandwidth',async()=>{
+  const f=cornerHudContext(),ctx=f.ctx,button=ctx.createCornerHud(),calls=[];
+  let playerState=5;
+  const row={layoutId:1,videoId:'abcdefghijk'},cell={key:'1:abcdefghijk',videoId:row.videoId,
+    button,viewportVisible:true,playbackActive:false,lastSpeed:null};
+  Object.assign(ctx,{hudCells:new Map([[cell.key,cell]]),rowMap:new Map([[cell.key,row]]),
+    hudBusy:false,installed:true,isMulti:()=>true,playbackTimeText:()=> '01:08:05',
+    readMultiviewClock:async()=>({ready:true,live:true,playerState,position:4085}),
+    nativeFrame:()=>({frame:{contentWindow:{}},origin:'https://www.youtube.com'}),
+    nativeRequest:async(r,action)=>{calls.push(action);return {available:true,bandwidthKbps:12340};},
+    hudSessionStop(){calls.push('stop');}});
+  vm.runInContext(section('  async function pollCornerHuds(){','  function hudModeChanged(){'),ctx);
+  await ctx.pollCornerHuds();assert.equal(button.hidden,true);assert.ok(!calls.includes('stats'));
+  playerState=1;await ctx.pollCornerHuds();assert.equal(button.hidden,false);assert.ok(calls.includes('stats'));
+  assert.equal(cell.speed.text,'12.34 Mbps');assert.ok(cell.lastSpeed);
+  playerState=5;calls.length=0;await ctx.pollCornerHuds();
+  assert.equal(button.hidden,true);assert.equal(cell.lastSpeed,null);assert.ok(!calls.includes('stats'));
 });
 
 const desktopSource=section("  const DESKTOP_TAG=","  const HUD_KEY=");
@@ -623,3 +739,4 @@ test('returning to touch restores original DOM order and mobile labels without d
   ctx.prepareDesktopMetrics(f.panel,true);assert.ok(f.panel._hmtcCompact);
   ctx.prepareDesktopMetrics(f.panel,false);assert.deepEqual(f.grid.children,grid);
 });
+

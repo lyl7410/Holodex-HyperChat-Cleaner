@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.24
-// @description  PC 统计左右列分别紧凑对齐，直播标识紧跟延迟数字；数值与单位统一亮白色。
+// @version      0.6.28
+// @description  左上角透明亮橙文字与黑色描边；未开始播放的封面隐藏标签，保留紧凑统计与播放控制。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -474,9 +474,17 @@
     const button=document.createElement('button');
     button.type='button';
     button.className='hmtc-corner-hud';
-    button.title='轻点切换：时间 → 连接速度 → 同时 → 隐藏';
     button.setAttribute('aria-label','切换视频左上角信息');
-    button.textContent='—';
+    const line=(name,text)=>{
+      const span=document.createElement('span');span.className=name;span.textContent=text;return span;
+    };
+    const time=line('hmtc-hud-line hmtc-hud-time','—');
+    const speed=line('hmtc-hud-line hmtc-hud-speed','');
+    const value=line('hmtc-hud-speed-value','—');
+    const dot=line('hmtc-hud-cache-dot','');dot.setAttribute('aria-hidden','true');
+    const off=line('hmtc-hud-off-label','···');
+    speed.append(value,dot);button.append(time,speed,off);
+    button._hmtcHudParts={time,speed,value,dot,off};
     button.addEventListener('click',e=>{
       e.preventDefault();e.stopPropagation();cycleHudMode();
     });
@@ -484,16 +492,42 @@
       button.addEventListener(type,e=>e.stopPropagation(),{passive:true});
     return button;
   }
+  function hudSpeedReading(kbps,stale=false,sampledAt=Date.now()){
+    const age=Date.now()-sampledAt;
+    if(!Number.isFinite(kbps)||kbps<=0||stale&&(!Number.isFinite(age)||age<0||age>6000))
+      return {text:'—',stale:false,sampledAt:null};
+    return {text:(kbps/1000).toFixed(2)+' Mbps',stale:!!stale,sampledAt};
+  }
+  function hudPlaybackStarted(clock){
+    if(!clock?.ready)return false;
+    const state=clock.playerState??clock.state;
+    if(typeof state==='number'&&Number.isFinite(state))return [1,2,3].includes(state);
+    return clock.playing===true||typeof clock.position==='number'&&clock.position>0;
+  }
+  function compactHudTime(value){
+    return String(value||'—').split(' / ').map(part=>part.replace(/^00:(\d{2}:\d{2})$/,'$1')).join(' / ');
+  }
   function displayCornerHud(button,time,speed){
     if(!button)return;
-    const mode=hudMode();
+    clearTimeout(button._hmtcHudTimer);button._hmtcHudTimer=null;
+    const mode=hudMode(),parts=button._hmtcHudParts;
+    const age=speed?.stale?Date.now()-speed.sampledAt:0;
+    const expired=speed?.stale&&(!Number.isFinite(age)||age<0||age>6000);
+    const value=expired?'—':typeof speed==='object'?speed?.text||'—':speed||'—';
+    const cached=!expired&&speed?.stale&&(mode==='speed'||mode==='both');
     button.classList.toggle('hmtc-hud-off',mode==='off');
+    button.classList.toggle('hmtc-hud-cached',!!cached);
+    parts.time.hidden=mode!=='time'&&mode!=='both';
+    parts.speed.hidden=mode!=='speed'&&mode!=='both';parts.off.hidden=mode!=='off';
+    parts.time.textContent=compactHudTime(time);parts.value.textContent=value;
+    const cacheNote=cached?'最近一次读取，距今 '+(age/1000).toFixed(1)+' 秒':'';
+    button.title='轻点切换：时间 → 连接速度 → 同时 → 隐藏'+(cacheNote?'\n'+cacheNote:'');
     button.setAttribute('aria-label',mode==='off'?'显示左上角信息':
-      '切换左上角信息（目前'+({time:'播放时间',speed:'连接速度',both:'两项'}[mode])+'）');
-    button.textContent=mode==='off'?'···':
-      mode==='time'?(time||'—'):
-      mode==='speed'?(speed||'—'):
-      (time||'—')+'\n'+(speed||'—');
+      '切换左上角信息（目前'+({time:'播放时间',speed:'连接速度',both:'两项'}[mode])+'）'+
+      ((mode==='speed'||mode==='both')?'，连接速度 '+value:'')+(cacheNote?'，'+cacheNote:''));
+    // A pending iframe request must not keep an old reading visible beyond its lease.
+    if(cached&&button.isConnected)button._hmtcHudTimer=setTimeout(
+      ()=>displayCornerHud(button,time,speed),Math.min(1000,6001-age));
   }
   GM_addStyle([
     '@media (pointer:fine),(pointer:none),(any-pointer:fine){',
@@ -504,23 +538,32 @@
     'display:none!important;pointer-events:none!important}',
     '.hmtc-corner-hud{position:fixed!important;z-index:2147482700!important;',
     'display:block!important;box-sizing:border-box!important;max-width:240px;',
-    'border:0!important;border-radius:5px!important;',
-    'padding:3px 5px!important;margin:0!important;',
-    'background:rgba(12,20,30,.40)!important;color:#f2fbff!important;',
-    'font:550 11px/1.3 system-ui,-apple-system,sans-serif!important;',
+    'border:0!important;border-radius:0!important;',
+    'padding:1px 2px!important;margin:0!important;',
+    'background:transparent!important;color:#FFAA33!important;',
+    'font:700 13px/1.3 system-ui,-apple-system,sans-serif!important;',
     'font-variant-numeric:tabular-nums!important;white-space:pre-line!important;',
     'text-align:left!important;overflow:hidden!important;text-overflow:ellipsis!important;',
-    'box-shadow:none!important;text-shadow:0 1px 2px #0009;',
-    '-webkit-tap-highlight-color:transparent;opacity:.68!important;',
+    'box-shadow:none!important;text-shadow:-.8px 0 #000,.8px 0 #000,0 -.8px #000,0 .8px #000,0 1px 2px #000;',
+    '-webkit-text-stroke:.35px #000;paint-order:stroke fill;',
+    '-webkit-tap-highlight-color:transparent;opacity:.95!important;',
     'transition:opacity .18s ease!important;',
     'touch-action:manipulation!important;pointer-events:auto!important;cursor:pointer!important}',
     '.hmtc-corner-hud:hover,.hmtc-corner-hud:focus-visible,.hmtc-corner-hud:active{',
-    'opacity:.96!important}',
+    'opacity:1!important}',
+    '.hmtc-corner-hud .hmtc-hud-line{display:block;color:#FFAA33}',
+    '.hmtc-corner-hud .hmtc-hud-time{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
+    '.hmtc-corner-hud .hmtc-hud-speed{display:flex;align-items:center;gap:4px;color:#FFAA33}',
+    '.hmtc-corner-hud .hmtc-hud-speed-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.hmtc-corner-hud .hmtc-hud-cache-dot{flex:0 0 5px;width:5px;height:5px;border-radius:50%;',
+    'background:#F2CA7A;visibility:hidden}',
+    '.hmtc-corner-hud.hmtc-hud-cached .hmtc-hud-cache-dot{visibility:visible}',
+    '.hmtc-corner-hud .hmtc-hud-line[hidden],.hmtc-corner-hud .hmtc-hud-off-label[hidden]{display:none!important}',
     '.hmtc-corner-hud.hmtc-hud-off{width:24px!important;min-width:24px!important;',
     'height:20px!important;padding:1px 2px!important;',
-    'text-align:center!important;opacity:.33!important}',
+    'text-align:center!important;opacity:.85!important}',
     '.hmtc-corner-hud.hmtc-hud-off:hover,.hmtc-corner-hud.hmtc-hud-off:focus-visible,',
-    '.hmtc-corner-hud.hmtc-hud-off:active{opacity:.85!important}',
+    '.hmtc-corner-hud.hmtc-hud-off:active{opacity:1!important}',
     '.hmtc-corner-hud[hidden]{display:none!important}'
   ].join(''));
   // Common touch-sized, fixed rate presets shown on Holodex and YouTube.
@@ -946,7 +989,9 @@
     let duration=number(v?.duration),durationSource=duration>0?'media':'';
     if(!(duration>0)){duration=number(safe(()=>p.getDuration?.()));if(duration>0)durationSource='player-api';}
     if(!(duration>0)&&state.durationSeconds>0){duration=state.durationSeconds;durationSource='video-details';}
+    const playerState=safe(()=>p.getPlayerState?.());
     return {ready:!!v&&v.readyState>=1||position!=null&&(duration>0||state.live===true),
+      playerState:typeof playerState==='number'?playerState:null,playing:!!v&&v.readyState>=2&&v.paused===false,
       position,duration:duration>0?duration:null,live:state.live,liveReason:state.reason,durationSource};
   }
   function resolvePlaybackState(state,statusHint){
@@ -1184,6 +1229,7 @@
     let watchHud=null;
     function refreshWatchHud(player){
       if(!player){
+        clearTimeout(watchHud?._hmtcHudTimer);
         watchHud?.remove();watchHud=null;
         if(!sheet||sheet.hidden)bandwidth.stop();
         return;
@@ -1194,22 +1240,23 @@
       const rect=player.getBoundingClientRect();
       const visible=rect.width>75&&rect.height>55&&rect.bottom>0&&
         rect.top<innerHeight&&rect.right>0&&rect.left<innerWidth;
-      watchHud.hidden=!visible;
-      if(!visible){
+      const clock=readWatchClock();
+      watchHud.hidden=!visible||!hudPlaybackStarted(clock.state);
+      if(watchHud.hidden){
+        clearTimeout(watchHud._hmtcHudTimer);
         if(!sheet||sheet.hidden)bandwidth.stop();
         return;
       }
-      watchHud.style.left=Math.max(0,rect.left+Math.min(7,rect.width/20))+'px';
-      watchHud.style.top=Math.max(0,rect.top+6)+'px';
-      watchHud.style.maxWidth=Math.max(28,Math.min(240,rect.width-14))+'px';
-      const time=hudWantsTime()?readWatchClock().time:'—';
+      watchHud.style.left=Math.max(0,rect.left+2)+'px';
+      watchHud.style.top=Math.max(0,rect.top+2)+'px';
+      watchHud.style.maxWidth=Math.max(1,Math.min(240,rect.width-4,innerWidth-Math.max(0,rect.left+2)-2))+'px';
+      const time=hudWantsTime()?clock.time:'—';
       let speed='—';
       if(hudWantsSpeed()){
         bandwidth.start();
         const net=bandwidth.read();
         if(net.available)
-          speed=(net.bandwidthKbps/1000).toFixed(2)+' Mbps'+
-            (net.stale?' · 上次':'');
+          speed=hudSpeedReading(net.bandwidthKbps,net.stale,net.sampledAt);
       }else if(!sheet||sheet.hidden)bandwidth.stop();
       displayCornerHud(watchHud,time,speed);
     }
@@ -1995,7 +2042,7 @@
         respond({ok:true,data:readStats(message.status,true)});return;
       }
       if(message.action==='desktopPanelStatus'){
-        respond({ok:true,data:{version:'0.6.24',...desktopBridge.status()}});return;
+        respond({ok:true,data:{version:'0.6.28',...desktopBridge.status()}});return;
       }
       if(message.action==='desktopPanelConfig'){
         desktopBridge.configure(event,message);return;
@@ -2052,7 +2099,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.24', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.28', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -3919,6 +3966,7 @@
       valid(fallback?.duration)&&fallback.duration>0?fallback.duration:null;
     const position=valid(primary?.position)?primary.position:valid(fallback?.position)?fallback.position:null;
     return {...primary,ready:primary?.ready===true||fallback?.ready===true,
+      playerState:primary?.playerState??fallback?.state??null,
       live:state.live,liveReason:state.reason,duration,position,
       durationSource:primary?.duration>0?primary.durationSource:duration>0?'holodex-api':''};
   }
@@ -4086,6 +4134,7 @@
   }
   function hudCellDispose(cell){
     if(!cell)return;
+    clearTimeout(cell.button._hmtcHudTimer);
     hudSessionStop(cell);cell.button.remove();
   }
   function clearHudCells(){
@@ -4101,16 +4150,17 @@
     if(cell?.frame!==frame){
       if(cell)hudCellDispose(cell);
       cell={key,frame,videoId:row.videoId,button:createCornerHud(),
-        time:'—',speed:'—',lastSpeed:null,monitorWin:null,monitorOrigin:null};
+        time:'—',speed:'—',playbackActive:false,lastSpeed:null,monitorWin:null,monitorOrigin:null};
       hudCells.set(key,cell);
     }
     const layer=document.fullscreenElement||document.body;
     if(cell.button.parentNode!==layer)layer.appendChild(cell.button);
-    cell.button.hidden=rect.width<65||rect.height<45||rect.bottom<=0||
-      rect.top>=innerHeight||rect.right<=0||rect.left>=innerWidth;
-    cell.button.style.left=Math.max(0,rect.left+6)+'px';
-    cell.button.style.top=Math.max(0,rect.top+6)+'px';
-    cell.button.style.maxWidth=Math.max(28,Math.min(240,rect.width-12))+'px';
+    cell.viewportVisible=rect.width>=65&&rect.height>=45&&rect.bottom>0&&
+      rect.top<innerHeight&&rect.right>0&&rect.left<innerWidth;
+    cell.button.hidden=!cell.viewportVisible||!cell.playbackActive;
+    cell.button.style.left=Math.max(0,rect.left+2)+'px';
+    cell.button.style.top=Math.max(0,rect.top+2)+'px';
+    cell.button.style.maxWidth=Math.max(1,Math.min(240,rect.width-4,innerWidth-Math.max(0,rect.left+2)-2))+'px';
     displayCornerHud(cell.button,cell.time,cell.speed);
 
   }
@@ -4118,33 +4168,36 @@
     const now=Date.now();
     if(Number.isFinite(kbps)&&kbps>0){
       cell.lastSpeed={kbps,at:now};
-      return (kbps/1000).toFixed(2)+' Mbps';
+      return hudSpeedReading(kbps);
     }
     const last=cell.lastSpeed;
-    return last&&now-last.at>=0&&now-last.at<=6000?
-      (last.kbps/1000).toFixed(2)+' Mbps · 上次':'—';
+    return last?hudSpeedReading(last.kbps,true,last.at):hudSpeedReading(NaN);
   }
   async function pollCornerHuds(){
     if(hudBusy||!installed||!isMulti()||document.hidden)return;
     const wantTime=hudWantsTime(),wantSpeed=hudWantsSpeed();
     hudBusy=true;
     try{
-      const cells=[...hudCells.values()].filter(cell=>!cell.button.hidden).slice(0,12);
+      const cells=[...hudCells.values()].filter(cell=>cell.viewportVisible).slice(0,12);
       await Promise.allSettled(cells.map(async cell=>{
         const row=rowMap.get(cell.key);
         if(!row)return;
         const instance=cell;
         const stillHere=()=>hudCells.get(cell.key)===instance&&
           rowMap.has(cell.key)&&isMulti();
-        const jobs=[];
-        if(wantTime)jobs.push(
-          readMultiviewClock(row)
-            .then(v=>{
-              if(!stillHere())return;
-              cell.time=playbackTimeText(v);
-            }).catch(()=>{if(stillHere())cell.time='—';})
-        );
-        if(wantSpeed)jobs.push((async()=>{
+        // A bandwidth field can exist on an unstarted YouTube thumbnail.
+        // Check actual playback even in speed-only mode before collecting it.
+        let clock=null;
+        try{clock=await readMultiviewClock(row);}catch{}
+        if(!stillHere())return;
+        cell.playbackActive=hudPlaybackStarted(clock);
+        cell.button.hidden=!cell.viewportVisible||!cell.playbackActive;
+        if(!cell.playbackActive){
+          cell.time='—';cell.speed='—';cell.lastSpeed=null;
+          clearTimeout(cell.button._hmtcHudTimer);hudSessionStop(cell);return;
+        }
+        cell.time=wantTime?playbackTimeText(clock):'—';
+        if(wantSpeed){
           try{
             const target=nativeFrame(row);
             if(!target)throw Error('No iframe');
@@ -4161,9 +4214,8 @@
           }catch{
             if(stillHere())cell.speed=hudSpeedValue(cell,NaN);
           }
-        })());
+        }
         else hudSessionStop(cell);
-        await Promise.allSettled(jobs);
         if(stillHere())displayCornerHud(cell.button,cell.time,cell.speed);
       }));
     }finally{hudBusy=false;}
@@ -4266,7 +4318,7 @@
           ].join('\n');
         }catch(error){return (row.title||row.videoId)+'：'+String(error?.message||error);}
       }));
-      alert('数据诊断 · v0.6.24\n'+reports.join('\n\n'));
+      alert('数据诊断 · v0.6.28\n'+reports.join('\n\n'));
     });
     GM_registerMenuCommand('诊断多视图右键面板',async()=>{
       const rows=[...rowMap.values()];
@@ -4278,7 +4330,7 @@
             '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
         }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
       }));
-      alert('右键面板诊断 · v0.6.24\n'+reports.join('\n'));
+      alert('右键面板诊断 · v0.6.28\n'+reports.join('\n'));
     });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
@@ -4343,8 +4395,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.24 说明',()=>
-      alert('v0.6.24：延迟与缓冲使用紧凑标签列，直播标识紧跟延迟数值，所有普通数值与单位统一亮白。'));
+    GM_registerMenuCommand('Touch Controls v0.6.28 说明',()=>
+      alert('v0.6.28：左上角时间不足1小时显示分:秒，满1小时显示时:分:秒；保留亮橙色和当前位置。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
@@ -4388,3 +4440,4 @@
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});
   else init();
 })();
+
