@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.10
-// @description  画质与倍速统一按钮网格，即点即切；统计数字去冗余说明，保留 HUD、手势及自动播放。
+// @version      0.6.24
+// @description  PC 统计左右列分别紧凑对齐，直播标识紧跟延迟数字；数值与单位统一亮白色。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -30,9 +30,433 @@
 (function HolodexTouchControls() {
   'use strict';
 
+  // Broad transparent zones are safe only when no precise pointing device exists.
+  // Do not infer input mode from maxTouchPoints: touch laptops also have a mouse.
+  let mouseInputSeen=false;
+  function touchZonesAllowed(){
+    return !mouseInputSeen&&matchMedia('(pointer:coarse)').matches&&
+      !matchMedia('(any-pointer:fine)').matches;
+  }
+  // Some desktop browsers report coarse input despite a real mouse. Observe
+  // pointer entry before the next button press, without cancelling any event.
+  function observeMouseInput(event){
+    if(event.pointerType!=='mouse'||mouseInputSeen)return;
+    mouseInputSeen=true;
+    document.documentElement.classList.add('hmtc-mouse-input');
+    document.dispatchEvent(new Event('hmtc:input-policy-change'));
+  }
+  document.addEventListener('pointerover',observeMouseInput,{capture:true,passive:true});
+  document.addEventListener('pointerdown',observeMouseInput,{capture:true,passive:true});
+  function watchTouchZonePolicy(refresh){
+    document.addEventListener('hmtc:input-policy-change',refresh);
+    for(const query of ['(pointer:coarse)','(any-pointer:fine)']){
+      const media=matchMedia(query);
+      if(media.addEventListener)media.addEventListener('change',refresh);
+      else media.addListener?.(refresh);
+    }
+  }
   // Shared and persisted by YouTube and Holodex. Tapping the HUD cycles
   // time → native speed → both → compact (off). The compact control can
   // restore the display without opening the settings sheet.
+  const DESKTOP_TAG='hmtc-desktop-panel-v1';
+  const DESKTOP_EXCLUDE='button,a,input,select,textarea,[contenteditable]:not([contenteditable="false"]),'+
+    '[role="button"],[role="slider"],[role="dialog"],.ytp-chrome-top,.ytp-chrome-bottom,.ytp-popup,'+
+    '.ytp-settings-menu,.ytp-contextmenu,.ytp-panel,.ytp-ce-element,.ytp-progress-bar-container,'+
+    '.html5-video-info-panel,.html5-video-info-panel-content,.ytp-stats-for-nerds,'+
+    '.hmtc-corner-hud,#hmtc-sheet,#hmtc-settings,#hmtc-yt-panel';
+  let desktopLastPoint=null;
+  const desktopPanels=new Map();
+  function desktopMountAllowed(){
+    return !['IFRAME','VIDEO'].includes(document.fullscreenElement?.tagName);
+  }
+  function desktopVideoAnchor(element){
+    if(!element)return null;
+    const r=element.getBoundingClientRect();
+    return {x:r.left+r.width/2,y:r.top+r.height/2,center:true,element};
+  }
+  function desktopVideoTarget(target,player){
+    if(player.contains(target))return true;
+    // New embedded-player controls can live in a body-level sibling portal.
+    // Only accept this known portal for the current movie_player, never a
+    // generic outside element; the geometric and control exclusions still run.
+    return player.id==='movie_player'&&!!target?.closest?.('#player-controls,.ytPlayerControlsContainerHost');
+  }
+  function desktopContextPoint(event,player){
+    if(touchZonesAllowed()||event.button!==2||event.ctrlKey||event.altKey||
+       event.shiftKey||event.metaKey||!player||!desktopMountAllowed()||
+       event.target?.closest?.(DESKTOP_EXCLUDE)||!desktopVideoTarget(event.target,player))return null;
+    const r=player.getBoundingClientRect();
+    if(!(r.width>0&&r.height>0))return null;
+    const x=(event.clientX-r.left)/r.width,y=(event.clientY-r.top)/r.height;
+    return x>=1/6&&x<=5/6&&y>=0&&y<=1?
+      {x:event.clientX,y:event.clientY}:null;
+  }
+  function desktopPanelCoordinates(anchor,width,height,viewportWidth,viewportHeight){
+    const gap=8,offset=10;
+    let x=anchor?(anchor.center?anchor.x-width/2:anchor.x+offset):(viewportWidth-width)/2;
+    let y=anchor?(anchor.center?anchor.y-height/2:anchor.y+offset):(viewportHeight-height)/2;
+    if(anchor&&!anchor.center&&x+width>viewportWidth-gap)x=anchor.x-offset-width;
+    if(anchor&&!anchor.center&&y+height>viewportHeight-gap)y=anchor.y-offset-height;
+    return {x:Math.max(gap,Math.min(viewportWidth-gap-width,x)),
+      y:Math.max(gap,Math.min(viewportHeight-gap-height,y))};
+  }
+  function positionDesktopPanel(panel){
+    const state=desktopPanels.get(panel);
+    if(!state||panel.hidden)return;
+    const r=panel.getBoundingClientRect();
+    const anchor=state.anchor?.center&&state.anchor.element?.isConnected?
+      desktopVideoAnchor(state.anchor.element):state.anchor;
+    const point=desktopPanelCoordinates(anchor,r.width,r.height,innerWidth,innerHeight);
+    panel.style.left=point.x+'px';panel.style.top=point.y+'px';
+  }
+  function presentPanel(panel,anchor){
+    const desktop=!touchZonesAllowed();
+    for(const el of panel.querySelectorAll?.('[data-action="dismissHeader"]')||[])
+      el.title=desktop?'':'轻点收起';
+    panel.classList.toggle('hmtc-desktop-panel',desktop);
+    prepareDesktopMetrics(panel,desktop);
+    const layer=document.fullscreenElement||document.body;
+    if(desktopMountAllowed()&&panel.parentNode!==layer)layer.appendChild(panel);
+    if(!desktop){
+      desktopPanels.delete(panel);panel.style.removeProperty('left');panel.style.removeProperty('top');return;
+    }
+    // Menu managers pass a click event; only explicit x/y points are anchors.
+    const point=anchor&&Number.isFinite(anchor.x)&&Number.isFinite(anchor.y)?
+      {x:anchor.x,y:anchor.y,center:anchor.center===true,element:anchor.element}:desktopLastPoint;
+    desktopPanels.set(panel,{anchor:point?{...point}:null});
+    if(!panel._hmtcSizeObserver&&typeof ResizeObserver==='function'){
+      panel._hmtcSizeObserver=new ResizeObserver(()=>positionDesktopPanel(panel));
+      panel._hmtcSizeObserver.observe(panel);
+    }
+    positionDesktopPanel(panel);
+  }
+  // Move the existing readings, never duplicate bindings. Comments restore the
+  // exact mobile DOM when the same panel is opened with touch input later.
+  function prepareDesktopMetrics(panel,desktop){
+    let compact=panel._hmtcCompact;
+    if(!desktop&&compact){
+      for(const [node,marker] of compact.originals)marker.replaceWith(node);
+      compact.root.remove();delete panel._hmtcCompact;
+    }else if(desktop&&!compact){
+      const latency=panel.querySelector?.('[data-hmtc-latency-metric]');
+      if(!latency)return;
+      const reading=(field,id)=>panel.querySelector('[data-field="'+field+'"], [data-id="'+id+'"]');
+      const items={latency,speed:reading('speed','speed')?.closest('.net,.metric'),
+        time:reading('position','time')?.closest('.metric'),
+        resolution:reading('resolution','resolution')?.closest('.metric'),
+        buffer:reading('health','buffer')?.closest('.metric')};
+      const head=panel.querySelector('.head');
+      if(!head||Object.values(items).some(node=>!node))return;
+      const root=document.createElement('div');root.className='hmtc-compact-stats';
+      const rows=Array.from({length:3},()=>{
+        const row=document.createElement('div');row.className='hmtc-compact-row';root.appendChild(row);return row;
+      });
+      const originals=Object.values(items).map(node=>{
+        const marker=document.createComment('hmtc-mobile-metric');node.before(marker);return [node,marker];
+      });
+      panel._hmtcCompact={root,rows,items,originals};head.after(root);
+    }
+    const kind=panel.querySelector?.('[data-hmtc-latency-metric]')?.dataset.kind;
+    if(kind)renderMediaKind(panel,{live:kind==='live'?true:kind==='vod'?false:null});
+  }
+  function syncDesktopMetrics(panel){
+    const compact=panel?._hmtcCompact;if(!compact)return;
+    const {items,rows}=compact,vod=items.latency.dataset.kind==='vod';
+    const groups=vod?[[items.speed,items.buffer],[items.time],[items.resolution]]:
+      [[items.speed,items.latency],[items.time,items.buffer],[items.resolution]];
+    // Keep the hidden latency attached so querySelector bindings stay valid.
+    if(vod)compact.root.appendChild(items.latency);
+    groups.forEach((group,i)=>{
+      for(const node of group)if(node.parentNode!==rows[i])rows[i].appendChild(node);
+      rows[i].hidden=!group.length;
+    });
+    for(const value of compact.root.querySelectorAll('strong,b,.speed')){
+      const text=value.textContent;
+      value.classList.toggle('hmtc-reading-pending',/^(?:—|未提供|暂未提供|待确认|识别中|读取中…|暂时无法读取)$/.test(text));
+      const unit=text.match(/^(.*?)(\s+(?:Mbps|s))$/);
+      if(unit){
+        value.textContent=unit[1];
+        const span=document.createElement('span');span.className='hmtc-reading-unit';span.textContent=unit[2];value.appendChild(span);
+      }
+    }
+  }
+  function desktopPanelReflow(){
+    for(const panel of desktopPanels.keys()){
+      if(panel.hidden)continue;
+      const layer=document.fullscreenElement||document.body;
+      if(desktopMountAllowed()&&panel.parentNode!==layer)layer.appendChild(panel);
+      if(desktopMountAllowed())positionDesktopPanel(panel);
+    }
+  }
+  document.addEventListener('pointermove',e=>{
+    if(e.pointerType==='mouse')desktopLastPoint={x:e.clientX,y:e.clientY};
+  },{passive:true});
+  window.addEventListener('resize',desktopPanelReflow,{passive:true});
+  window.visualViewport?.addEventListener('resize',desktopPanelReflow,{passive:true});
+  document.addEventListener('fullscreenchange',desktopPanelReflow);
+  document.addEventListener('scroll',desktopPanelReflow,{capture:true,passive:true});
+  function installDesktopDismiss(dismiss){
+    document.addEventListener('pointerdown',e=>{
+      if(touchZonesAllowed()||e.button!==0||e.target?.closest?.(
+        '#hmtc-sheet,#hmtc-settings,#hmtc-yt-panel'))return;
+      dismiss(); // Observe only: do not consume the underlying click.
+    },{capture:true,passive:true});
+  }
+  GM_addStyle(`
+    #hmtc-sheet.hmtc-desktop-panel,#hmtc-settings.hmtc-desktop-panel,
+    #hmtc-yt-panel.hmtc-desktop-panel{
+      position:fixed;width:320px;min-width:0;max-width:calc(100vw - 16px);
+      max-height:min(520px,calc(100vh - 16px));right:auto;bottom:auto;margin:0;
+      padding:10px;border-radius:10px;font:12px/1.3 system-ui;overflow:auto}
+    .hmtc-desktop-panel .hmtc-dismiss-zone,.hmtc-desktop-panel .hmtc-dismiss-zone .metric{cursor:default!important}
+    .hmtc-desktop-panel .head{min-height:26px!important;gap:5px!important}
+    .hmtc-desktop-panel .title,.hmtc-desktop-panel .head strong{font-size:13px!important}
+    .hmtc-desktop-panel button,.hmtc-desktop-panel select{
+      min-height:28px!important;min-width:28px!important;padding:3px 5px!important;
+      border-radius:6px!important;font-size:12px!important}
+    .hmtc-desktop-panel .net{display:flex;align-items:center;gap:8px;
+      padding:5px 6px!important;margin-top:4px!important;border-radius:6px!important}
+    .hmtc-desktop-panel .speed{font-size:18px!important;margin:0!important}
+    .hmtc-desktop-panel .unit{font-size:11px!important}
+    .hmtc-desktop-panel .grid{gap:4px!important;margin:4px 0!important}
+    .hmtc-desktop-panel .metric{padding:5px 6px!important;border-radius:6px!important}
+    .hmtc-desktop-panel .metric label{font-size:10px!important;margin-bottom:2px!important}
+    .hmtc-desktop-panel .metric strong,.hmtc-desktop-panel .metric b{
+      font-size:13px!important;line-height:1.2!important}
+    .hmtc-desktop-panel .hmtc-play-controls{padding:4px 5px!important;margin-top:4px!important}
+    .hmtc-desktop-panel .row,.hmtc-desktop-panel .hmtc-play-row{margin:4px 0!important;gap:4px!important}
+    .hmtc-desktop-panel .hmtc-rate-presets,.hmtc-desktop-panel .hmtc-quality-presets,
+    .hmtc-desktop-panel .hmtc-yt-rates,.hmtc-desktop-panel .hmtc-yt-qualities{
+      gap:4px!important;margin:4px 0 6px!important;grid-template-columns:repeat(5,minmax(0,1fr))}
+    .hmtc-desktop-panel .hmtc-rate-presets button,.hmtc-desktop-panel .hmtc-quality-presets button,
+    .hmtc-desktop-panel .hmtc-yt-rates button,.hmtc-desktop-panel .hmtc-yt-qualities button{
+      min-width:0!important;font-size:11px!important}
+    .hmtc-desktop-panel .volume{gap:5px!important;margin:5px 0!important}
+    .hmtc-desktop-panel input[type=range]{height:28px!important}
+    .hmtc-desktop-panel .value{min-width:34px!important}
+    .hmtc-desktop-panel .actions,.hmtc-desktop-panel .footer{gap:4px!important;margin-top:5px!important}
+    .hmtc-desktop-panel .hmtc-youtube-quality-link{padding:5px!important;font-size:11px!important}
+    .hmtc-desktop-panel .setting{margin-top:8px!important}
+    .hmtc-desktop-panel .setting label{font-size:12px!important;margin-bottom:4px!important}
+  `);
+  function installDesktopFrameBridge(videoId,getPlayer,allowedOrigins){
+    let config=null,lastMove=0,lastHello=0,lastContext='尚未收到右键';
+    const paired=()=>config&&Date.now()<config.until;
+    const requestConfig=()=>{
+      const now=Date.now();if(now-lastHello<500)return;lastHello=now;
+      let origin=null;
+      try{origin=new URL(document.referrer).origin;}catch{}
+      if(!allowedOrigins.has(origin))origin=location.ancestorOrigins?.[0];
+      if(!allowedOrigins.has(origin))return;
+      window.parent.postMessage({tag:DESKTOP_TAG,type:'ready',videoId},origin);
+    };
+    const send=(type,point)=>{
+      if(!paired())return;
+      window.parent.postMessage({tag:DESKTOP_TAG,type,videoId,
+        ...(point?{x:point.x/innerWidth,y:point.y/innerHeight}:{})},config.origin);
+    };
+    document.addEventListener('contextmenu',event=>{
+      if(!paired()){lastContext='未配对或租约过期';requestConfig();return;}
+      if(!config.enabled){lastContext='父页面未启用';return;}
+      if(document.fullscreenElement){lastContext='独立视频全屏';return;}
+      const p=getPlayer();
+      let actualId;try{actualId=p?.getVideoData?.()?.video_id;}catch{return;}
+      if(actualId&&actualId!==videoId){lastContext='视频已切换';return;}
+      const point=desktopContextPoint(event,p);
+      if(!point){lastContext='非中央画面或交互控件';return;}
+      lastContext='已发送打开请求';
+      event.preventDefault();event.stopPropagation();send('open',point);
+    },{capture:true});
+    document.addEventListener('pointerdown',event=>{
+      if(!paired())requestConfig();
+      if(config?.enabled&&event.button===0)send('dismiss');
+    },{capture:true,passive:true});
+    document.addEventListener('keydown',event=>{
+      if(config?.enabled&&event.key==='Escape')send('escape');
+    });
+    document.addEventListener('pointerover',event=>{
+      if(event.pointerType==='mouse'){if(!paired())requestConfig();send('mouse');}
+    },{passive:true});
+    document.addEventListener('pointermove',event=>{
+      if(!config?.enabled||event.pointerType!=='mouse'||Date.now()-lastMove<200)return;
+      lastMove=Date.now();send('move',{x:event.clientX,y:event.clientY});
+    },{passive:true});
+    requestConfig();
+    const pairingTimer=setInterval(()=>{if(!paired())requestConfig();},1800);
+    window.addEventListener('pagehide',event=>{if(!event.persisted)clearInterval(pairingTimer);});
+    return {status:()=>({paired:!!paired(),enabled:config?.enabled===true,lastContext}),configure(event,message){
+      if(event.source!==window.parent||!allowedOrigins.has(event.origin)||
+         message.videoId!==videoId||typeof message.enabled!=='boolean')return false;
+      config={origin:event.origin,enabled:message.enabled,until:Date.now()+5000};
+      return true;
+    }};
+  }
+  GM_addStyle('.hmtc-media-kind{flex:none;font:600 10px/1.4 system-ui;padding:2px 5px;border-radius:4px;background:#ffffff18;color:#d4e3ed}.hmtc-media-kind[data-kind="live"]{color:#ffb7b7}.hmtc-media-kind[data-kind="vod"]{color:#b9e5df}');
+  GM_addStyle(`
+    #hmtc-sheet .hmtc-live-status,#hmtc-yt-panel .hmtc-live-status{
+      display:flex;align-items:center;gap:7px;margin:6px 0;padding:7px 8px;
+      border:1px solid #ffffff20;border-radius:7px;background:#ffffff08;color:#c4d0db;font:12px/1.4 system-ui}
+    #hmtc-sheet .hmtc-live-status[hidden],#hmtc-yt-panel .hmtc-live-status[hidden]{display:none!important}
+    #hmtc-sheet .hmtc-live-status strong,#hmtc-yt-panel .hmtc-live-status strong{
+      margin-left:auto;font:700 15px/1.4 system-ui;font-variant-numeric:tabular-nums;color:#d1dbe4}
+    #hmtc-sheet .hmtc-live-status[data-state="available"] strong,
+    #hmtc-yt-panel .hmtc-live-status[data-state="available"] strong{color:#a7ebe0}
+    .hmtc-live-status .hmtc-media-kind[data-kind="live"]::before{content:'●';margin-right:4px;font-size:8px}
+    #hmtc-sheet .hmtc-playtime-metric{grid-column:1/-1}
+    #hmtc-sheet .head .title,#hmtc-yt-panel .head>strong{
+      white-space:normal!important;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  `);
+  GM_addStyle(`
+    :is(#hmtc-sheet,#hmtc-yt-panel,#hmtc-settings).hmtc-desktop-panel{
+      --hmtc-label:#9EC5E5;--hmtc-value:#F5FAFF;--hmtc-live:#FF9B9B;
+      --hmtc-latency:#81E6D9;--hmtc-pending:#F2CA7A;color:var(--hmtc-value)}
+    .hmtc-desktop-panel :is(label,.sub,[data-hmtc-latency-label],.hmtc-toggle>span,
+      .hmtc-yt-preferences>summary){color:var(--hmtc-label)!important;font-size:11px!important;font-weight:600!important}
+    .hmtc-desktop-panel :is(.title,.head>strong){color:var(--hmtc-value)!important;font-size:13px!important}
+    :is(#hmtc-sheet,#hmtc-yt-panel,#hmtc-settings).hmtc-desktop-panel :is(button,select){
+      color:var(--hmtc-value)!important;font-size:12px!important}
+    .hmtc-desktop-panel :is(.value,[data-id="vol"],[data-id="senseText"],.setting b){
+      color:var(--hmtc-value)!important;font-size:13px!important}
+    .hmtc-desktop-panel :is(.note,.hint,.hmtc-yt-quality-tip,.speedFreshness){color:var(--hmtc-pending)!important}
+    .hmtc-desktop-panel .setting-summary{color:var(--hmtc-label)!important;font-size:11px!important}
+    .hmtc-desktop-panel button:disabled{opacity:.55;cursor:default}
+    .hmtc-desktop-panel .hmtc-compact-stats{padding:6px;margin:4px 0;background:#ffffff08;border-radius:6px}
+    .hmtc-desktop-panel .hmtc-compact-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:baseline;gap:1px 4px}
+    .hmtc-desktop-panel .hmtc-compact-row+.hmtc-compact-row{margin-top:0}
+    .hmtc-desktop-panel .hmtc-compact-row[hidden],
+    .hmtc-desktop-panel .hmtc-compact-stats>[hidden],
+    .hmtc-desktop-panel .grid:empty{display:none!important}
+    .hmtc-desktop-panel .hmtc-compact-row>:is(.metric,.net,.hmtc-live-status){
+      --hmtc-metric-label-width:44px;
+      display:grid!important;grid-template-columns:var(--hmtc-metric-label-width) minmax(0,1fr);align-items:baseline;gap:4px!important;
+      min-width:0;max-width:100%;min-height:19px;padding:0!important;margin:0!important;
+      border:0!important;background:none!important;box-shadow:none!important;border-radius:0!important;line-height:20px}
+    .hmtc-desktop-panel .hmtc-compact-row>:only-child{grid-column:1/-1}
+    .hmtc-desktop-panel .hmtc-compact-row>.hmtc-playtime-metric:not(:only-child){grid-column:auto!important}
+    .hmtc-desktop-panel .hmtc-compact-row>:nth-child(2){--hmtc-metric-label-width:22px}
+    .hmtc-desktop-panel .hmtc-compact-row>.hmtc-live-status{
+      grid-template-columns:var(--hmtc-metric-label-width) max-content max-content;justify-content:start}
+    .hmtc-desktop-panel .hmtc-compact-stats :is(label,.sub,[data-hmtc-latency-label]){
+      display:inline!important;margin:0!important;min-width:0;width:var(--hmtc-metric-label-width);order:1}
+    .hmtc-desktop-panel .hmtc-compact-stats .hmtc-live-status strong{order:2}
+    .hmtc-desktop-panel .hmtc-compact-stats .metric>:is(b,strong),
+    .hmtc-desktop-panel .hmtc-compact-stats .net>div:last-child{order:2}
+    .hmtc-desktop-panel .hmtc-compact-stats .hmtc-media-kind{order:3}
+    .hmtc-desktop-panel .hmtc-compact-stats .net>div:last-child{display:inline-flex;align-items:baseline;gap:3px;flex-wrap:wrap}
+    .hmtc-desktop-panel .hmtc-compact-stats :is(strong,b,.speed){
+      color:var(--hmtc-value)!important;font-size:13px!important;line-height:20px!important;
+      margin:0!important;min-width:0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+    .hmtc-desktop-panel .hmtc-compact-stats :is(.unit,.hmtc-reading-unit){
+      color:inherit!important;font-size:11px!important;margin:0!important;font-weight:600}
+    .hmtc-desktop-panel .hmtc-compact-stats .hmtc-media-kind{
+      color:var(--hmtc-live)!important;padding:0;background:none;font-size:11px;font-weight:600;flex:none}
+    .hmtc-desktop-panel .hmtc-compact-stats [data-state="available"] strong{color:var(--hmtc-value)!important}
+    .hmtc-desktop-panel .hmtc-compact-stats :is(.hmtc-reading-pending,[data-state="pending"] strong){
+      color:var(--hmtc-pending)!important}
+  `);
+  function currentResolution(value){
+    if(typeof value!=='string')return '';
+    const m=value.match(/(\d{2,5})\s*[x×]\s*(\d{2,5})(?:\s*@\s*(\d+(?:\.\d+)?))?/i);
+    return m?m[1]+'×'+m[2]+(m[3]?'@'+m[3]:''):'';
+  }
+  const LATENCY_SECONDS_KEYS=new Set(['live_latency_seconds','liveLatencySeconds','live_latency_sec',
+    'live_latency_secs','latency_to_live_seconds','latencyToLiveEdgeSeconds']);
+  const LATENCY_MS_KEYS=new Set(['live_latency_ms','liveLatencyMs','latency_to_live_ms']);
+  function nativeLatencySeconds(raw){
+    const numeric=value=>{
+      if(value==null||typeof value==='boolean'||typeof value==='object'||
+         typeof value==='string'&&!value.trim())return null;
+      const n=Number(typeof value==='string'?value.replace(/,/g,''):value);
+      return Number.isFinite(n)&&n>=0?n:null;
+    };
+    const unitValue=(value,isMillis)=>{
+      if(typeof value!=='string')return numeric(value)==null?null:numeric(value)/(isMillis?1000:1);
+      const match=value.trim().match(/^([+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+\-]?\d+)?)\s*(milliseconds?|ms|毫秒|seconds?|secs?|s|秒)?$/i);
+      if(!match)return null;
+      const n=numeric(match[1]);if(n==null)return null;
+      const millis=match[2]?/^(?:ms|millisecond|毫秒)/i.test(match[2]):isMillis;
+      return millis?n/1000:n;
+    };
+    const seconds=LATENCY_SECONDS_KEYS,millis=LATENCY_MS_KEYS;
+    let decoded=raw;
+    if(typeof raw==='string')try{decoded=JSON.parse(raw);}catch{}
+    const queue=[{value:decoded,depth:0}],seen=new Set();let visited=0;
+    while(queue.length&&visited++<80){
+      const {value,depth}=queue.shift();
+      if(!value||typeof value!=='object'||seen.has(value))continue;
+      seen.add(value);
+      for(const [key,v] of Object.entries(value)){
+        if(seconds.has(key)||millis.has(key)){
+          const n=typeof v==='string'&&!/[a-z秒]/i.test(v)?unitValue(v.replace(/,/g,''),millis.has(key)):unitValue(v,millis.has(key));
+          if(n!=null)return n;
+        }
+        if(v&&typeof v==='object'&&depth<4)queue.push({value:v,depth:depth+1});
+      }
+    }
+    if(typeof raw==='string'){
+      const m=raw.match(/(?:Live Latency|Latency to Live Edge|直播延迟|直播延遲|ライブ遅延)\s*(?:\((s|ms)\))?\s*[:：]?\s*([\d,.]+)\s*(milliseconds?|ms|毫秒|seconds?|secs?|s|秒)?(?![a-z])/i);
+      if(m&&(m[1]||m[3])){const n=numeric(m[2]);if(n!=null)return /^(?:ms|millisecond|毫秒)/i.test(m[3]||m[1])?n/1000:n;}
+    }
+    return null;
+  }
+  function latencyFieldNames(raw){
+    let value=raw;
+    if(typeof raw==='string')try{value=JSON.parse(raw);}catch{
+      return /(?:live latency|latency to live|直播延迟)/i.test(raw)?['原生延迟文字']:[];
+    }
+    const queue=[{value,path:'',depth:0}],seen=new Set(),names=[];let count=0;
+    while(queue.length&&count++<60&&names.length<16){
+      const {value,path,depth}=queue.shift();
+      if(!value||typeof value!=='object'||seen.has(value))continue;seen.add(value);
+      for(const [key,v] of Object.entries(value)){
+        const name=path?path+'.'+key:key;
+        if(/latency/i.test(key))names.push(name.slice(0,90));
+        if(v&&typeof v==='object'&&depth<3)queue.push({value:v,path:name,depth:depth+1});
+      }
+    }
+    return names;
+  }
+  // Diagnostic-only: never serialize the full stats payload or invoke accessors.
+  function latencyValueDetails(raw){
+    if(typeof raw==='string')try{raw=JSON.parse(raw);}catch{return [];}
+    const queue=[{value:raw,depth:0}],seen=new Set(),details=[];let visited=0;
+    while(queue.length&&visited++<60&&details.length<16){
+      const {value,depth}=queue.shift();
+      if(!value||typeof value!=='object'||seen.has(value))continue;seen.add(value);
+      let keys;try{keys=Object.getOwnPropertyNames(value).slice(0,100);}catch{continue;}
+      for(const key of keys){
+        if(details.length>=16)break;
+        let descriptor;try{descriptor=Object.getOwnPropertyDescriptor(value,key);}catch{continue;}
+        if(!descriptor)continue;
+        const known=LATENCY_SECONDS_KEYS.has(key)||LATENCY_MS_KEYS.has(key);
+        if(!('value' in descriptor)){
+          if(known)details.push({field:key,type:'accessor',preview:'未读取 getter'});
+          continue;
+        }
+        const v=descriptor.value;
+        if(known){
+          const type=v===null?'null':Array.isArray(v)?'array':typeof v;
+          let preview;
+          if(type==='string'){
+            // Preserve numeric/unit syntax; suppress URLs and arbitrary text/tokens.
+            preview=/^\s*(?:[+\-]?(?:[\d.,]+(?:e[+\-]?\d+)?|NaN|Infinity)\s*(?:ms|s|secs?|seconds?|milliseconds?|毫秒|秒)?)?\s*$/i.test(v)&&v.length<=80?
+              JSON.stringify(v):'[文本已省略；长度 '+v.length+']';
+          }else if(type==='number'||type==='boolean'||type==='undefined'||type==='null')preview=String(v);
+          else if(type==='array')preview='[数组；内容未展开]';
+          else preview='[非标量；内容未展开]';
+          details.push({field:key,type,preview});
+        }
+        if(v&&typeof v==='object'&&depth<3)queue.push({value:v,depth:depth+1});
+      }
+    }
+    return details;
+  }
+  function bindPanelRightClose(panel,close){
+    panel.addEventListener('contextmenu',event=>{
+      if(touchZonesAllowed()||event.button!==2||event.ctrlKey||event.altKey||event.shiftKey||event.metaKey)return;
+      event.preventDefault();event.stopPropagation();close();
+    },{capture:true});
+  }
   const HUD_KEY='hmtc_corner_hud_mode_v1';
   const HUD_MODES=['time','speed','both','off'];
   const hudMode=()=>{
@@ -72,6 +496,12 @@
       (time||'—')+'\n'+(speed||'—');
   }
   GM_addStyle([
+    '@media (pointer:fine),(pointer:none),(any-pointer:fine){',
+    '.hmtc-edge,.hmtc-yt-edge,#hmtc-backdrop,#hmtc-yt-backdrop{',
+    'display:none!important;pointer-events:none!important}}',
+    'html.hmtc-mouse-input .hmtc-edge,html.hmtc-mouse-input .hmtc-yt-edge,',
+    'html.hmtc-mouse-input #hmtc-backdrop,html.hmtc-mouse-input #hmtc-yt-backdrop{',
+    'display:none!important;pointer-events:none!important}',
     '.hmtc-corner-hud{position:fixed!important;z-index:2147482700!important;',
     'display:block!important;box-sizing:border-box!important;max-width:240px;',
     'border:0!important;border-radius:5px!important;',
@@ -254,10 +684,10 @@
 
   // Restore the SAME measurement strategy previously used by Holodex's
   // iframe stats collector on a standalone YouTube watch/live page:
-  // activate native Stats for nerds ONLY while the custom panel is visible,
-  // hide the original overlay (without display:none), and keep reading the
-  // real player's live bandwidth fields. No inferred/download-test speeds.
-  function youtubeWatchBandwidth(pageDoc,getPlayer){
+  // On touch-only devices, native diagnostics can be sampled silently for
+  // the panel/HUD. Desktop reads existing fields only: other extensions own
+  // the native Stats for nerds visibility. No inferred/download-test speeds.
+  function youtubeWatchBandwidth(pageDoc,getPlayer,allowSilent=touchZonesAllowed){
     const CLASS='hmtc-yt-native-bandwidth-silent';
     const STYLE_ID='hmtc-yt-bandwidth-style';
     const monitor={player:null,forced:false,active:false,lastArm:0,
@@ -294,6 +724,13 @@
       monitor.forced=false;monitor.lastArm=0;monitor.lastSample=null;
     }
     function start(){
+      if(!allowSilent()){
+        // Desktop extensions (e.g. Tweaks for YouTube) toggle the same panel.
+        // Never silently enable, re-arm or hide their diagnostic UI.
+        if(monitor.forced)stop();
+        else css(false);
+        return {started:false,hidden:false,passive:true};
+      }
       const p=getPlayer();
       if(monitor.player&&monitor.player!==p)stop();
       if(!p)return {started:false,reason:'播放器尚未就绪'};
@@ -494,49 +931,115 @@
   // HTMLMediaElement.duration is often a rolling DVR-window length for
   // YouTube LIVE (e.g. precisely 1:00:00), NOT the stream's total duration.
   // Prefer YouTube's explicit live flags and visible live-badge state.
+  function readFrameClock(pageDoc,getPlayer,getVideo,mainPage,expectedVideoId,statusHint){
+    const p=getPlayer();
+    if(!p)return {ready:false,live:null};
+    const safe=(fn)=>{try{return fn();}catch{return null;}};
+    const actualId=safe(()=>p.getVideoData?.()?.video_id);
+    if(expectedVideoId&&actualId&&actualId!==expectedVideoId)return {ready:false,live:null};
+    const v=getVideo();
+    const number=value=>value==null||typeof value==='string'&&!value.trim()||typeof value==='boolean'?null:
+      Number.isFinite(Number(value))&&Number(value)>=0?Number(value):null;
+    const state=resolvePlaybackState(youtubeWatchLiveState(pageDoc,getPlayer,getVideo,mainPage),statusHint);
+    let position=number(v?.currentTime);
+    if(position==null||v?.readyState===0)position=number(safe(()=>p.getCurrentTime?.()))??position;
+    let duration=number(v?.duration),durationSource=duration>0?'media':'';
+    if(!(duration>0)){duration=number(safe(()=>p.getDuration?.()));if(duration>0)durationSource='player-api';}
+    if(!(duration>0)&&state.durationSeconds>0){duration=state.durationSeconds;durationSource='video-details';}
+    return {ready:!!v&&v.readyState>=1||position!=null&&(duration>0||state.live===true),
+      position,duration:duration>0?duration:null,live:state.live,liveReason:state.reason,durationSource};
+  }
+  function resolvePlaybackState(state,statusHint){
+    if(state?.live===true||state?.live===false)return {...state,reason:state.reason||state.liveReason||
+      (statusHint==='past'?'holodex-past':statusHint==='live'?'holodex-live':'reported-live-state')};
+    if(statusHint==='past')return {...state,live:false,reason:'holodex-past'};
+    if(statusHint==='live')return {...state,live:true,reason:'holodex-live'};
+    return {...state,live:null,reason:state?.reason||'unknown'};
+  }
+  function playbackKindLabel(value){
+    return value?.live===true?'直播':value?.live===false?'录像':'待确认';
+  }
+  function renderMediaKind(panel,state){
+    const badge=panel?.querySelector('[data-hmtc-media-kind]');
+    if(!badge)return;
+    badge.textContent=playbackKindLabel(state);
+    badge.dataset.kind=state?.live===true?'live':state?.live===false?'vod':'unknown';
+    const compact=!!panel._hmtcCompact;
+    badge.hidden=compact&&state?.live==null;
+    const metric=panel.querySelector('[data-hmtc-latency-metric]');
+    if(metric){
+      metric.hidden=state?.live===false;
+      metric.dataset.kind=badge.dataset.kind;
+    }
+    const label=panel.querySelector('[data-hmtc-latency-label]');
+    if(label)label.textContent=state?.live===true?(compact?'延迟':'直播延迟'):(compact?'状态':'视频状态');
+    const timeLabel=panel.querySelector('[data-hmtc-time-label]');
+    if(timeLabel)timeLabel.textContent=state?.live===false?(compact?'录像时间':'录像 · 播放时间'):'播放时间';
+    if(state?.live!==true)renderLatency(panel,null);
+    else if(compact)syncDesktopMetrics(panel);
+  }
+  function renderLatency(panel,data){
+    const metric=panel?.querySelector('[data-hmtc-latency-metric]');
+    const value=panel?.querySelector('[data-hmtc-latency-value]');
+    if(!metric||!value)return;
+    const available=metric.dataset.kind==='live'&&Number.isFinite(data?.liveLatencySeconds)&&data.liveLatencySeconds>=0;
+    value.textContent=metric.dataset.kind!=='live'?(panel._hmtcCompact?'待确认':'识别中'):
+      available?data.liveLatencySeconds.toFixed(2)+' s':panel._hmtcCompact?'未提供':'暂未提供';
+    metric.dataset.state=available?'available':'pending';
+    value.title=available?'YouTube 原生返回值；0.00 s 表示原接口报告为零':data?.latencyReason||'等待播放器提供有效延迟';
+    if(panel._hmtcCompact)syncDesktopMetrics(panel);
+  }
+  function readPlayerLatency(player){
+    for(const [method,args] of [['getLiveLatency',[]],['getStatsForNerdsData',[]],
+      ['getStatsForNerds',[]],['getStatsForNerds',[0]],['getDebugText',[]],['getVideoStats',[]]]){
+      try{
+        if(typeof player?.[method]!=='function')continue;
+        const raw=player[method](...args);
+        const seconds=nativeLatencySeconds(method==='getLiveLatency'?{liveLatencySeconds:raw}:raw);
+        if(seconds!=null)return {liveLatencySeconds:seconds};
+      }catch{}
+    }
+    return {liveLatencySeconds:null,latencyReason:'播放器暂未提供有效延迟'};
+  }
   function youtubeWatchLiveState(pageDoc,getPlayer,getVideo,mainPage){
     const player=getPlayer();
-    if(!player)return {live:false,reason:'no-player'};
+    if(!player)return {live:null,reason:'no-player'};
     const safe=(fn,fallback=null)=>{try{return fn()??fallback;}catch{return fallback;}};
     const data=safe(()=>player.getVideoData?.(),{})||{};
     const playerId=data.video_id||data.videoId||'';
     let response=safe(()=>player.getPlayerResponse?.());
+    if(response?.videoDetails?.videoId&&playerId&&response.videoDetails.videoId!==playerId)response=null;
     if(!response){
-      // ytInitialPlayerResponse may refer to an earlier video after YouTube
-      // SPA navigation; never trust it if the video IDs do not match.
       const candidate=mainPage?.ytInitialPlayerResponse;
-      const responseId=candidate?.videoDetails?.videoId||'';
-      if(candidate&&playerId&&responseId===playerId)response=candidate;
+      if(playerId&&candidate?.videoDetails?.videoId===playerId)response=candidate;
     }
     const details=response?.videoDetails||{};
     const liveInfo=response?.microformat?.playerMicroformatRenderer?.liveBroadcastDetails;
-    // A replay of a past live stream may still carry isLiveContent=true:
-    // a definitive "isLiveNow:false" must win over that stale designation.
-    if(liveInfo?.isLiveNow===false)return {live:false,reason:'past-broadcast'};
-    if(liveInfo?.isLiveNow===true)return {live:true,reason:'broadcast-details'};
-    if(data.isLive===true||details.isLive===true)
-      return {live:true,reason:'player-live'};
-    if(data.isLiveContent===true||details.isLiveContent===true)
-      return {live:true,reason:'video-details-live'};
-    if(player.classList?.contains?.('ytp-live')||
-       player.classList?.contains?.('ytp-live-streaming'))
-      return {live:true,reason:'player-live-class'};
-    for(const selector of [
-      '.ytp-live-badge','.ytm-live-badge',
-      '.badge-style-type-live-now','.ytp-live'
-    ]){
-      const node=pageDoc.querySelector(selector);
-      if(!node)continue;
-      const rect=safe(()=>node.getBoundingClientRect?.());
+    const durationSeconds=Number.isFinite(Number(details.lengthSeconds))&&Number(details.lengthSeconds)>0?Number(details.lengthSeconds):null;
+    const state=(live,reason)=>({live,reason,durationSeconds});
+    if(liveInfo?.isLiveNow===false||liveInfo?.endTimestamp)return state(false,'past-broadcast');
+    if(liveInfo?.isLiveNow===true)return state(true,'broadcast-details');
+    if(data.isLive===true||details.isLive===true)return state(true,'player-live');
+    if(data.isLive===false||details.isLive===false)return state(false,'player-not-live');
+    const apiLive=safe(()=>player.isLive?.());
+    if(typeof apiLive==='boolean')return state(apiLive,'player-is-live');
+    if(player.classList?.contains?.('ytp-live')||player.classList?.contains?.('ytp-live-streaming'))
+      return state(true,'player-live-class');
+    // Only inspect this player's own badge. A recommended live video elsewhere
+    // on the page says nothing about the video currently being watched.
+    for(const selector of ['.ytp-live-badge','.ytm-live-badge','.ytp-live']){
+      const node=player.querySelector?.(selector);
+      const rect=safe(()=>node?.getBoundingClientRect?.());
       const style=safe(()=>mainPage?.getComputedStyle?.(node));
-      if((rect&&rect.width>0&&rect.height>0)&&
-         style?.display!=='none'&&style?.visibility!=='hidden')
-        return {live:true,reason:'visible-live-badge'};
+      if(rect?.width>0&&rect.height>0&&style?.display!=='none'&&style?.visibility!=='hidden')
+        return state(true,'visible-player-live-badge');
     }
     const video=getVideo();
-    if(video?.duration===Infinity)
-      return {live:true,reason:'infinite-media'};
-    return {live:false,reason:'vod'};
+    if(video?.readyState>=1&&video.duration===Infinity)return state(true,'infinite-media');
+    if(data.isLiveContent===false||details.isLiveContent===false)return state(false,'vod-details');
+    // isLiveContent is historical: archived live streams retain this flag.
+    // Never use it alone as evidence of a broadcast happening now.
+    return state(null,data.isLiveContent===true||details.isLiveContent===true?'historic-live-flag-only':'unknown');
   }
 
   // YouTube's own watch/live/shorts interface: no Holodex Vue bridge and no
@@ -564,7 +1067,6 @@
     const bandwidth=youtubeWatchBandwidth(page.document,p);
     const watchLive=()=>youtubeWatchLiveState(page.document,p,
       controls.video,page);
-    const coarse=matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>0;
     const enabledKey='hmtc_youtube_edges_v1';
     const setting=(key,def)=>GM_getValue(key,def);
     const mode=()=>setting('hmtc_stats_trigger_v1','tap');
@@ -654,8 +1156,7 @@
       '#hmtc-yt-toast{position:fixed;z-index:2147482992;pointer-events:none;',
       'transform:translate(-50%,-50%);background:#1a2c41f5;border-radius:12px;',
       'padding:11px 15px;color:#eff;font:800 22px system-ui}',
-      '@media(orientation:landscape){#hmtc-yt-panel{left:auto;right:8px;',
-      'max-width:min(385px,69vw);max-height:calc(100vh - 16px)}}'
+      '#hmtc-yt-panel{max-height:calc(100vh - 16px);cursor:auto}'
     ].join(''));
     let hintHideTimer=null;
     const text=(key,value)=>{const el=sheet?.querySelector('[data-id="'+key+'"]');
@@ -676,26 +1177,9 @@
 
     // Same live/DVR-aware clock feeds both the detailed sheet and compact HUD.
     function readWatchClock(){
-      const v=video(),player=p(),live=watchLive();
-      const valid=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0;
-      const mediaTime=Number(v?.currentTime);
-      let current=valid(mediaTime)?mediaTime:null;
-      if(current===null||(current===0&&Number(v?.readyState)===0)){
-        try{
-          const value=Number(player?.getCurrentTime?.());
-          if(valid(value))current=value;
-        }catch{}
-      }
-      let duration=Number(v?.duration);
-      if(!valid(duration)||duration===0){
-        try{duration=Number(player?.getDuration?.());}catch{duration=NaN;}
-      }
-      const elapsed=clock(current);
-      return {
-        time:live.live?elapsed:elapsed+' / '+(valid(duration)&&duration>0?clock(duration):'—'),
-        info:live.live?'🔴 直播中 · 播放位置（非直播总时长）':
-          '当前播放位置 / 总时长'
-      };
+      let id=null;try{id=p()?.getVideoData?.()?.video_id;}catch{}
+      const data=readFrameClock(page.document,p,video,page,id);
+      return {time:playbackTimeText(data),state:data};
     }
     let watchHud=null;
     function refreshWatchHud(player){
@@ -738,6 +1222,8 @@
       text('resolution',snapshot.resolution);
       const currentClock=readWatchClock();
       text('timeLabel','播放时间');
+      renderMediaKind(sheet,currentClock.state);
+      if(currentClock.state.live===true)renderLatency(sheet,readPlayerLatency(p()));
       text('time',currentClock.time);
       text('vol',vol()+'%');text('mute',muted()?'🔇':'🔊');
       const vslider=sheet.querySelector('[data-id="slider"]');
@@ -766,6 +1252,7 @@
             buffer=Math.max(0,ranges.end(i)-time);
       }catch{}
       text('buffer',Number.isFinite(buffer)?buffer.toFixed(1)+' s':'—');
+      if(sheet._hmtcCompact)syncDesktopMetrics(sheet);
     }
     // Mobile YouTube builds a different control tree from desktop
     // .ytp-settings-button; some variants put the gear outside #movie_player.
@@ -948,13 +1435,17 @@
       backdrop.hidden=true;backdrop.addEventListener('click',close);
       document.body.appendChild(backdrop);
       sheet=document.createElement('section');sheet.id='hmtc-yt-panel';
+      bindPanelRightClose(sheet,close);
       sheet.hidden=true;sheet.setAttribute('role','dialog');
       sheet.setAttribute('aria-label','YouTube 视频音量、倍速、画质和统计');
       sheet.innerHTML=[
         '<div class="head"><strong data-id="title">YouTube</strong>',
         '<button data-action="close" aria-label="关闭面板">✕</button></div>',
+        '<div class="hmtc-live-status" data-hmtc-latency-metric data-kind="unknown">',
+        '<span class="hmtc-media-kind" data-hmtc-media-kind>待确认</span>',
+        '<span data-hmtc-latency-label>视频状态</span><strong data-hmtc-latency-value>识别中</strong></div>',
         '<div class="grid">',
-        '<div class="metric hmtc-yt-time-metric"><label data-id="timeLabel">播放时间</label>',
+        '<div class="metric hmtc-yt-time-metric"><label data-id="timeLabel" data-hmtc-time-label>播放时间</label>',
         '<b data-id="time" aria-live="off">—</b></div>',
         '<div class="metric"><label>分辨率</label><b data-id="resolution">—</b></div>',
         '<div class="metric"><label>连接速度</label><b data-id="speed">—</b></div>',
@@ -1005,7 +1496,7 @@
         try{volume(e.target.value);refreshSheet();}catch(error){text('hint',error.message);}
       });
       sheet.addEventListener('click',async e=>{
-        if(e.target.closest('.metric')||e.target.closest('.head strong')){
+        if(touchZonesAllowed()&&(e.target.closest('.metric')||e.target.closest('.head strong'))){
           close();return;
         }
         const action=e.target.closest('button[data-action]')?.dataset.action;
@@ -1039,9 +1530,10 @@
         if(e.key==='Escape'&&sheet&&!sheet.hidden)close();
       });
     }
-    function open(){
-      if(!supported()||!p())return;
-      makePanel();sheet.hidden=false;backdrop.hidden=false;
+    function open(anchor){
+      if(!supported()||!p()||!desktopMountAllowed())return;
+      makePanel();sheet.hidden=false;backdrop.hidden=!touchZonesAllowed();
+      presentPanel(sheet,touchZonesAllowed()?anchor:desktopVideoAnchor(p()));
       bandwidth.start();
       refreshSheet();
       refreshQualityChoices();
@@ -1075,7 +1567,9 @@
           base:vol(),moved:false,held:false,
           range:Math.max(90,player.getBoundingClientRect().height*.65)/sense()};
         if(['hold','both'].includes(mode()))gesture.timer=setTimeout(()=>{
-          if(gesture&&!gesture.moved){gesture.held=true;lastTap=Date.now();open();}
+          if(gesture&&!gesture.moved&&el.isConnected&&touchZonesAllowed()){
+            gesture.held=true;lastTap=Date.now();open();
+          }
         },600);
         if(side==='right'&&e.cancelable)e.preventDefault();
       },{passive:side==='left'});
@@ -1108,7 +1602,7 @@
       },{passive:false});
       el.addEventListener('touchcancel',reset,{passive:true});
       el.addEventListener('click',e=>{
-        if(side==='left'&&['tap','both'].includes(mode())&&Date.now()-lastTap>650){
+        if(touchZonesAllowed()&&e.button===0&&side==='left'&&['tap','both'].includes(mode())&&Date.now()-lastTap>650){
           e.preventDefault();e.stopPropagation();lastTap=Date.now();open();
         }
       });
@@ -1138,7 +1632,8 @@
     function refresh(){
       if(!document.body)return;
       const player=supported()?p():null;
-      if(!player||!coarse||!setting(enabledKey,true)){
+      if(backdrop)backdrop.hidden=!sheet||sheet.hidden||!touchZonesAllowed();
+      if(!player||!touchZonesAllowed()||!setting(enabledKey,true)){
         left?.remove();right?.remove();left=right=root=null;
         if(!player)close();
       }else{
@@ -1163,7 +1658,17 @@
       }
       refreshWatchHud(player);
     }
+    installDesktopDismiss(()=>{if(sheet&&!sheet.hidden)close();});
+    document.addEventListener('contextmenu',event=>{
+      const point=desktopContextPoint(event,supported()?p():null);
+      if(!point)return;
+      event.preventDefault();event.stopPropagation();open(point);
+    },{capture:true});
     document.addEventListener('hmtc:corner-hud-change',refresh);
+    watchTouchZonePolicy(()=>{
+      if(!touchZonesAllowed())bandwidth.stop();
+      refresh();
+    });
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
     GM_registerMenuCommand('YouTube：画质接口诊断',async()=>{
       const c=await controls.qualityOptions();
@@ -1216,6 +1721,7 @@
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const player = () => page.document.getElementById('movie_player');
     const controls=youtubePlaybackTools(page.document,player);
+    const desktopBridge=installDesktopFrameBridge(videoId,player,origins);
     const number = value => {
       if (typeof value === 'number') return Number.isFinite(value) ? value : null;
       if (typeof value !== 'string') return null;
@@ -1250,26 +1756,18 @@
         s.buffer_health_seconds, s.bufferHealthSeconds,
         metric(/(?:Buffer Health|缓冲健康度|緩衝健康度)\s*[:：]?\s*([\d,.]+)\s*s/i)
       );
-      const sourceResolution = s.resolution || s.current_resolution ||
-        s.currentResolution || s.current_optimal_resolution || '';
+      const sourceResolution = s.current_resolution || s.currentResolution ||
+        s.resolution || s.current_optimal_resolution || '';
       const fromStatsText = body.match(
         /(?:Current\s*\/\s*Optimal\s*Res|当前\s*\/\s*最佳分辨率|当前.*分辨率)\s*[:：]?\s*(\d{3,5}\s*[x×]\s*\d{3,5}(?:@\d+)?(?:\s*\/\s*\d{3,5}\s*[x×]\s*\d{3,5}(?:@\d+)?)?)/i
       )?.[1] || '';
-      const resolution = (typeof sourceResolution==='string' && sourceResolution
-        ? sourceResolution : fromStatsText).slice(0,90);
+      const resolution = currentResolution(sourceResolution)||currentResolution(fromStatsText);
       const sourceCodecs = s.codecs || '';
       const codecs = typeof sourceCodecs === 'string' ? sourceCodecs.slice(0,120) : '';
       const viewportFrames = String(s.viewport || s.frames || '').slice(0,100);
       const dropped = getNumber(s.dropped_frames, s.droppedFrames,
         metric(/(\d+)\s+dropped\s+of\s+\d+/i));
-      // Interpret only fields whose units are explicit. Do not infer latency
-      // from an ambiguous generic "latency" or DVR seekable window.
-      const latencyMs=getNumber(s.live_latency_ms,s.liveLatencyMs);
-      const liveLatencySeconds = getNumber(
-        s.live_latency_seconds, s.liveLatencySeconds,
-        s.live_latency_sec, s.latency_to_live_seconds,
-        metric(/(?:Live Latency|Latency to Live Edge|直播延迟|直播延遲)\s*[:：]?\s*([\d,.]+)\s*(?:s|sec|秒)?/i)
-      ) ?? (latencyMs!=null ? latencyMs/1000 : null);
+      const liveLatencySeconds=nativeLatencySeconds(raw)??nativeLatencySeconds(body);
       return {
         bandwidthKbps: bandwidthKbps!=null&&bandwidthKbps>0?bandwidthKbps:null,
         bufferSeconds:bufferSeconds!=null&&bufferSeconds>=0?bufferSeconds:null,
@@ -1308,6 +1806,11 @@
       return null;
     }
     function startMonitor(){
+      if(!touchZonesAllowed()){
+        if(monitor.active)stopMonitor();
+        else silent(false);
+        return {enabled:false,hidden:false,passive:true};
+      }
       const p=player();
       if(!p)return {enabled:false,reason:'YouTube 播放器尚未就绪'};
       if(typeof p.showVideoInfo!=='function')
@@ -1340,7 +1843,7 @@
     }
     function stopMonitor(){
       const p=player();
-      if(monitor.active&&monitor.forced&&typeof p?.hideVideoInfo==='function'){
+      if(monitor.active&&monitor.forced&&!monitor.manual&&typeof p?.hideVideoInfo==='function'){
         // Restore the state that existed before the Holodex panel opened.
         try{p.hideVideoInfo();}catch{}
       }
@@ -1351,6 +1854,9 @@
       monitor.initiallyVisible=false;
       return {stopped:true};
     }
+    watchTouchZonePolicy(()=>{
+      if(!touchZonesAllowed())stopMonitor();
+    });
     function toggleNative(){
       const p=player();
       if(!p)throw new Error('播放器尚未就绪');
@@ -1378,7 +1884,7 @@
       throw new Error('此播放器不支持切换原版统计');
     }
 
-    function readStats() {
+    function readStats(statusHint,diagnose=false) {
       const p=player();
       if(!p)return {available:false, reason:'YouTube 播放器尚未就绪'};
       let actualId=null;
@@ -1386,7 +1892,8 @@
       if(actualId&&actualId!==videoId)
         return {available:false,reason:'播放视频已切换'};
       let source='none';
-      const data=parse(null);
+      const data=parse(null),sources=[];let rawLatencyFields=false,rawExplicitLatencyField=false,availableSourceCount=0;
+      const getter={supported:typeof p.getLiveLatency==='function',status:'未查询'};
       // Prefer fresh API output; previous versions wrongly read old panel DOM first.
       // Combine compatible fields instead of stopping at an API which happens
       // to return resolution but not the more important Connection Speed.
@@ -1394,13 +1901,21 @@
         ['getStatsForNerdsData',[]],
         ['getStatsForNerds',[]],
         ['getStatsForNerds',[0]],
-        ['getDebugText',[]]
+        ['getDebugText',[]],
+        ['getVideoStats',[]]
       ]) {
-        if(typeof p[name]!=='function')continue;
+        if(typeof p[name]!=='function'){if(diagnose)sources.push({method:name,available:false});continue;}
+        availableSourceCount++;
         try{
           const raw=p[name](...args);
-          if(!raw || (typeof raw!=='string'&&typeof raw!=='object'))continue;
-          const sample=parse(raw);
+          if(!raw || (typeof raw!=='string'&&typeof raw!=='object')){
+            if(diagnose)sources.push({method:name,available:true,error:'未返回数据'});continue;
+          }
+          const sample=parse(raw),fields=latencyFieldNames(raw);
+          if(fields.length)rawLatencyFields=true;
+          if(fields.some(path=>{const key=path.split('.').pop();return LATENCY_SECONDS_KEYS.has(key)||LATENCY_MS_KEYS.has(key);}))rawExplicitLatencyField=true;
+          if(diagnose)sources.push({method:name+(args.length?'(0)':''),available:true,fields,
+            values:latencyValueDetails(raw),latencySeconds:sample.liveLatencySeconds});
           if(sample.bandwidthKbps!=null && data.bandwidthKbps==null){
             data.bandwidthKbps=sample.bandwidthKbps;
             source=name;
@@ -1415,9 +1930,8 @@
           }
           if(source==='none' && (sample.resolution||sample.bufferSeconds!=null))
             source=name;
-          if(data.bandwidthKbps!=null&&data.bufferSeconds!=null&&data.resolution)
-            break;
-        }catch{}
+          // Continue: later APIs may expose latency even when other metrics are complete.
+        }catch{if(diagnose)sources.push({method:name,available:true,error:'调用失败'});}
       }
       // DOM is used only as a fallback, and only while YouTube says its
       // statistics panel is actively enabled. Hidden snapshots can be stale.
@@ -1433,6 +1947,25 @@
         if(!data.resolution) data.resolution=fromPanel.resolution;
         if(fromPanel.liveLatencySeconds!=null)data.liveLatencySeconds=fromPanel.liveLatencySeconds;
       }
+      const liveState=resolvePlaybackState(youtubeWatchLiveState(page.document,player,controls.video,page),statusHint);
+      data.live=liveState.live;data.liveReason=liveState.reason;
+      if(data.live===false){
+        data.liveLatencySeconds=null;data.latencyReason='非直播';data.latencyReasonCode='not-live';getter.status='录像不查询';
+      }else if(data.live==null){
+        data.liveLatencySeconds=null;data.latencyReason='状态未确认';data.latencyReasonCode='media-type-unknown';getter.status='类型未确认';
+      }else {
+        if(data.liveLatencySeconds==null&&getter.supported){
+          try{
+            data.liveLatencySeconds=nativeLatencySeconds({liveLatencySeconds:p.getLiveLatency()});
+            getter.status=data.liveLatencySeconds==null?'未返回有效秒值':'返回有效秒值';
+          }catch{getter.status='调用失败';}
+        }
+        data.latencyReason=data.liveLatencySeconds==null?'未提供':'';
+        data.latencyReasonCode=data.liveLatencySeconds!=null?'available':rawExplicitLatencyField?'latency-value-invalid':rawLatencyFields?'unrecognized-latency-units':
+          availableSourceCount===0&&!getter.supported?'no-latency-api':'latency-field-absent';
+      }
+      if(diagnose)data.latencyDiagnostics={sources,getter,nativePanelVisible:isNativeVisible(p),
+        liveReason:liveState.reason,reasonCode:data.latencyReasonCode};
       if(!data.resolution) {
         // HTMLVideoElement intrinsic dimensions reflect the decoded video
         // frame; label them explicitly rather than inventing optimal resolution.
@@ -1458,12 +1991,21 @@
           event.origin
         );
       };
+      if(message.action==='statsDiagnostics'){
+        respond({ok:true,data:readStats(message.status,true)});return;
+      }
+      if(message.action==='desktopPanelStatus'){
+        respond({ok:true,data:{version:'0.6.24',...desktopBridge.status()}});return;
+      }
+      if(message.action==='desktopPanelConfig'){
+        desktopBridge.configure(event,message);return;
+      }
       if(message.action==='stats') {
         // A YouTube playback change can turn its statistics off again.
         // Re-arm only if this script owns a silent monitoring session.
         if(monitor.active&&monitor.forced&&!monitor.manual&&
            isNativeVisible(player())===false)startMonitor();
-        respond({ok:true,data:readStats()});
+        respond({ok:true,data:readStats(message.status)});
         return;
       }
       if(message.action==='monitorStart') {
@@ -1479,10 +2021,12 @@
         catch(err){respond({ok:false,error:String(err?.message||err).slice(0,120)});}
         return;
       }
-      if(['playbackInfo','playbackRate','qualityMenu','qualityOptions','selectQuality'].includes(message.action)){
+      if(['playbackClock','playbackInfo','playbackRate','qualityMenu','qualityOptions','selectQuality'].includes(message.action)){
         try{
           if(!player())throw Error('YouTube 播放器尚未就绪');
           let info;
+          if(message.action==='playbackClock')info=readFrameClock(
+            page.document,player,controls.video,page,videoId,message.status);
           if(message.action==='playbackInfo')info=controls.snapshot();
           if(message.action==='playbackRate')info=controls.setRate(message.rate);
           if(message.action==='qualityMenu')info=await controls.openQualityMenu();
@@ -1508,7 +2052,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.10', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.24', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -1524,7 +2068,6 @@
     return;
   }
   GM_registerMenuCommand('暂停 Holodex Touch Controls',()=>{set(KEY,false);location.reload();});
-  const coarse=matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>0;
   const isMulti=()=>/^\/multiview(?:\/|$)/.test(location.pathname);
   const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
   const token='hmtc-'+(crypto.randomUUID?.()||String(Date.now())+Math.random());
@@ -1958,7 +2501,7 @@
         rows.push({index,layoutId,videoId,
           title:String(vm.video?.title||vm.video?.channel?.name||videoId).slice(0,140),
           volume:Number.isFinite(Number(vm.volume))?Math.max(0,Math.min(100,Math.round(Number(vm.volume)))):50,
-          muted:!!vm.muted,ready:!!vm.ytPlayer,live:vm.video?.status==='live'
+          muted:!!vm.muted,ready:!!vm.ytPlayer,status:String(vm.video?.status||''),live:vm.video?.status==='live'?true:vm.video?.status==='past'?false:null
         });
       }
       return rows;
@@ -1978,8 +2521,9 @@
         'getVideoLoadedFraction','getPlaybackRate','getVolume','isMuted'];
       const fields=['state','position','duration','fraction','rate','volume','muted'];
       const values=await Promise.allSettled(methods.map(x=>
-        typeof p[x]==='function'?Promise.resolve(p[x]()):null));
-      const data={ready:true,live:vm.video?.status==='live'};
+        Promise.resolve().then(()=>typeof p[x]==='function'?p[x]():null)));
+      const status=String(vm.video?.status||'');
+      const data={ready:true,status,live:status==='live'?true:status==='past'?false:null};
       values.forEach((v,i)=>{if(v.status==='fulfilled'&&v.value!=null)data[fields[i]]=v.value;});
       return data;
     }
@@ -2716,8 +3260,8 @@
     return null;
   }
   function nativeRequest(row,action,timeout=1800,extra={}) {
-    if(!['stats','nativeToggle','monitorStart','monitorStop',
-          'playbackInfo','playbackRate','qualityMenu',
+    if(!['stats','nativeToggle','monitorStart','monitorStop','desktopPanelStatus','statsDiagnostics',
+          'playbackClock','playbackInfo','playbackRate','qualityMenu',
           'qualityOptions','selectQuality'].includes(action))
       return Promise.reject(new Error('不支持的 YouTube 指令'));
     const target=nativeFrame(row);
@@ -2731,7 +3275,7 @@
       nativePending.set(seq,{...target,videoId:row.videoId,action,timer,resolve,reject});
       try{
         target.frame.contentWindow.postMessage(
-          {tag:NATIVE_TAG,seq,videoId:row.videoId,action,...extra},
+          {tag:NATIVE_TAG,seq,videoId:row.videoId,action,status:row.status,...extra},
           target.origin
         );
       }catch(error){
@@ -2741,7 +3285,46 @@
       }
     });
   }
+  function configureDesktopFrame(row){
+    const target=nativeFrame(row);
+    if(!target)return;
+    try{target.frame.contentWindow.postMessage({tag:NATIVE_TAG,seq:++nativeSequence,
+      videoId:row.videoId,action:'desktopPanelConfig',
+      enabled:!touchZonesAllowed()&&desktopMountAllowed()&&isMulti()},target.origin);}catch{}
+
+  }
+  function receiveDesktopFrameMessage(event){
+    const message=event.data;
+    if(message?.tag!==DESKTOP_TAG||!YT_ORIGINS.has(event.origin))return false;
+    if(!['open','move','dismiss','escape','mouse','ready'].includes(message.type)||!isMulti())return true;
+    let matched=null;
+    for(const row of rowMap.values()){
+      if(row.videoId!==message.videoId)continue;
+      const target=nativeFrame(row);
+      if(target&&target.origin===event.origin&&target.frame.contentWindow===event.source){matched={row,...target};break;}
+    }
+    if(!matched)return true;
+    if(message.type==='ready'){configureDesktopFrame(matched.row);return true;}
+    if(message.type==='mouse'){
+      observeMouseInput({pointerType:'mouse'});configureDesktopFrame(matched.row);return true;
+    }
+    if(touchZonesAllowed()||!desktopMountAllowed())return true;
+    if(message.type==='dismiss'||message.type==='escape'){
+      if(settings?.hidden===false)closeSettings();else if(sheet&&!sheet.hidden)closeSheet();
+      return true;
+    }
+    if(typeof message.x!=='number'||typeof message.y!=='number'||
+       !Number.isFinite(message.x)||!Number.isFinite(message.y)||
+       message.x<0||message.x>1||message.y<0||message.y>1)return true;
+    const r=matched.frame.getBoundingClientRect();
+    if(!(r.width>0&&r.height>0))return true;
+    const point={x:r.left+message.x*r.width,y:r.top+message.y*r.height};
+    desktopLastPoint=point;
+    if(message.type==='open'){closeSettings();openSheet(matched.row,point);}
+    return true;
+  }
   window.addEventListener('message',event=>{
+    if(receiveDesktopFrameMessage(event))return;
     if(!YT_ORIGINS.has(event.origin))return;
     const response=event.data;
     if(response?.tag!==NATIVE_TAG)return;
@@ -2812,7 +3395,7 @@
     function armHold(zone,gesture){
       if(!allowsHold())return;
       gesture.timer=setTimeout(()=>{
-        if(zone._gesture!==gesture||gesture.moved||gesture.held||
+        if(!touchZonesAllowed()||zone._gesture!==gesture||gesture.moved||gesture.held||
            gesture.key!==zone.dataset.key||!zone.isConnected)return;
         const target=rowMap.get(gesture.key);
         if(!target)return;
@@ -2923,9 +3506,12 @@
 
         zone.addEventListener('touchcancel',reset,{passive:true});
         zone.addEventListener('contextmenu',e=>{
-          if(allowsHold()){e.preventDefault();e.stopPropagation();}
+          // Only suppress a menu belonging to our active touch/pen hold.
+          if(touchZonesAllowed()&&gesture&&allowsHold()&&
+             (gesture.held||gesture.timer)){e.preventDefault();e.stopPropagation();}
         });
         zone.addEventListener('click',e=>{
+          if(!touchZonesAllowed()||e.button!==0)return;
           e.preventDefault();e.stopPropagation();
           if(side!=='left'||!allowsTap()||Date.now()-zone._lastTap<650)return;
           // Click fallback for devices which synthesize click but not touchend.
@@ -2998,6 +3584,7 @@
     document.body.appendChild(backdrop);
     sheet=document.createElement('section');
     sheet.id='hmtc-sheet';sheet.hidden=true;
+    bindPanelRightClose(sheet,closeSheet);
     sheet.setAttribute('role','dialog');
     sheet.setAttribute('aria-label','YouTube 当前视频控制和详细统计');
     sheet.innerHTML=[
@@ -3005,14 +3592,16 @@
       '<div class="head" data-action="dismissHeader" title="轻点标题收起">',
       '<div class="title" data-field="title">YouTube</div>',
       '<button type="button" data-action="close" aria-label="关闭">✕</button></div>',
+      '<div class="hmtc-live-status" data-hmtc-latency-metric data-kind="unknown">',
+      '<span class="hmtc-media-kind" data-hmtc-media-kind>待确认</span>',
+      '<span data-hmtc-latency-label>视频状态</span><strong data-field="latency" data-hmtc-latency-value>识别中</strong></div>',
       '<div class="net"><div class="sub">连接速度</div>',
       '<div><span class="speed" data-field="speed">—</span><span class="unit">Mbps</span>',
       '<span class="speedFreshness" data-field="speedFreshness"></span></div></div>',
       '<div class="grid">',
-      '<div class="metric"><label>缓冲</label><strong data-field="health">—</strong></div>',
-      '<div class="metric"><label>直播延迟</label><strong data-field="latency">—</strong></div>',
-      '<div class="metric hmtc-playtime-metric"><label data-field="positionLabel">播放时间</label>',
+      '<div class="metric hmtc-playtime-metric"><label data-field="positionLabel" data-hmtc-time-label>播放时间</label>',
       '<strong data-field="position">—</strong></div>',
+      '<div class="metric"><label>缓冲</label><strong data-field="health">—</strong></div>',
       '<div class="metric"><label>分辨率</label><strong data-field="resolution">—</strong></div>',
       '</div></div>',
       '<div class="hmtc-play-controls">',
@@ -3050,7 +3639,7 @@
     sheet.addEventListener('click',async e=>{
       const btn=e.target.closest('button[data-action]');
       if(!btn){
-        if(e.target.closest('[data-action="dismissHeader"]'))closeSheet();
+        if(touchZonesAllowed()&&e.target.closest('[data-action="dismissHeader"]'))closeSheet();
         return;
       }
       const action=btn.dataset.action;
@@ -3113,6 +3702,7 @@
     if(settings?.isConnected)return settings;
     settings=document.createElement('section');
     settings.id='hmtc-settings';settings.hidden=true;
+    bindPanelRightClose(settings,closeSettings);
     settings.setAttribute('role','dialog');
     settings.setAttribute('aria-label','Holodex 触控手势设置');
     settings.innerHTML=[
@@ -3214,6 +3804,7 @@
     settings.querySelector('[data-control="autoRespectPause"]').checked=config.respectPause;
     settings.querySelector('[data-control="autoMute"]').value=config.muteFallback?'mute':'keep';
     settings.hidden=false;
+    presentPanel(settings,sheet&&!sheet.hidden?desktopPanels.get(sheet)?.anchor:undefined);
   }
   function closeSettings(){if(settings)settings.hidden=true;}
 
@@ -3288,9 +3879,9 @@
     }
     field('health',typeof data?.bufferSeconds==='number'
       ? data.bufferSeconds.toFixed(1)+' s':'—');
-    field('resolution',data?.resolution||'—');
-    field('latency',Number.isFinite(data?.liveLatencySeconds)
-      ? data.liveLatencySeconds.toFixed(2)+' s':'—');
+    field('resolution',currentResolution(data?.resolution)||'—');
+    if(typeof data?.live==='boolean')renderMediaKind(sheet,data);
+    renderLatency(sheet,data);
   }
   function updateSheetRate(data){
     if(!sheet||sheet.hidden||!data)return;
@@ -3303,10 +3894,43 @@
   }
 
   function timestamp(n){
-    if(!Number.isFinite(Number(n))||Number(n)<0)return '—';
+    if(n==null||n===''||typeof n==='boolean'||!Number.isFinite(Number(n))||Number(n)<0)return '—';
     n=Math.floor(Number(n));
     return String(Math.floor(n/3600)).padStart(2,'0')+':'+
       String(Math.floor(n%3600/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
+  }
+  function playbackTimeText(v){
+    if(!v?.ready)return '—';
+    const position=timestamp(v.position),duration=timestamp(v.duration);
+    if(position==='—')return '—';
+    if(v.live===true)return position;
+    if(v.live!==false)return Number(v.position)===0&&!(Number(v.duration)>0)?'—':position+' / —';
+    // IFrame API returns 0/0 before media metadata is available. That is not
+    // a verified playback position or a real zero-length video.
+    if(!(Number(v.duration)>0))return '—';
+    return position+' / '+duration;
+  }
+  function mergePlaybackClock(primary,fallback,row){
+    const hint=row?.status||fallback?.status;
+    let state=resolvePlaybackState(primary||{},hint);
+    if(state.live==null)state=resolvePlaybackState(fallback||{},hint);
+    const valid=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0;
+    const duration=valid(primary?.duration)&&primary.duration>0?primary.duration:
+      valid(fallback?.duration)&&fallback.duration>0?fallback.duration:null;
+    const position=valid(primary?.position)?primary.position:valid(fallback?.position)?fallback.position:null;
+    return {...primary,ready:primary?.ready===true||fallback?.ready===true,
+      live:state.live,liveReason:state.reason,duration,position,
+      durationSource:primary?.duration>0?primary.durationSource:duration>0?'holodex-api':''};
+  }
+  async function readMultiviewClock(row){
+    const fallback=rpc('stats',{layoutId:row.layoutId,videoId:row.videoId},2200).then(v=>v,()=>null);
+    let primary=null;
+    try{
+      primary=await nativeRequest(row,'playbackClock',1300);
+      const value=mergePlaybackClock(primary,null,row);
+      if(value.live!=null&&playbackTimeText(value)!=='—'&&(value.live||value.duration>0))return value;
+    }catch{}
+    return mergePlaybackClock(primary,await fallback,row);
   }
   async function stats(){
     if(statsBusy||!active||sheet.hidden)return;
@@ -3317,17 +3941,13 @@
     const stillActive=()=>!!active&&!sheet.hidden&&active.layoutId+':'+active.videoId===key;
     // Do not delay reliable playback time while optional YouTube private stats
     // wait for an inaccessible third-party iframe and eventually time out.
-    const playback=rpc('stats',{
-      layoutId:row.layoutId,videoId:row.videoId
-    },3500).then(v=>{
+    const playback=readMultiviewClock(row).then(v=>{
       if(!stillActive())return;
       // Live must NOT hide time. getDuration() on a live YouTube player can
       // be a sliding DVR window, so don't mislabel it as total stream length.
       field('positionLabel','播放时间');
-      field('position',v.ready
-        ? (v.live?timestamp(v.position):
-          timestamp(v.position)+' / '+timestamp(v.duration))
-        : '尚未就绪');
+      field('position',playbackTimeText(v));
+      renderMediaKind(sheet,v);
     }).catch(error=>{
       if(stillActive())field('position','暂时无法读取');
     });
@@ -3414,14 +4034,20 @@
       if(still())for(const item of grid.querySelectorAll('button'))item.disabled=false;
     }
   }
-  function openSheet(row){
+  function openSheet(row,anchor){
+    if(!desktopMountAllowed())return;
+    if(settings?.hidden===false)closeSettings();
     makeSheet();
     if(active&&(active.layoutId!==row.layoutId||active.videoId!==row.videoId))
       stopNativeCollector();
     active={layoutId:row.layoutId,videoId:row.videoId};
     sheet.hidden=false;
-    if(backdrop)backdrop.hidden=false;
+    const videoFrame=nativeFrame(row)?.frame||
+      document.querySelectorAll('.multiview .mv-cell > .cell-content')[row.index]?.querySelector('.mv-frame');
+    presentPanel(sheet,touchZonesAllowed()?anchor:desktopVideoAnchor(videoFrame));
+    if(backdrop)backdrop.hidden=!touchZonesAllowed();
     field('title',row.title||row.videoId);
+    renderMediaKind(sheet,resolvePlaybackState({},row.status));
     field('note','');
     renderVolume(row);
     renderYouTubeStats(null,'正在读取 YouTube 嵌入播放器…');
@@ -3486,6 +4112,7 @@
     cell.button.style.top=Math.max(0,rect.top+6)+'px';
     cell.button.style.maxWidth=Math.max(28,Math.min(240,rect.width-12))+'px';
     displayCornerHud(cell.button,cell.time,cell.speed);
+
   }
   function hudSpeedValue(cell,kbps){
     const now=Date.now();
@@ -3511,11 +4138,10 @@
           rowMap.has(cell.key)&&isMulti();
         const jobs=[];
         if(wantTime)jobs.push(
-          rpc('stats',{layoutId:row.layoutId,videoId:row.videoId},2200)
+          readMultiviewClock(row)
             .then(v=>{
               if(!stillHere())return;
-              cell.time=!v?.ready?'—':v.live?timestamp(v.position):
-                timestamp(v.position)+' / '+timestamp(v.duration);
+              cell.time=playbackTimeText(v);
             }).catch(()=>{if(stillHere())cell.time='—';})
         );
         if(wantSpeed)jobs.push((async()=>{
@@ -3565,8 +4191,9 @@
         const ongoing=frame?.querySelector('.hmtc-edge--right')?._drag;
         if(ongoing && old){row.volume=old.volume;row.muted=old.muted;}
         rowMap.set(key,row);
-        if(coarse&&get(EDGE_KEY,true))attachEdges(roots[row.index],row);
+        if(touchZonesAllowed()&&get(EDGE_KEY,true))attachEdges(roots[row.index],row);
         attachCornerHud(roots[row.index],row);
+        configureDesktopFrame(row);
         if(active&&active.layoutId+':'+active.videoId===key)renderVolume(row);
       }
       for(const key of rowMap.keys())if(!validKeys.has(key))rowMap.delete(key);
@@ -3578,7 +4205,7 @@
         const frame=root.querySelector('.mv-frame');
         frame?.querySelector('.hmtc-zone')?.remove();
         for(const edge of frame?.querySelectorAll('.hmtc-edge')||[]){
-          if(!get(EDGE_KEY,true)||!validKeys.has(edge.dataset.key)||
+          if(!touchZonesAllowed()||!get(EDGE_KEY,true)||!validKeys.has(edge.dataset.key)||
              !root.querySelector('.hmtc-edge--'+edge.dataset.side)?.isConnected)
             edge.remove();
         }
@@ -3590,11 +4217,69 @@
   function init(){
     if(!document.body)return;
 
-    // PC and mobile both get the autonomous playback engine. Touch-only UI
-    // remains gated to coarse pointers and is never inserted on a mouse PC.
+    // Stats/settings are available on every device; only broad gesture zones
+    // are gated to touch-only input. Hybrid PCs keep the normal mouse target.
+    installDesktopDismiss(()=>{if(settings?.hidden===false)closeSettings();else if(sheet&&!sheet.hidden)closeSheet();});
+    document.addEventListener('contextmenu',event=>{
+      if(!isMulti())return;
+      const frame=event.target?.closest?.('.mv-frame');
+      const point=desktopContextPoint(event,frame);
+      if(!point)return;
+      const roots=[...document.querySelectorAll('.multiview .mv-cell > .cell-content')];
+      const row=[...rowMap.values()].find(r=>roots[r.index]?.querySelector('.mv-frame')===frame);
+      if(!row)return;
+      event.preventDefault();event.stopPropagation();closeSettings();openSheet(row,point);
+    },{capture:true});
     GM_registerMenuCommand('左上角信息：切换时间／速度／隐藏',cycleHudMode);
     setInterval(pollCornerHuds,2200);
     window.addEventListener('pagehide',clearHudCells,{passive:true});
+    setInterval(()=>{
+      if(isMulti()&&!document.hidden)for(const row of rowMap.values())configureDesktopFrame(row);
+    },1800);
+    GM_registerMenuCommand('诊断视频类型／时长／延迟',async()=>{
+      const selected=active&&rowMap.get(active.layoutId+':'+active.videoId);
+      const rows=selected?[selected]:[...rowMap.values()].slice(0,12);
+      if(!rows.length)return alert('请先打开多视图视频。');
+      const reasons={'not-live':'已识别为录像，没有直播延迟','media-type-unknown':'当前直播／录像状态未确认',
+        'no-latency-api':'未开放直播延迟读取接口','latency-field-absent':'可用接口未返回明确的延迟字段',
+        'unrecognized-latency-units':'返回了延迟字段或文字，但单位无法确认','latency-value-invalid':'有明确单位的延迟字段，但值为空、无效或为负数','available':'已读取实际延迟'};
+      const typeReasons={'player-not-live':'播放器明确标记为非直播','past-broadcast':'直播结束标记',
+        'broadcast-details':'正在直播标记','player-live':'播放器明确标记直播','player-is-live':'播放器直播状态接口',
+        'player-live-class':'当前播放器直播界面','visible-player-live-badge':'当前播放器直播徽标',
+        'infinite-media':'直播媒体流','vod-details':'普通点播元数据','holodex-past':'Holodex录像状态',
+        'holodex-live':'Holodex直播状态','historic-live-flag-only':'只有历史直播标记，当前状态未确认',
+        'reported-live-state':'播放器类型返回值','unknown':'缺少判断依据'};
+      const durationSources={'media':'视频媒体','player-api':'播放器接口','video-details':'视频元数据','holodex-api':'Holodex接口'};
+      const reports=await Promise.all(rows.map(async row=>{
+        try{
+          const [clock,data]=await Promise.all([readMultiviewClock(row),nativeRequest(row,'statsDiagnostics',2200)]);
+          const d=data.latencyDiagnostics||{};
+          return [(row.title||row.videoId).slice(0,60),
+            '类型：'+playbackKindLabel(clock)+'；依据：'+(typeReasons[clock.liveReason]||clock.liveReason||'缺少判断依据'),
+            '播放时间：'+playbackTimeText(clock)+'；总时长来源：'+(durationSources[clock.durationSource]||'未读到'),
+            '延迟：'+(data.liveLatencySeconds!=null?data.liveLatencySeconds+' s':data.latencyReason)+'；'+(reasons[d.reasonCode]||'诊断未返回'),
+            'getLiveLatency：'+(d.getter?.supported?d.getter.status:'不存在'),
+            '原版统计：'+(d.nativePanelVisible===true?'开启':d.nativePanelVisible===false?'关闭':'状态不可读'),
+            ...(d.sources||[]).map(x=>x.method+'：'+(!x.available?'不存在':x.error||
+              (x.latencySeconds!=null?'延迟 '+x.latencySeconds+' s':'没有可解析延迟')+(x.fields?.length?'；字段 '+x.fields.join(','):'；无延迟字段'))+
+              (x.values||[]).map(v=>'\n  '+v.field+'：类型 '+v.type+'；原值 '+v.preview).join(''))
+          ].join('\n');
+        }catch(error){return (row.title||row.videoId)+'：'+String(error?.message||error);}
+      }));
+      alert('数据诊断 · v0.6.24\n'+reports.join('\n\n'));
+    });
+    GM_registerMenuCommand('诊断多视图右键面板',async()=>{
+      const rows=[...rowMap.values()];
+      if(!rows.length)return alert('尚未识别多视图视频，请刷新页面后重试。');
+      const reports=await Promise.all(rows.map(async row=>{
+        try{
+          const d=await nativeRequest(row,'desktopPanelStatus',1800);
+          return (row.title||row.videoId).slice(0,36)+'：iframe '+d.version+
+            '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
+        }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
+      }));
+      alert('右键面板诊断 · v0.6.24\n'+reports.join('\n'));
+    });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
     GM_registerMenuCommand('诊断多视图自动播放状态',diagnoseAutoPlay);
@@ -3621,7 +4306,17 @@
       }).catch(error=>alert('关闭设置未完全成功：'+error.message));
     });
 
-    if(coarse){
+    document.addEventListener('fullscreenchange',()=>{
+      for(const row of rowMap.values())configureDesktopFrame(row);
+    });
+    watchTouchZonePolicy(()=>{
+      for(const row of rowMap.values())configureDesktopFrame(row);
+      // Remove immediately even if the asynchronous player refresh is busy.
+      if(!touchZonesAllowed())document.querySelectorAll('.hmtc-edge').forEach(e=>e.remove());
+      if(backdrop)backdrop.hidden=!sheet||sheet.hidden||!touchZonesAllowed();
+      refresh();
+    });
+    {
       makeSheet();
       document.documentElement.classList.toggle('hmtc-debug',!!get(DEBUG_KEY,false));
       GM_registerMenuCommand('启用/禁用透明边缘手势',()=>{
@@ -3637,7 +4332,7 @@
         set(DEBUG_KEY,next);
         document.documentElement.classList.toggle('hmtc-debug',next);
       });
-      GM_registerMenuCommand('选择视频查看统计（备用入口）',()=>{
+      GM_registerMenuCommand('选择视频查看统计（PC／触屏）',()=>{
         const rows=[...rowMap.values()];
         if(!rows.length)return alert('当前没有已识别的 YouTube 视频格子。');
         if(rows.length===1){openSheet(rows[0]);return;}
@@ -3648,8 +4343,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.10 说明',()=>
-      alert('v0.6.10：画质与倍速使用同样的五列按钮网格；点击画质切换，精简分辨率、缓冲和网速标签，保留手势、HUD 和多视图自动播放。'));
+    GM_registerMenuCommand('Touch Controls v0.6.24 说明',()=>
+      alert('v0.6.24：延迟与缓冲使用紧凑标签列，直播标识紧跟延迟数值，所有普通数值与单位统一亮白。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
@@ -3658,7 +4353,10 @@
       const nowMulti=isMulti();
       if(location.href!==last){
         last=location.href;
-        if(!nowMulti){closeSheet();rowMap.clear();clearHudCells();}
+        if(!nowMulti){
+          for(const row of rowMap.values())configureDesktopFrame(row);
+          closeSheet();rowMap.clear();clearHudCells();
+        }
       }
       if(nowMulti){
         if(!installed)installBridge();
@@ -3678,7 +4376,10 @@
       previousMulti=nowMulti;
     },1700);
     document.addEventListener('visibilitychange',()=>{
-      if(!document.hidden){refresh();pollCornerHuds();}
+      if(!document.hidden){
+        for(const row of rowMap.values())configureDesktopFrame(row);
+        refresh();pollCornerHuds();
+      }
       else for(const cell of hudCells.values())hudSessionStop(cell);
       // The player-world agent independently handles return-to-tab autoplay.
     });
