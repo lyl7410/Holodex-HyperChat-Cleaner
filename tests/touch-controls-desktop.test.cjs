@@ -567,3 +567,58 @@ test('watch page latency reader accepts the real payload, handles failing APIs a
   assert.equal(ctx.readPlayerLatency({getStatsForNerds:()=>({live_latency_secs:null})}).liveLatencySeconds,null);
   assert.ok(source.includes('if(currentClock.state.live===true)renderLatency(sheet,readPlayerLatency(p()))'));
 });
+
+// Minimal DOM movement model: verifies node identity and restoration, while
+// real browser checks cover computed typography, wrapping and hit testing.
+function compactPanelFixture(){
+  class Node{
+    constructor(){this.children=[];this.dataset={};this.classList={toggle(){}};}
+    appendChild(node){node.remove();this.children.push(node);node.parentNode=this;return node;}
+    remove(){if(this.parentNode){const a=this.parentNode.children;a.splice(a.indexOf(this),1);this.parentNode=null;}}
+    before(node){node.remove();const a=this.parentNode.children;a.splice(a.indexOf(this),0,node);node.parentNode=this.parentNode;}
+    after(node){node.remove();const a=this.parentNode.children;a.splice(a.indexOf(this)+1,0,node);node.parentNode=this.parentNode;}
+    replaceWith(node){this.before(node);this.remove();}
+    querySelectorAll(){return [];}
+  }
+  const panel=new Node(),head=new Node(),grid=new Node(),ui=statusPanel();
+  const items={latency:new Node(),speed:new Node(),time:new Node(),resolution:new Node(),buffer:new Node()};
+  items.latency.dataset.kind='live';
+  for(const node of [head,items.latency,items.speed,grid])panel.appendChild(node);
+  for(const node of [items.time,items.buffer,items.resolution])grid.appendChild(node);
+  const values={speed:items.speed,position:items.time,resolution:items.resolution,health:items.buffer};
+  panel.querySelector=selector=>{
+    if(selector==='.head')return head;
+    if(selector==='[data-hmtc-latency-metric]')return items.latency;
+    for(const [field,node] of Object.entries(values))if(selector.includes('[data-field="'+field+'"]'))return {closest:()=>node};
+    return ui.panel.querySelector(selector);
+  };
+  return {panel,head,grid,items,ui,document:{createElement:()=>new Node(),createComment:()=>new Node()}};
+}
+function compactContext(fixture){
+  const ctx=vm.createContext({document:fixture.document});
+  vm.runInContext(section('  function prepareDesktopMetrics(','  function desktopPanelReflow(')+stateHelpers,ctx);return ctx;
+}
+test('desktop compaction reuses readings, reflows recordings with no empty row and survives repeated updates',()=>{
+  const f=compactPanelFixture(),ctx=compactContext(f);ctx.prepareDesktopMetrics(f.panel,true);
+  const c=f.panel._hmtcCompact;assert.ok(c);assert.equal(c.rows[0].children[0],f.items.speed);
+  assert.deepEqual(c.rows[0].children,[f.items.speed,f.items.latency]);
+  assert.deepEqual(c.rows[1].children,[f.items.time,f.items.resolution]);
+  assert.deepEqual(c.rows[2].children,[f.items.buffer]);
+  ctx.renderMediaKind(f.panel,{live:false});assert.equal(f.items.latency.hidden,true);
+  assert.deepEqual(c.rows[0].children,[f.items.speed,f.items.buffer]);assert.equal(c.rows[2].hidden,true);
+  assert.equal(f.ui.time.textContent,'录像时间');
+  ctx.renderMediaKind(f.panel,{live:null});assert.equal(c.rows[2].hidden,false);assert.equal(f.ui.label.textContent,'状态');
+  assert.equal(f.ui.value.textContent,'待确认');assert.equal(f.ui.badge.hidden,true);
+  ctx.renderMediaKind(f.panel,{live:true});ctx.renderLatency(f.panel,{liveLatencySeconds:0});
+  assert.equal(f.ui.label.textContent,'延迟');assert.equal(f.ui.value.textContent,'0.00 s');
+  ctx.prepareDesktopMetrics(f.panel,true);assert.equal(f.panel._hmtcCompact,c);
+  assert.equal(c.rows.flatMap(r=>r.children).length,5);
+});
+test('returning to touch restores original DOM order and mobile labels without duplicating or replacing readings',()=>{
+  const f=compactPanelFixture(),ctx=compactContext(f),original=f.panel.children.slice(),grid=f.grid.children.slice();
+  ctx.prepareDesktopMetrics(f.panel,true);ctx.renderMediaKind(f.panel,{live:false});ctx.prepareDesktopMetrics(f.panel,false);
+  assert.equal(f.panel._hmtcCompact,undefined);assert.deepEqual(f.panel.children,original);assert.deepEqual(f.grid.children,grid);
+  assert.equal(f.ui.time.textContent,'录像 · 播放时间');assert.equal(f.ui.badge.hidden,false);
+  ctx.prepareDesktopMetrics(f.panel,true);assert.ok(f.panel._hmtcCompact);
+  ctx.prepareDesktopMetrics(f.panel,false);assert.deepEqual(f.grid.children,grid);
+});

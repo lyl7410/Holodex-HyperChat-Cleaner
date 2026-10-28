@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.20 直播状态与延迟同区
+# Holodex / YouTube Touch Controls — v0.6.21 同行紧凑统计与统一标签
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 PR 测试版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/fix/touch-controls-desktop-v0.6.11/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.20；分支名保留旧编号） · [项目首页](../README.md)
+**[安装／更新 PR 测试版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/fix/touch-controls-desktop-v0.6.11/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.21；分支名保留旧编号） · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,33 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.21：同行紧凑统计，全板标签统一
+
+PC 面板仍为 320 CSS 像素，去掉每个统计项独立的大卡片、边框与内边距，统一放在浅色背景里。每项标签和值同行，标签后间距 4px，行间距 2px，单位紧随数值。
+
+```text
+连接速度 2.35 Mbps     ●直播 延迟 0.00 s
+播放时间 01:20:52      分辨率 1280×720@60
+缓冲 0.1 s
+```
+
+录像隐藏延迟并把缓冲补到第一行；第二组为「录像时间 当前位置／总时长」和分辨率，空间足够时同排，不足时整组自然换行，不截断总时长、不保留空白行。未知类型显示「状态 待确认」，直播缺失延迟显示「延迟 未提供」。标题与直播标识保持分离。
+
+| 内容 | 桌面统一样式 |
+|---|---|
+| 统计、播放速度、画质、手势设置及设置项标签 | 浅蓝 #9EC5E5，11px，字重 600 |
+| 普通数值、音量百分比 | 亮白 #F5FAFF，13px |
+| 单位 | 跟随数值颜色，11px |
+| 有效延迟／直播标识 | 青绿 #81E6D9／珊瑚红 #FF9B9B |
+| 未提供、待确认及错误提示 | 琥珀色 #F2CA7A，保留文字 |
+| 标题／按钮 | 亮白，13px／12px；选中按钮保留青绿色底色 |
+
+普通 YouTube、多视图主面板及桌面设置共享样式变量。桌面重排移动原有数据节点，不复制绑定；触控模式恢复原始节点位置，手机布局、HUD、数据接口、延迟解析和鼠标操作策略不变。
+
+语法检查与 **51 项 Node 回归测试通过**，新增验证直播／录像／未知状态重排、无空白行、重复更新不复制节点，以及桌面切回触控后恢复原顺序。双源本地模拟浏览器验证两种页面、录像总时长、零延迟／未提供／待确认、设置标签的实际计算颜色和字号、按钮选中与禁用状态，以及倍速／画质／音量操作；常规直播统计区约 78px。280px 窄视口下长达 240 小时的总时长完整显示且无横向溢出。模拟数据不是实站测量，真实页面缩放、直播数据及手机实机显示仍需确认。
+
+安装 v0.6.21 后完整刷新 Holodex／YouTube，让内嵌播放器也加载新版本。
 
 ## v0.6.20：带单位延迟与更清楚的状态区
 
