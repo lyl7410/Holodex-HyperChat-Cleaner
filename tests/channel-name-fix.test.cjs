@@ -272,3 +272,42 @@ test('report uses a readonly selectable text area and closes without changing ch
   buttons[0].events.click();assert.equal(text.focused,true);assert.equal(text.selected,true);
   buttons[1].events.click();assert.equal(removed,true);assert.equal(f.chat.currentTab,0);
 });
+
+function progressFixture({broken=true}={}) {
+  const f=fixture();let forced=0,invalidated=0;
+  const chat={$options:{name:'ChatCell'},layoutContent:f.rows,currentVideo:broken?{...f.live}:f.live,
+    $forceUpdate(){forced++;},_computedWatchers:{}};
+  const getters={videoCellId(){return Object.keys(this.layoutContent).find(key=>this.layoutContent[key].video===this.currentVideo);},
+    currentTime(){return this.layoutContent[this.videoCellId].currentTime||0;}};
+  for(const key of Object.keys(getters)){
+    chat._computedWatchers[key]={getter:getters[key],update(){invalidated++;}};
+    Object.defineProperty(chat,key,{get(){return chat._computedWatchers[key].getter.call(chat);}});
+  }
+  f.ctx.chat=chat;
+  vm.runInContext('this.guard=guardChatProgress;this.resolve=resolveChatVideoCell;',f.ctx);
+  return {...f,chat,guard:f.ctx.guard,resolve:f.ctx.resolve,forced:()=>forced,invalidated:()=>invalidated};
+}
+test('progress guard recovers stale video identity and switches same-channel videos by ID',()=>{
+  const f=progressFixture(),before=JSON.stringify(f.rows),refs=[f.live,f.vod,f.live.channel];
+  assert.throws(()=>f.chat.currentTime,/currentTime/);
+  assert.equal(f.guard(f.chat),true);assert.equal(f.chat.videoCellId,'a');assert.equal(f.chat.currentTime,230);
+  f.chat.currentVideo={...f.vod};assert.equal(f.chat.videoCellId,'b');assert.equal(f.chat.currentTime,840);
+  assert.equal(JSON.stringify(f.rows),before);assert.equal(f.rows.a.video,refs[0]);assert.equal(f.rows.b.video,refs[1]);
+  assert.equal(f.live.channel,refs[2]);assert.equal(f.forced(),1);assert.equal(f.invalidated(),2);
+  assert.equal(f.guard(f.chat),false);assert.equal(f.forced(),1);
+});
+test('progress guard prefers native identity, handles removed videos and preserves healthy instances',()=>{
+  const healthy=progressFixture({broken:false});assert.equal(healthy.guard(healthy.chat),false);
+  assert.equal(healthy.forced(),0);
+  const f=progressFixture();f.guard(f.chat);
+  f.rows.duplicate={type:'video',video:{...f.vod},currentTime:42};f.chat.currentVideo=f.rows.duplicate.video;
+  assert.equal(f.chat.videoCellId,'duplicate');assert.equal(f.chat.currentTime,42);
+  f.chat.currentVideo={id:'notinlayout'};assert.equal(f.chat.currentTime,0);
+  f.chat.currentVideo=null;assert.equal(f.chat.currentTime,0);
+});
+test('progress guard skips unsupported or destroyed Vue instances',()=>{
+  for(const change of [c=>c._isDestroyed=true,c=>c.$options.name='Other',c=>delete c._computedWatchers.currentTime,
+    c=>delete c.$forceUpdate]){
+    const f=progressFixture();change(f.chat);assert.equal(f.guard(f.chat),false);assert.equal(f.forced(),0);
+  }
+});

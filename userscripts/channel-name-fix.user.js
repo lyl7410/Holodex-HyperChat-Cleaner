@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Holodex Channel Name Fix
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      2.6.5
+// @version      2.6.6
 // @description  安全补全 Holodex 频道资料与头像，保留视频对象及聊天切换状态。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
@@ -20,7 +20,7 @@
 (() => {
     'use strict';
 
-    const V = '2.6.5';
+    const V = '2.6.6';
     const VIDEO = /^[\w-]{11}$/;
     const CHANNEL = /^UC[\w-]{22}$/;
     const KEY = 'hcnf_video_metadata_v25';
@@ -321,6 +321,60 @@
         }
     }
 
+    // Vuex may expose a stale/cloned active video while layoutContent holds a
+    // different object for the same ID. ChatCell's strict identity lookup then
+    // makes currentTime throw, aborting render before WatchLiveChat can switch.
+    const guardedChats=new WeakSet();
+    function resolveChatVideoCell(chat) {
+        const video=chat.currentVideo,layout=chat.layoutContent||{};
+        if (!video) return undefined;
+        const keys=Object.keys(layout).filter(key=>layout[key]?.type==='video');
+        return keys.find(key=>layout[key].video===video) ??
+            (isVideo(video.id)?keys.find(key=>layout[key].video?.id===video.id):undefined);
+    }
+    function guardChatProgress(chat) {
+        if (!chat || chat._isDestroyed || guardedChats.has(chat) ||
+            chat.$options?.name!=='ChatCell') return false;
+        const watchers=chat._computedWatchers;
+        const cell=watchers?.videoCellId,time=watchers?.currentTime;
+        if (typeof cell?.getter!=='function' || typeof time?.getter!=='function' ||
+            typeof cell.update!=='function' || typeof time.update!=='function' ||
+            typeof chat.$forceUpdate!=='function') return false;
+        let broken=false;
+        try {
+            const key=chat.videoCellId;
+            broken=!!chat.currentVideo && !chat.layoutContent?.[key];
+            void chat.currentTime;
+        } catch { broken=true; }
+        if (!broken) return false;
+        // Patch only this affected Vue 2 instance's two read-only computed
+        // getters. Never replace videos, selection, status, or iframe URLs.
+        const nativeCell=cell.getter,nativeTime=time.getter;
+        cell.getter=function() {
+            try {
+                const key=nativeCell.call(this,this);
+                const row=this.layoutContent?.[key],video=this.currentVideo;
+                if (row?.type==='video' && video && row.video?.id===video.id) return key;
+            } catch {}
+            return resolveChatVideoCell(this);
+        };
+        time.getter=function() {
+            // Establish dependencies even when the native lookup used to throw.
+            const key=this.videoCellId,row=this.layoutContent?.[key];
+            if (!row || !this.currentVideo) return 0;
+            try { return nativeTime.call(this,this); }
+            catch { return typeof row.currentTime==='number'&&Number.isFinite(row.currentTime)?row.currentTime:0; }
+        };
+        guardedChats.add(chat);cell.update();time.update();chat.$forceUpdate();
+        return true;
+    }
+    function guardChatCells() {
+        for (const node of doc.querySelectorAll('.tabbed-chat-select')) {
+            const chat=findVue(node,'ChatCell');
+            if (chat) guardChatProgress(chat);
+        }
+    }
+
     // Official Holodex ChannelImg assumes /statics/channelImg/UC.../50.png exists.
     // For unindexed channels overlay the ACTUAL YouTube channel portrait.
     GM_addStyle(
@@ -612,6 +666,7 @@
     let lastPath='';
     function tick() {
         if (!/^\/multiview(?:\/|$)/.test(location.pathname)) return;
+        guardChatCells();
         const s=store();
         if (!s) return;
         const contents=Object.values(s.state.multiview.layoutContent||{});
