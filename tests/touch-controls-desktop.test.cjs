@@ -4,6 +4,12 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const {test}=require('node:test');
 const source=fs.readFileSync('userscripts/holodex-touch-controls.user.js','utf8');
+test('v0.6.23 compact desktop stats reduce gaps and use standard white for available latency',()=>{
+  assert.match(source,/@version\s+0\.6\.23/);
+  assert.match(source,/\.hmtc-compact-row\{[^}]*gap:1px 4px/);
+  assert.match(source,/\.hmtc-compact-row\+\.hmtc-compact-row\{margin-top:0\}/);
+  assert.match(source,/\.hmtc-compact-stats \[data-state="available"\] strong\{color:var\(--hmtc-value\)!important\}/);
+});
 function section(start,end){return source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));}
 const stateHelpers=section('  function resolvePlaybackState(', '  function youtubeWatchLiveState(');
 const policy=section('  let mouseInputSeen=false;',"  const DESKTOP_TAG=");
