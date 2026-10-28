@@ -602,10 +602,11 @@ test('desktop compaction reuses readings, reflows recordings with no empty row a
   const f=compactPanelFixture(),ctx=compactContext(f);ctx.prepareDesktopMetrics(f.panel,true);
   const c=f.panel._hmtcCompact;assert.ok(c);assert.equal(c.rows[0].children[0],f.items.speed);
   assert.deepEqual(c.rows[0].children,[f.items.speed,f.items.latency]);
-  assert.deepEqual(c.rows[1].children,[f.items.time,f.items.resolution]);
-  assert.deepEqual(c.rows[2].children,[f.items.buffer]);
+  assert.deepEqual(c.rows[1].children,[f.items.time,f.items.buffer]);
+  assert.deepEqual(c.rows[2].children,[f.items.resolution]);
   ctx.renderMediaKind(f.panel,{live:false});assert.equal(f.items.latency.hidden,true);
-  assert.deepEqual(c.rows[0].children,[f.items.speed,f.items.buffer]);assert.equal(c.rows[2].hidden,true);
+  assert.deepEqual(c.rows[0].children,[f.items.speed,f.items.buffer]);
+  assert.deepEqual(c.rows[1].children,[f.items.time]);assert.deepEqual(c.rows[2].children,[f.items.resolution]);
   assert.equal(f.ui.time.textContent,'录像时间');
   ctx.renderMediaKind(f.panel,{live:null});assert.equal(c.rows[2].hidden,false);assert.equal(f.ui.label.textContent,'状态');
   assert.equal(f.ui.value.textContent,'待确认');assert.equal(f.ui.badge.hidden,true);

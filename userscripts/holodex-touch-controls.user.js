@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.21
-// @description  PC 同行紧凑统计，全板标签统一浅蓝、数值亮白；直播延迟青绿，录像自动补位。
+// @version      0.6.22
+// @description  PC 统计标签与数值按固定列对齐；播放时间右侧显示缓冲，分辨率独立一行，直播标识放在延迟之后。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -162,8 +162,8 @@
   function syncDesktopMetrics(panel){
     const compact=panel?._hmtcCompact;if(!compact)return;
     const {items,rows}=compact,vod=items.latency.dataset.kind==='vod';
-    const groups=vod?[[items.speed,items.buffer],[items.time,items.resolution],[]]:
-      [[items.speed,items.latency],[items.time,items.resolution],[items.buffer]];
+    const groups=vod?[[items.speed,items.buffer],[items.time],[items.resolution]]:
+      [[items.speed,items.latency],[items.time,items.buffer],[items.resolution]];
     // Keep the hidden latency attached so querySelector bindings stay valid.
     if(vod)compact.root.appendChild(items.latency);
     groups.forEach((group,i)=>{
@@ -321,16 +321,24 @@
     .hmtc-desktop-panel .setting-summary{color:var(--hmtc-label)!important;font-size:11px!important}
     .hmtc-desktop-panel button:disabled{opacity:.55;cursor:default}
     .hmtc-desktop-panel .hmtc-compact-stats{padding:6px;margin:4px 0;background:#ffffff08;border-radius:6px}
-    .hmtc-desktop-panel .hmtc-compact-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px}
+    .hmtc-desktop-panel .hmtc-compact-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:baseline;gap:2px 10px}
     .hmtc-desktop-panel .hmtc-compact-row+.hmtc-compact-row{margin-top:2px}
     .hmtc-desktop-panel .hmtc-compact-row[hidden],
     .hmtc-desktop-panel .hmtc-compact-stats>[hidden],
     .hmtc-desktop-panel .grid:empty{display:none!important}
     .hmtc-desktop-panel .hmtc-compact-row>:is(.metric,.net,.hmtc-live-status){
-      display:inline-flex!important;align-items:baseline;gap:4px!important;flex:0 1 auto;
+      display:grid!important;grid-template-columns:44px minmax(0,1fr);align-items:baseline;gap:4px!important;
       min-width:0;max-width:100%;min-height:20px;padding:0!important;margin:0!important;
       border:0!important;background:none!important;box-shadow:none!important;border-radius:0!important;line-height:20px}
-    .hmtc-desktop-panel .hmtc-compact-stats :is(label,.sub){display:inline!important;margin:0!important;flex:none}
+    .hmtc-desktop-panel .hmtc-compact-row>:only-child{grid-column:1/-1}
+    .hmtc-desktop-panel .hmtc-compact-row>.hmtc-playtime-metric:not(:only-child){grid-column:auto!important}
+    .hmtc-desktop-panel .hmtc-compact-row>.hmtc-live-status{grid-template-columns:44px minmax(0,1fr) auto}
+    .hmtc-desktop-panel .hmtc-compact-stats :is(label,.sub,[data-hmtc-latency-label]){
+      display:inline!important;margin:0!important;min-width:0;width:44px;order:1}
+    .hmtc-desktop-panel .hmtc-compact-stats .hmtc-live-status strong{order:2}
+    .hmtc-desktop-panel .hmtc-compact-stats .metric>:is(b,strong),
+    .hmtc-desktop-panel .hmtc-compact-stats .net>div:last-child{order:2}
+    .hmtc-desktop-panel .hmtc-compact-stats .hmtc-media-kind{order:3}
     .hmtc-desktop-panel .hmtc-compact-stats .net>div:last-child{display:inline-flex;align-items:baseline;gap:3px;flex-wrap:wrap}
     .hmtc-desktop-panel .hmtc-compact-stats :is(strong,b,.speed){
       color:var(--hmtc-value)!important;font-size:13px!important;line-height:20px!important;
@@ -1984,7 +1992,7 @@
         respond({ok:true,data:readStats(message.status,true)});return;
       }
       if(message.action==='desktopPanelStatus'){
-        respond({ok:true,data:{version:'0.6.21',...desktopBridge.status()}});return;
+        respond({ok:true,data:{version:'0.6.22',...desktopBridge.status()}});return;
       }
       if(message.action==='desktopPanelConfig'){
         desktopBridge.configure(event,message);return;
@@ -2041,7 +2049,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.21', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.22', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -4255,7 +4263,7 @@
           ].join('\n');
         }catch(error){return (row.title||row.videoId)+'：'+String(error?.message||error);}
       }));
-      alert('数据诊断 · v0.6.21\n'+reports.join('\n\n'));
+      alert('数据诊断 · v0.6.22\n'+reports.join('\n\n'));
     });
     GM_registerMenuCommand('诊断多视图右键面板',async()=>{
       const rows=[...rowMap.values()];
@@ -4267,7 +4275,7 @@
             '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
         }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
       }));
-      alert('右键面板诊断 · v0.6.21\n'+reports.join('\n'));
+      alert('右键面板诊断 · v0.6.22\n'+reports.join('\n'));
     });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
@@ -4332,8 +4340,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.21 说明',()=>
-      alert('v0.6.21：统计标签与数值同行，时间与分辨率同排；主面板和桌面设置统一标签颜色字号，录像隐藏延迟并补位。'));
+    GM_registerMenuCommand('Touch Controls v0.6.22 说明',()=>
+      alert('v0.6.22：标签和值按列对齐；时间与缓冲同排、分辨率在下一行，直播标识放在延迟值之后。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();

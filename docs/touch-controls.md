@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.21 同行紧凑统计与统一标签
+# Holodex / YouTube Touch Controls — v0.6.22 固定列对齐
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 PR 测试版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/fix/touch-controls-desktop-v0.6.11/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.21；分支名保留旧编号） · [项目首页](../README.md)
+**[安装／更新 PR 测试版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/fix/touch-controls-desktop-v0.6.11/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.22；分支名保留旧编号） · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,20 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.22：标签和值固定列对齐
+
+PC 统计区从随内容宽度排列改为两列等宽网格，各项标签预留 44 CSS 像素、标签与数值间距 4px，使同列标签及数值的起点分别对齐。缓冲与分辨率交换位置；直播标识显示在延迟值之后，不占用前面的标签列。
+
+```text
+连接速度  2.35 Mbps      延迟  0.00 s  ●直播
+播放时间  01:20:52       缓冲  0.1 s
+分辨率    1280×720@60
+```
+
+录像时隐藏延迟，缓冲补到第一行右列；完整的「录像时间 当前位置／总时长」与分辨率分别显示在后续整行，避免总时长被挤压。保持 v0.6.21 的配色、字号、320px 面板宽度和触控布局恢复策略，数据读取与 iframe 接口不变。
+
+语法检查与 51 项自动测试通过，回归测试同步验证新顺序和触控恢复。双源本地模拟浏览器检查普通 YouTube 与多视图：左列各标签／数值的横坐标一致，延迟与缓冲的标签／数值横坐标一致，直播标识位于延迟值右侧；录像隐藏延迟且总时长完整，未见横向溢出或页面脚本错误。实际站点显示仍需安装后确认。
 
 ## v0.6.21：同行紧凑统计，全板标签统一
 
