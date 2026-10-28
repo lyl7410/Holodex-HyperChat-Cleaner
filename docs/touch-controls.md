@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.24 右列紧凑对齐
+# Holodex / YouTube Touch Controls — v0.6.25 轻量左上角信息
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 PR 测试版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/fix/touch-controls-desktop-v0.6.11/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.24；分支名保留旧编号） · [项目首页](../README.md)
+**[安装／更新 PR 测试版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/feat/lightweight-hud-v0625/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.25；更新后完整刷新页面与 iframe） · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,14 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.25：透明彩色左上角标签
+
+- 普通 YouTube 与 Holodex 多视图统一距视频左上角 2 CSS 像素，透明背景、12px／600 字重、85% 不透明度；悬停只增强文字。时间为浅蓝 #B9DEFF，速度为浅青绿 #A8E6D8，细微黑色文字阴影增强辨识度。
+- HUD 不再出现“上次”文字。速度旁固定预留小圆点位置，琥珀色圆点表示同一视频最近一次读取的缓存数值；悬停显示“最近一次读取，距今 X 秒”。新数据恢复时圆点消失，预留空间保持不变。
+- 真实旧数值最多保留 6 秒，超时自动显示“—”，不因等待下一次读取而延长；切换视频不复用其他视频的数据。时间／速度／同时／隐藏四种模式和详细面板操作保留。
+
+验证：语法检查与 54 项 Node 回归测试通过。本地模拟浏览器检查普通 YouTube、跨源多视图、全屏、明暗与复杂标题背景及 280px 窄视口；实测左上偏移约 2px，缓存圆点出现前后宽度一致，到期自动清空。模拟预览不代表真实播放画面，手机及实站效果仍需安装确认。
 
 ## v0.6.24：修正右列标签空隙与直播标识伸展
 
@@ -723,3 +731,4 @@ Connection Speed 与 Live Latency 并不是 YouTube 官方公开的稳定 IFrame
 已完成 JavaScript 语法检查及独立模拟测试：左右轻点/滑动、双倍区域、不误触、长按 600ms 与移动取消、三种统计触发模式、灵敏度倍率、多指取消、旧视频保护、YouTube 原生速率/缓冲/直播延迟解析及来源校验。
 
 **v0.6.3 恢复的实时连接速度功能仍需真实安卓 Tampermonkey 回归**。此前 v0.5.6 静音回退修复也仍需要实测。已用带浏览器拦截事件的模拟播放器验证：先原生静音、后更新 Vue、延时播放；原本已播放的视频保持不变；即使静音仍被拦截也有限次重试。目前只通过模拟篡改猴 GM 记录、网站存储不可用、延迟异步读写、刷新及跨标签事件的验证。已针对 v0.5.1 的刷新初始 `-1` / `5`、浏览器拦截、错误暂停缓存、播放后误静音其他格子、逐路诊断进行模拟测试；已用模拟播放器验证动态带宽值变化、隐藏式采集的启停与原版统计恢复、标题/画面外部区域快速关闭；不同 Android 浏览器可能限制嵌入播放器音量软件调节，所有跨域原生数据也仍有兼容性限制。
+
