@@ -271,7 +271,7 @@ test('watch HUD forwards cache timestamp and uses the same two-pixel viewport-sa
   let reading,rect={width:100,height:100,left:1150,top:20,right:1250,bottom:120};
   const ctx=vm.createContext({watchHud:null,document:{body:layer},innerWidth:1200,innerHeight:800,
     createCornerHud:()=>button,hudWantsTime:()=>true,hudWantsSpeed:()=>true,
-    readWatchClock:()=>({time:'01:02:03'}),bandwidth:{start(){},read:()=>({available:true,
+    hudPlaybackStarted:()=>true,readWatchClock:()=>({time:'01:02:03',state:{ready:true,playerState:1}}),bandwidth:{start(){},read:()=>({available:true,
       bandwidthKbps:12340,stale:true,sampledAt:10000})},
     hudSpeedReading:(kbps,stale,sampledAt)=>({kbps,stale,sampledAt}),
     displayCornerHud:(b,t,s)=>{reading=s;},clearTimeout(){}});
@@ -279,6 +279,48 @@ test('watch HUD forwards cache timestamp and uses the same two-pixel viewport-sa
   ctx.refreshWatchHud({getBoundingClientRect:()=>rect});
   assert.equal(button.style.left,'1152px');assert.equal(button.style.top,'22px');
   assert.equal(button.style.maxWidth,'46px');assert.equal(reading.sampledAt,10000);assert.equal(reading.stale,true);
+});
+
+test('HUD rejects unstarted thumbnails even with live metadata, duration and a nonzero clock',()=>{
+  const {ctx}=cornerHudContext();
+  for(const playerState of [-1,0,5])assert.equal(ctx.hudPlaybackStarted({ready:true,live:true,
+    position:4085,duration:7674,playerState}),false);
+  for(const playerState of [1,2,3])assert.equal(ctx.hudPlaybackStarted({ready:true,position:0,playerState}),true);
+  assert.equal(ctx.hudPlaybackStarted({ready:false,playerState:1}),false);
+  assert.equal(ctx.hudPlaybackStarted({ready:true,live:true,position:0}),false);
+  assert.equal(ctx.hudPlaybackStarted({ready:true,playing:true,position:0}),true);
+});
+test('ordinary watch HUD hides before playback and skips bandwidth reads until it starts',()=>{
+  const {ctx}=cornerHudContext(),button=ctx.createCornerHud();button.style={};
+  let playerState=5,reads=0;
+  const layer={appendChild(b){b.parentNode=this;}};
+  Object.assign(ctx,{watchHud:null,createCornerHud:()=>button,sheet:null,innerWidth:1200,innerHeight:800,
+    document:{body:layer},hudWantsTime:()=>false,hudWantsSpeed:()=>true,
+    readWatchClock:()=>({time:'01:02:03',state:{ready:true,live:true,playerState,position:3723}}),
+    bandwidth:{start(){},stop(){},read(){reads++;return {available:true,bandwidthKbps:12340};}}});
+  vm.runInContext(section('    function refreshWatchHud(player){','    function refreshSheet(){'),ctx);
+  const player={getBoundingClientRect:()=>({width:400,height:300,left:0,top:0,right:400,bottom:300})};
+  ctx.refreshWatchHud(player);assert.equal(button.hidden,true);assert.equal(reads,0);
+  playerState=1;ctx.refreshWatchHud(player);assert.equal(button.hidden,false);assert.equal(reads,1);
+  playerState=5;ctx.refreshWatchHud(player);assert.equal(button.hidden,true);assert.equal(reads,1);
+});
+test('speed-only multiview polls hidden thumbnails for playback but never reads their bandwidth',async()=>{
+  const f=cornerHudContext(),ctx=f.ctx,button=ctx.createCornerHud(),calls=[];
+  let playerState=5;
+  const row={layoutId:1,videoId:'abcdefghijk'},cell={key:'1:abcdefghijk',videoId:row.videoId,
+    button,viewportVisible:true,playbackActive:false,lastSpeed:null};
+  Object.assign(ctx,{hudCells:new Map([[cell.key,cell]]),rowMap:new Map([[cell.key,row]]),
+    hudBusy:false,installed:true,isMulti:()=>true,playbackTimeText:()=> '01:08:05',
+    readMultiviewClock:async()=>({ready:true,live:true,playerState,position:4085}),
+    nativeFrame:()=>({frame:{contentWindow:{}},origin:'https://www.youtube.com'}),
+    nativeRequest:async(r,action)=>{calls.push(action);return {available:true,bandwidthKbps:12340};},
+    hudSessionStop(){calls.push('stop');}});
+  vm.runInContext(section('  async function pollCornerHuds(){','  function hudModeChanged(){'),ctx);
+  await ctx.pollCornerHuds();assert.equal(button.hidden,true);assert.ok(!calls.includes('stats'));
+  playerState=1;await ctx.pollCornerHuds();assert.equal(button.hidden,false);assert.ok(calls.includes('stats'));
+  assert.equal(cell.speed.text,'12.34 Mbps');assert.ok(cell.lastSpeed);
+  playerState=5;calls.length=0;await ctx.pollCornerHuds();
+  assert.equal(button.hidden,true);assert.equal(cell.lastSpeed,null);assert.ok(!calls.includes('stats'));
 });
 
 const desktopSource=section("  const DESKTOP_TAG=","  const HUD_KEY=");
