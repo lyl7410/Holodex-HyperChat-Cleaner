@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Channel Name Fix
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      2.6.2
-// @description  修复 Holodex 多视图频道名、直播标题、频道ID，以及媒体控制/布局面板头像。
+// @version      2.6.3
+// @description  安全补全 Holodex 频道资料与头像，保留视频对象及聊天切换状态。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 (() => {
     'use strict';
 
-    const V = '2.6.2';
+    const V = '2.6.3';
     const VIDEO = /^[\w-]{11}$/;
     const CHANNEL = /^UC[\w-]{22}$/;
     const KEY = 'hcnf_video_metadata_v25';
@@ -37,7 +37,7 @@
     const AVATAR_MEMORY_LIMIT = 80;
     const pending = new Map(), channelPending = new Map(), failures = new Map();
     const queue = [];
-    let running = 0, storeCache = null, debounce = null;
+    let running = 0, storeCache = null, storeOwner = null, debounce = null;
 
     const isVideo = id => typeof id === 'string' && VIDEO.test(id);
     const isChannel = id => typeof id === 'string' && CHANNEL.test(id);
@@ -151,10 +151,10 @@
     function avatarFor(video) {
         if (!isVideo(video?.id)) return null;
         const metadata = videoCache[video.id] || {};
-        const channelId = isChannel(metadata.channelId) ? metadata.channelId : video.channel?.id;
+        const channelId = isChannel(video.channel?.id) ? video.channel.id : metadata.channelId;
         // Prefer the newest channel-level avatar across multiple streams.
         return (isChannel(channelId) ? imageUrl(avatarByChannel[channelId]?.url) : null) ||
-            imageUrl(metadata.avatar);
+            (!isChannel(metadata.channelId) || metadata.channelId===channelId ? imageUrl(metadata.avatar) : null);
     }
     function saveVideo(id, data) {
         videoCache[id] = { ...data, updated: Date.now() };
@@ -163,7 +163,10 @@
         preloadAvatar(avatarByChannel[data.channelId]?.url || data.avatar);
     }
     function saveChannel(url, data) {
-        channelCache[url] = { ...data, updated: Date.now() };
+        // Channel entries may be shared by live and archived videos. Never
+        // put a per-video title, status, or chat state into that shared record.
+        channelCache[url] = { name:data.name, channelId:data.channelId,
+            avatar:data.avatar, updated: Date.now() };
         GM_setValue(CHANNEL_KEY,channelCache);
         rememberAvatar(data.channelId, data.avatar, channelCache[url].updated);
     }
@@ -273,41 +276,48 @@
         return null;
     }
     function store() {
-        if (storeCache?.state?.multiview?.layoutContent) return storeCache;
+        if (storeCache?.state?.multiview?.layoutContent &&
+            storeOwner?.$store===storeCache && !storeOwner._isDestroyed) return storeCache;
+        storeCache=null;storeOwner=null;
         for (const selector of ['#app','.multiview','.tabbed-chat-select',
             '.layout-preview','.media-controls-list','.mv-cell']) {
             const el=doc.querySelector(selector);
             const vm=el && findVue(el);
-            if (vm?.$store?.state?.multiview?.layoutContent) {
-                storeCache=vm.$store;return storeCache;
+            if (!vm?._isDestroyed && vm?.$store?.state?.multiview?.layoutContent) {
+                storeCache=vm.$store;storeOwner=vm;return storeCache;
             }
         }
         return null;
     }
     function writeStore(s,id,info) {
-        if (!s || !info) return;
+        const owner=storeOwner;
+        // Do not invoke Holodex's bulk setVideoData mutation: it replaces video
+        // objects and marks OTHER incomplete videos noData. A reactive setter
+        // from this store's live Vue component can fill only the allowed fields.
+        if (!s || !isVideo(id) || !info || owner?.$store!==s || owner._isDestroyed ||
+            typeof owner.$set!=='function' || s.strict===true) return;
         const values=Object.values(s.state.multiview.layoutContent||{});
-        const old=values.find(x=>x?.type==='video' && x.video?.id===id)?.video;
-        if (!old) return;
-        const channel={...(old.channel||{})};
-        let changed=false;
-        if (validName(info.name) && channel.name!==info.name) {
-            channel.name=info.name;changed=true;
-        }
-        if (isChannel(info.channelId) && channel.id!==info.channelId) {
-            channel.id=info.channelId;changed=true;
-        }
-        const preference=s.state.settings?.nameProperty;
-        if (preference && preference!=='name' &&
-            !validName(channel[preference]) && validName(info.name)) {
-            channel[preference]=info.name;changed=true;
-        }
-        const title=validTitle(info.title,id) ? info.title : old.title;
-        if (old.title!==title) changed=true;
-        if (changed) {
-            // Preserve status, start time, player flags, and every other video field.
-            try { s.commit('multiview/setVideoData',[{...old,title,channel}]); }
-            catch (e) { console.warn('[Holodex Metadata Fix] Vuex update failed',e); }
+        // Resolve current objects when the request finishes, never write back
+        // the captured snapshot from before a chat switch or native refresh.
+        const videos=new Set(values.filter(x=>x?.type==='video' && x.video?.id===id).map(x=>x.video));
+        for (const video of videos) {
+            const channel=video.channel;
+            if (channel!=null && (typeof channel!=='object' || Array.isArray(channel))) continue;
+            const oldName=channel?.name, updates=[];
+            if (!validName(oldName) && validName(info.name)) updates.push(['name',info.name.trim()]);
+            if (!isChannel(channel?.id) && isChannel(info.channelId)) updates.push(['id',info.channelId]);
+            const preference=s.state.settings?.nameProperty;
+            if (['english_name','native_name'].includes(preference) &&
+                !validName(channel?.[preference]) && validName(info.name)) {
+                updates.push([preference,info.name.trim()]);
+            }
+            const needsTitle=(!validTitle(video.title,id) || video.title===oldName) && validTitle(info.title,id);
+            if (!updates.length && !needsTitle) continue;
+            try {
+                if (updates.length && !channel) owner.$set(video,'channel',{});
+                for (const [key,value] of updates) owner.$set(video.channel,key,value);
+                if (needsTitle && video.title!==info.title.trim()) owner.$set(video,'title',info.title.trim());
+            } catch (e) { console.warn('[Holodex Metadata Fix] Reactive update skipped',e); }
         }
     }
 
@@ -437,22 +447,11 @@
             });
         }
     }
-    function fixNameFallback() {
-        // Used only if Holodex Vue is unavailable in the userscript realm.
-        for (const node of doc.querySelectorAll('.tabbed-chat-select .v-select__selection')) {
-            const id=node.textContent?.trim();
-            const name=isVideo(id)&&(videoCache[id]?.name||legacyName(id));
-            if (!validName(name)) continue;
-            const text=[...node.childNodes].find(n=>n.nodeType===3 && n.nodeValue.trim()===id);
-            if (text) text.nodeValue=name;
-        }
-    }
-
     let lastPath='';
     function tick() {
         if (!/^\/multiview(?:\/|$)/.test(location.pathname)) return;
         const s=store();
-        if (!s) {fixNameFallback();return;}
+        if (!s) return;
         const contents=Object.values(s.state.multiview.layoutContent||{});
         const videos=new Map();
         for (const cell of contents) {
@@ -478,7 +477,7 @@
                 if (data) {writeStore(s,id,data);schedule(120);}
             });
         }
-        fixLayout(s);fixMedia();fixNameFallback();
+        fixLayout(s);fixMedia();
     }
     function schedule(ms=150) {
         if (debounce) return;
