@@ -308,6 +308,25 @@ test('all four HUD corners use a 2px inset for fixed YouTube and local Holodex p
   assert.match(source,/data-control="hudPosition"/);
 });
 
+
+test('right-side HUD time and Mbps share an anchor without a hidden cache-dot gap',()=>{
+  // Regression: opacity/visibility does not remove the trailing 5px dot plus
+  // flex gap. In right corners this shifted the speed text ~16px to the left.
+  const rightRule=/\.hmtc-corner-hud\.hmtc-hud-right \.hmtc-hud-speed\{([^}]*)\}/;
+  const rules=source.match(rightRule);
+  assert.ok(rules,'missing right-side HUD flex rule');
+  assert.match(rules[1],/flex-direction:row-reverse/);
+  assert.match(rules[1],/justify-content:flex-start/);
+  const dot=source.match(/\.hmtc-corner-hud \.hmtc-hud-cache-dot\{([^}]*)(?:'[^\n]*\n[^}]*)?\}/);
+  assert.match(source,/background:#F2CA7A;display:none/);
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-cached \.hmtc-hud-cache-dot\{display:block\}/);
+  assert.doesNotMatch(source,/background:#F2CA7A;visibility:hidden/);
+  assert.ok(source.indexOf("speed.append(value,dot)")>=0,
+    'cache marker must remain after the speed value in DOM order');
+  // Both date/time and speed must be right-aligned even when the indicator is visible.
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right\{text-align:right!important\}/);
+});
+
 test('HUD shortens each sub-hour clock independently and preserves hour boundaries and unknown values',()=>{
   const {ctx}=cornerHudContext(),button=ctx.createCornerHud();
   for(const [input,expected] of [['00:00:00','00:00'],['00:00:59','00:59'],['00:03:34','03:34'],
