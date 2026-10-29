@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.31
-// @description  播放时间和连接速度支持四角自选、保存与实时切换；保留多视图播放器内定位及原有控制。
+// @version      0.6.32
+// @description  四角播放角标自选与自动保存；修复右侧时间/连接速度错位，保留多视图播放器内定位及原有控制。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -596,14 +596,20 @@
     '.hmtc-corner-hud:hover,.hmtc-corner-hud:focus-visible,.hmtc-corner-hud:active{',
     'opacity:1!important}',
     '.hmtc-corner-hud.hmtc-hud-right{text-align:right!important}',
-    '.hmtc-corner-hud.hmtc-hud-right .hmtc-hud-speed{justify-content:flex-end}',
+    // Right-anchored flex rows must start from the RIGHT. Reversing puts the
+    // reading against the same right edge as the time, with any cache marker
+    // placed to its left rather than reserving space on the right.
+    '.hmtc-corner-hud.hmtc-hud-right .hmtc-hud-speed{flex-direction:row-reverse;justify-content:flex-start}',
     '.hmtc-corner-hud .hmtc-hud-line{display:block;color:#FFAA33}',
     '.hmtc-corner-hud .hmtc-hud-time{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
     '.hmtc-corner-hud .hmtc-hud-speed{display:flex;align-items:center;gap:4px;color:#FFAA33}',
     '.hmtc-corner-hud .hmtc-hud-speed-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    // visibility:hidden still occupies flex space (the 16px misalignment).
+    // display:none removes it entirely; cached readings show it to the LEFT
+    // of the number on right-anchored HUDs, keeping the number right-aligned.
     '.hmtc-corner-hud .hmtc-hud-cache-dot{flex:0 0 5px;width:5px;height:5px;border-radius:50%;',
-    'background:#F2CA7A;visibility:hidden}',
-    '.hmtc-corner-hud.hmtc-hud-cached .hmtc-hud-cache-dot{visibility:visible}',
+    'background:#F2CA7A;display:none}',
+    '.hmtc-corner-hud.hmtc-hud-cached .hmtc-hud-cache-dot{display:block}',
     '.hmtc-corner-hud .hmtc-hud-line[hidden],.hmtc-corner-hud .hmtc-hud-off-label[hidden]{display:none!important}',
     '.hmtc-corner-hud.hmtc-hud-off{width:24px!important;min-width:24px!important;',
     'height:20px!important;padding:1px 2px!important;',
@@ -2178,7 +2184,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.31', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.32', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -4545,8 +4551,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.31 说明',()=>
-      alert('v0.6.31：时间／连接速度角标支持左上、右上、左下、右下，位置自动保存。'));
+    GM_registerMenuCommand('Touch Controls v0.6.32 说明',()=>
+      alert('v0.6.32：四角位置可选；修复右侧时间与连接速度右边缘不一致。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
