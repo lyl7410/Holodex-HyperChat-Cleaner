@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.34
-// @description  四角播放角标支持内容自适应尺寸，压缩留白；时间与小号 Mbps 同侧贴齐。
+// @version      0.6.35
+// @description  时间与速度独立紧凑背景，不再出现大黑框留白；四角贴齐和小号 Mbps。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -587,33 +587,38 @@
     'html.hmtc-mouse-input .hmtc-edge,html.hmtc-mouse-input .hmtc-yt-edge,',
     'html.hmtc-mouse-input #hmtc-backdrop,html.hmtc-mouse-input #hmtc-yt-backdrop{',
     'display:none!important;pointer-events:none!important}',
-    // The button must shrink-wrap the longest VISIBLE line. A block-level
-    // button plus a stretching flex row created the empty plaque in v0.6.33.
-    // Explicitly reset common site-wide button minimum widths too.
+    // A shared backdrop can never fit both differently sized lines without
+    // leaving unused space beside the shorter line. Each line gets its OWN
+    // shrink-wrapped dark pill; the common ancestor is fully transparent.
     '.hmtc-corner-hud{position:fixed!important;z-index:2147482700!important;',
     'display:inline-flex!important;flex-direction:column!important;',
-    'align-items:flex-start!important;justify-content:center!important;gap:1px!important;',
-    'box-sizing:border-box!important;width:fit-content!important;min-width:0!important;',
+    'align-items:flex-start!important;justify-content:center!important;gap:2px!important;',
+    'box-sizing:border-box!important;width:max-content!important;min-width:0!important;',
     'min-height:0!important;max-width:240px;',
-    'border:1px solid rgba(255,255,255,.15)!important;border-radius:6px!important;',
-    'padding:3px 5px!important;margin:0!important;',
-    'background:rgba(10,13,20,.73)!important;color:#FFC15A!important;',
+    'border:0!important;border-radius:0!important;padding:0!important;margin:0!important;',
+    'background:transparent!important;color:#FFC15A!important;',
     'font:800 13px/1.2 system-ui,-apple-system,sans-serif!important;',
     'font-variant-numeric:tabular-nums!important;white-space:nowrap!important;',
-    'text-align:left!important;overflow:hidden!important;text-overflow:ellipsis!important;',
-    'box-shadow:0 2px 6px rgba(0,0,0,.30)!important;',
-    'text-shadow:0 1px 2px #000,0 0 2px #000!important;',
-    '-webkit-text-stroke:.12px #000;paint-order:stroke fill;',
-    '-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);',
-    '-webkit-tap-highlight-color:transparent;opacity:.97!important;',
+    'text-align:left!important;overflow:visible!important;',
+    'box-shadow:none!important;text-shadow:none!important;',
+    '-webkit-tap-highlight-color:transparent;opacity:.98!important;',
     'transition:opacity .18s ease!important;',
-    'touch-action:manipulation!important;pointer-events:auto!important;cursor:pointer!important}',
+    // The transparent gap between the two pills is NOT a clickable overlay.
+    'touch-action:manipulation!important;pointer-events:none!important;cursor:pointer!important}',
     '.hmtc-corner-hud:hover,.hmtc-corner-hud:focus-visible,.hmtc-corner-hud:active{',
     'opacity:1!important}',
-    // Both lines retain their own intrinsic width. On the right the column
-    // aligns END, rather than expanding either line to the button width.
     '.hmtc-corner-hud.hmtc-hud-right{align-items:flex-end!important;text-align:right!important}',
-    '.hmtc-corner-hud .hmtc-hud-line{color:#FFC15A!important}',
+    // The time pill and speed pill each hug their own text, so different line
+    // lengths do not create a wide empty rectangle on bright video frames.
+    '.hmtc-corner-hud .hmtc-hud-line{box-sizing:border-box!important;',
+    'background:rgba(10,13,20,.77)!important;',
+    'border:1px solid rgba(255,255,255,.15)!important;',
+    'border-radius:5px!important;padding:2px 4px!important;',
+    'box-shadow:0 1px 4px rgba(0,0,0,.33)!important;',
+    'color:#FFC15A!important;',
+    'text-shadow:0 1px 2px #000,0 0 2px #000!important;',
+    '-webkit-text-stroke:.12px #000;paint-order:stroke fill;',
+    'pointer-events:auto!important;cursor:pointer!important}',
     '.hmtc-corner-hud .hmtc-hud-time{display:block!important;flex:0 0 auto!important;',
     'width:max-content!important;max-width:100%!important;',
     'font-size:13px!important;font-weight:800!important;line-height:1.2!important;',
@@ -630,17 +635,21 @@
     '.hmtc-corner-hud .hmtc-hud-speed-unit{flex:0 0 auto!important;',
     'margin:0!important;font:700 9px/1.2 system-ui,-apple-system,sans-serif!important;',
     'color:#FFC15A!important;white-space:nowrap!important}',
-    // Cached readings have a status dot, but it must not use any row width.
-    '.hmtc-corner-hud .hmtc-hud-cache-dot{position:absolute!important;right:1px;left:auto;',
-    'bottom:1px;width:4px;height:4px;border-radius:50%;',
-    'background:#FFE2A0;display:none!important}',
+    // Cached-reading indicator is absolutely positioned inside the speed
+    // pill, not part of the number+unit flex flow.
+    '.hmtc-corner-hud .hmtc-hud-cache-dot{position:absolute!important;',
+    'right:1px;left:auto;bottom:1px;width:4px;height:4px;border-radius:50%;',
+    'background:#FFE2A0;display:none!important;pointer-events:none!important}',
     '.hmtc-corner-hud.hmtc-hud-right .hmtc-hud-cache-dot{left:1px;right:auto}',
     '.hmtc-corner-hud.hmtc-hud-cached .hmtc-hud-cache-dot{display:block!important}',
     '.hmtc-corner-hud .hmtc-hud-line[hidden],.hmtc-corner-hud .hmtc-hud-speed-unit[hidden],',
     '.hmtc-corner-hud .hmtc-hud-off-label[hidden]{display:none!important}',
     '.hmtc-corner-hud.hmtc-hud-off{width:24px!important;min-width:24px!important;',
-    'height:20px!important;padding:1px 2px!important;',
+    'height:20px!important;padding:0!important;',
     'align-items:center!important;text-align:center!important;opacity:.85!important}',
+    '.hmtc-corner-hud .hmtc-hud-off-label{pointer-events:auto!important;',
+    'display:block;box-sizing:border-box;border-radius:5px;',
+    'padding:1px 3px;background:rgba(10,13,20,.77);color:#FFC15A}',
     '.hmtc-corner-hud.hmtc-hud-off:hover,.hmtc-corner-hud.hmtc-hud-off:focus-visible,',
     '.hmtc-corner-hud.hmtc-hud-off:active{opacity:1!important}',
     '.mv-frame > .hmtc-corner-hud{position:absolute!important;z-index:46!important;',
@@ -2211,7 +2220,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.34', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.35', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -4578,8 +4587,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.34 说明',()=>
-      alert('v0.6.34：角标内容自适应宽度，清理黑底留白；时间和小号 Mbps 同侧贴齐，四角设置保留。'));
+    GM_registerMenuCommand('Touch Controls v0.6.35 说明',()=>
+      alert('v0.6.35：时间和速度改为各自独立的小背景，避免较短一行出现留白；四角对齐保留。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
