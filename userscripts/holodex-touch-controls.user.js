@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.32
-// @description  四角播放角标自选与自动保存；修复右侧时间/连接速度错位，保留多视图播放器内定位及原有控制。
+// @version      0.6.33
+// @description  四角角标自选；清晰半透明背景、紧凑数字/小号Mbps、左右双行精准对齐。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -525,10 +525,11 @@
     const time=line('hmtc-hud-line hmtc-hud-time','—');
     const speed=line('hmtc-hud-line hmtc-hud-speed','');
     const value=line('hmtc-hud-speed-value','—');
+    const unit=line('hmtc-hud-speed-unit','');unit.hidden=true;
     const dot=line('hmtc-hud-cache-dot','');dot.setAttribute('aria-hidden','true');
     const off=line('hmtc-hud-off-label','···');
-    speed.append(value,dot);button.append(time,speed,off);
-    button._hmtcHudParts={time,speed,value,dot,off};
+    speed.append(value,unit,dot);button.append(time,speed,off);
+    button._hmtcHudParts={time,speed,value,unit,dot,off};
     button.addEventListener('click',e=>{
       e.preventDefault();e.stopPropagation();cycleHudMode();
     });
@@ -563,7 +564,13 @@
     button.classList.toggle('hmtc-hud-cached',!!cached);
     parts.time.hidden=mode!=='time'&&mode!=='both';
     parts.speed.hidden=mode!=='speed'&&mode!=='both';parts.off.hidden=mode!=='off';
-    parts.time.textContent=compactHudTime(time);parts.value.textContent=value;
+    parts.time.textContent=compactHudTime(time);
+    // Speed text stays numeric for a full-size tabular reading; its smaller unit
+    // has its own element so the entire row can share the time's right edge.
+    const partsOfSpeed=value.match(/^([\d.,]+)\s+(Mbps)$/i);
+    parts.value.textContent=partsOfSpeed?partsOfSpeed[1]:value;
+    parts.unit.textContent=partsOfSpeed?partsOfSpeed[2]:'';
+    parts.unit.hidden=!partsOfSpeed;
     const cacheNote=cached?'最近一次读取，距今 '+(age/1000).toFixed(1)+' 秒':'';
     button.title='轻点切换：时间 → 连接速度 → 同时 → 隐藏'+(cacheNote?'\n'+cacheNote:'');
     button.setAttribute('aria-label',mode==='off'?'显示播放信息':
@@ -580,37 +587,49 @@
     'html.hmtc-mouse-input .hmtc-edge,html.hmtc-mouse-input .hmtc-yt-edge,',
     'html.hmtc-mouse-input #hmtc-backdrop,html.hmtc-mouse-input #hmtc-yt-backdrop{',
     'display:none!important;pointer-events:none!important}',
+    // A small translucent plaque is more legible over bright VTuber footage
+    // than a fully transparent label. It is non-invasive to the player.
     '.hmtc-corner-hud{position:fixed!important;z-index:2147482700!important;',
-    'display:block!important;box-sizing:border-box!important;max-width:240px;',
-    'border:0!important;border-radius:0!important;',
-    'padding:1px 2px!important;margin:0!important;',
-    'background:transparent!important;color:#FFAA33!important;',
-    'font:700 13px/1.3 system-ui,-apple-system,sans-serif!important;',
-    'font-variant-numeric:tabular-nums!important;white-space:pre-line!important;',
+    'display:block!important;box-sizing:border-box!important;width:max-content!important;max-width:240px;',
+    'border:1px solid rgba(255,255,255,.16)!important;border-radius:7px!important;',
+    'padding:4px 6px!important;margin:0!important;',
+    'background:rgba(10,13,20,.78)!important;color:#FFC15A!important;',
+    'font:800 14px/1.25 system-ui,-apple-system,sans-serif!important;',
+    'font-variant-numeric:tabular-nums!important;white-space:nowrap!important;',
     'text-align:left!important;overflow:hidden!important;text-overflow:ellipsis!important;',
-    'box-shadow:none!important;text-shadow:-.8px 0 #000,.8px 0 #000,0 -.8px #000,0 .8px #000,0 1px 2px #000;',
-    '-webkit-text-stroke:.35px #000;paint-order:stroke fill;',
-    '-webkit-tap-highlight-color:transparent;opacity:.95!important;',
+    'box-shadow:0 2px 7px rgba(0,0,0,.35)!important;',
+    'text-shadow:0 1px 2px #000,0 0 3px #000!important;',
+    '-webkit-text-stroke:.15px #000;paint-order:stroke fill;',
+    '-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);',
+    '-webkit-tap-highlight-color:transparent;opacity:.98!important;',
     'transition:opacity .18s ease!important;',
     'touch-action:manipulation!important;pointer-events:auto!important;cursor:pointer!important}',
     '.hmtc-corner-hud:hover,.hmtc-corner-hud:focus-visible,.hmtc-corner-hud:active{',
     'opacity:1!important}',
     '.hmtc-corner-hud.hmtc-hud-right{text-align:right!important}',
-    // Right-anchored flex rows must start from the RIGHT. Reversing puts the
-    // reading against the same right edge as the time, with any cache marker
-    // placed to its left rather than reserving space on the right.
-    '.hmtc-corner-hud.hmtc-hud-right .hmtc-hud-speed{flex-direction:row-reverse;justify-content:flex-start}',
-    '.hmtc-corner-hud .hmtc-hud-line{display:block;color:#FFAA33}',
-    '.hmtc-corner-hud .hmtc-hud-time{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
-    '.hmtc-corner-hud .hmtc-hud-speed{display:flex;align-items:center;gap:4px;color:#FFAA33}',
-    '.hmtc-corner-hud .hmtc-hud-speed-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-    // visibility:hidden still occupies flex space (the 16px misalignment).
-    // display:none removes it entirely; cached readings show it to the LEFT
-    // of the number on right-anchored HUDs, keeping the number right-aligned.
-    '.hmtc-corner-hud .hmtc-hud-cache-dot{flex:0 0 5px;width:5px;height:5px;border-radius:50%;',
-    'background:#F2CA7A;display:none}',
-    '.hmtc-corner-hud.hmtc-hud-cached .hmtc-hud-cache-dot{display:block}',
-    '.hmtc-corner-hud .hmtc-hud-line[hidden],.hmtc-corner-hud .hmtc-hud-off-label[hidden]{display:none!important}',
+    '.hmtc-corner-hud .hmtc-hud-line{display:block!important;color:#FFC15A!important}',
+    '.hmtc-corner-hud .hmtc-hud-time{font-size:13px!important;font-weight:800!important;',
+    'overflow:hidden!important;white-space:nowrap!important;text-overflow:ellipsis!important}',
+    // A normal, right-justified row keeps the smaller Mbps label at the same
+    // rightmost edge as the time; row-reverse accidentally reverses its order.
+    '.hmtc-corner-hud .hmtc-hud-speed{display:flex!important;align-items:baseline!important;',
+    'justify-content:flex-start!important;gap:0!important;white-space:nowrap!important}',
+    '.hmtc-corner-hud.hmtc-hud-right .hmtc-hud-speed{justify-content:flex-end!important}',
+    '.hmtc-corner-hud .hmtc-hud-speed-value{flex:0 1 auto!important;min-width:0;',
+    'font-size:14px!important;font-weight:800!important;line-height:1.25!important;',
+    'overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}',
+    '.hmtc-corner-hud .hmtc-hud-speed-unit{flex:0 0 auto!important;',
+    'margin-left:3px!important;font:700 10px/1.2 system-ui,-apple-system,sans-serif!important;',
+    'color:#FFC15A!important;white-space:nowrap!important}',
+    // The stale-reading dot must not consume layout width or shift the number.
+    // Anchor it to the far side of the plaque, away from the text baseline.
+    '.hmtc-corner-hud .hmtc-hud-cache-dot{position:absolute!important;right:1px;left:auto;',
+    'bottom:1px;width:4px;height:4px;border-radius:50%;',
+    'background:#FFE2A0;display:none!important}',
+    '.hmtc-corner-hud.hmtc-hud-right .hmtc-hud-cache-dot{left:1px;right:auto}',
+    '.hmtc-corner-hud.hmtc-hud-cached .hmtc-hud-cache-dot{display:block!important}',
+    '.hmtc-corner-hud .hmtc-hud-line[hidden],.hmtc-corner-hud .hmtc-hud-speed-unit[hidden],',
+    '.hmtc-corner-hud .hmtc-hud-off-label[hidden]{display:none!important}',
     '.hmtc-corner-hud.hmtc-hud-off{width:24px!important;min-width:24px!important;',
     'height:20px!important;padding:1px 2px!important;',
     'text-align:center!important;opacity:.85!important}',
@@ -2184,7 +2203,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.32', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.33', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -4551,8 +4570,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.32 说明',()=>
-      alert('v0.6.32：四角位置可选；修复右侧时间与连接速度右边缘不一致。'));
+    GM_registerMenuCommand('Touch Controls v0.6.33 说明',()=>
+      alert('v0.6.33：改用半透明深色角标，连接速度 Mbps 缩小，时间和速度严格同侧对齐。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
