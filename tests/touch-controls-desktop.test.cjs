@@ -309,25 +309,26 @@ test('all four HUD corners use a 2px inset for fixed YouTube and local Holodex p
 });
 
 
-test('time and smaller Mbps unit share the same side edge on all corners',()=>{
-  // v0.6.33 renders the number and unit separately, so the unit is smaller,
-  // yet the full speed row is aligned to the same side as the time.
-  assert.match(source,/speed\.append\(value,unit,dot\)/);
-  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right\{text-align:right!important\}/);
-  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right \.hmtc-hud-speed\{justify-content:flex-end!important\}/);
-  assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-speed\{display:flex!important;align-items:baseline!important/);
+test('v0.6.34 HUD shrink-wraps visible content rather than stretching a flex row',()=>{
+  assert.match(source,/display:inline-flex!important;flex-direction:column!important/);
+  assert.match(source,/align-items:flex-start!important;justify-content:center!important;gap:1px!important/);
+  assert.match(source,/width:fit-content!important;min-width:0!important/);
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right\{align-items:flex-end!important;text-align:right!important\}/);
+  assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-time\{display:block!important;flex:0 0 auto!important/);
+  assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-speed\{display:inline-flex!important;flex:0 1 auto!important/);
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right \.hmtc-hud-speed\{align-self:flex-end!important/);
   assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-speed-unit\{flex:0 0 auto!important/);
-  assert.match(source,/font:700 10px\/1\.2 system-ui/);
+  assert.match(source,/font:700 9px\/1\.2 system-ui/);
+  assert.match(source,/speed\.append\(value,unit,dot\)/);
   assert.doesNotMatch(source,/flex-direction:row-reverse/);
   assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-cached \.hmtc-hud-cache-dot\{display:block!important\}/);
   assert.match(source,/position:absolute!important;right:1px;left:auto/);
-  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right \.hmtc-hud-cache-dot\{left:1px;right:auto\}/);
 });
-test('readable compact background does not add a full-screen hit target',()=>{
-  assert.match(source,/background:rgba\(10,13,20,\.78\)!important/);
-  assert.match(source,/border:1px solid rgba\(255,255,255,\.16\)!important/);
+test('compact translucent background stays scoped to each player',()=>{
+  assert.match(source,/background:rgba\(10,13,20,\.73\)!important/);
+  assert.match(source,/border:1px solid rgba\(255,255,255,\.15\)!important/);
   assert.match(source,/backdrop-filter:blur\(3px\)/);
-  assert.match(source,/width:max-content!important/);
+  assert.match(source,/padding:3px 5px!important/);
   assert.match(source,/\.mv-frame > \.hmtc-corner-hud\{position:absolute!important;z-index:46!important/);
 });
 test('HUD shortens each sub-hour clock independently and preserves hour boundaries and unknown values',()=>{
