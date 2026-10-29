@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.33
-// @description  四角角标自选；清晰半透明背景、紧凑数字/小号Mbps、左右双行精准对齐。
+// @version      0.6.34
+// @description  四角播放角标支持内容自适应尺寸，压缩留白；时间与小号 Mbps 同侧贴齐。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -587,42 +587,50 @@
     'html.hmtc-mouse-input .hmtc-edge,html.hmtc-mouse-input .hmtc-yt-edge,',
     'html.hmtc-mouse-input #hmtc-backdrop,html.hmtc-mouse-input #hmtc-yt-backdrop{',
     'display:none!important;pointer-events:none!important}',
-    // A small translucent plaque is more legible over bright VTuber footage
-    // than a fully transparent label. It is non-invasive to the player.
+    // The button must shrink-wrap the longest VISIBLE line. A block-level
+    // button plus a stretching flex row created the empty plaque in v0.6.33.
+    // Explicitly reset common site-wide button minimum widths too.
     '.hmtc-corner-hud{position:fixed!important;z-index:2147482700!important;',
-    'display:block!important;box-sizing:border-box!important;width:max-content!important;max-width:240px;',
-    'border:1px solid rgba(255,255,255,.16)!important;border-radius:7px!important;',
-    'padding:4px 6px!important;margin:0!important;',
-    'background:rgba(10,13,20,.78)!important;color:#FFC15A!important;',
-    'font:800 14px/1.25 system-ui,-apple-system,sans-serif!important;',
+    'display:inline-flex!important;flex-direction:column!important;',
+    'align-items:flex-start!important;justify-content:center!important;gap:1px!important;',
+    'box-sizing:border-box!important;width:fit-content!important;min-width:0!important;',
+    'min-height:0!important;max-width:240px;',
+    'border:1px solid rgba(255,255,255,.15)!important;border-radius:6px!important;',
+    'padding:3px 5px!important;margin:0!important;',
+    'background:rgba(10,13,20,.73)!important;color:#FFC15A!important;',
+    'font:800 13px/1.2 system-ui,-apple-system,sans-serif!important;',
     'font-variant-numeric:tabular-nums!important;white-space:nowrap!important;',
     'text-align:left!important;overflow:hidden!important;text-overflow:ellipsis!important;',
-    'box-shadow:0 2px 7px rgba(0,0,0,.35)!important;',
-    'text-shadow:0 1px 2px #000,0 0 3px #000!important;',
-    '-webkit-text-stroke:.15px #000;paint-order:stroke fill;',
+    'box-shadow:0 2px 6px rgba(0,0,0,.30)!important;',
+    'text-shadow:0 1px 2px #000,0 0 2px #000!important;',
+    '-webkit-text-stroke:.12px #000;paint-order:stroke fill;',
     '-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);',
-    '-webkit-tap-highlight-color:transparent;opacity:.98!important;',
+    '-webkit-tap-highlight-color:transparent;opacity:.97!important;',
     'transition:opacity .18s ease!important;',
     'touch-action:manipulation!important;pointer-events:auto!important;cursor:pointer!important}',
     '.hmtc-corner-hud:hover,.hmtc-corner-hud:focus-visible,.hmtc-corner-hud:active{',
     'opacity:1!important}',
-    '.hmtc-corner-hud.hmtc-hud-right{text-align:right!important}',
-    '.hmtc-corner-hud .hmtc-hud-line{display:block!important;color:#FFC15A!important}',
-    '.hmtc-corner-hud .hmtc-hud-time{font-size:13px!important;font-weight:800!important;',
+    // Both lines retain their own intrinsic width. On the right the column
+    // aligns END, rather than expanding either line to the button width.
+    '.hmtc-corner-hud.hmtc-hud-right{align-items:flex-end!important;text-align:right!important}',
+    '.hmtc-corner-hud .hmtc-hud-line{color:#FFC15A!important}',
+    '.hmtc-corner-hud .hmtc-hud-time{display:block!important;flex:0 0 auto!important;',
+    'width:max-content!important;max-width:100%!important;',
+    'font-size:13px!important;font-weight:800!important;line-height:1.2!important;',
     'overflow:hidden!important;white-space:nowrap!important;text-overflow:ellipsis!important}',
-    // A normal, right-justified row keeps the smaller Mbps label at the same
-    // rightmost edge as the time; row-reverse accidentally reverses its order.
-    '.hmtc-corner-hud .hmtc-hud-speed{display:flex!important;align-items:baseline!important;',
-    'justify-content:flex-start!important;gap:0!important;white-space:nowrap!important}',
-    '.hmtc-corner-hud.hmtc-hud-right .hmtc-hud-speed{justify-content:flex-end!important}',
+    '.hmtc-corner-hud .hmtc-hud-speed{display:inline-flex!important;flex:0 1 auto!important;',
+    'width:max-content!important;max-width:100%!important;',
+    'align-items:baseline!important;justify-content:flex-start!important;',
+    'gap:2px!important;white-space:nowrap!important}',
+    '.hmtc-corner-hud.hmtc-hud-right .hmtc-hud-speed{align-self:flex-end!important;',
+    'justify-content:flex-end!important}',
     '.hmtc-corner-hud .hmtc-hud-speed-value{flex:0 1 auto!important;min-width:0;',
-    'font-size:14px!important;font-weight:800!important;line-height:1.25!important;',
+    'font-size:13px!important;font-weight:800!important;line-height:1.2!important;',
     'overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}',
     '.hmtc-corner-hud .hmtc-hud-speed-unit{flex:0 0 auto!important;',
-    'margin-left:3px!important;font:700 10px/1.2 system-ui,-apple-system,sans-serif!important;',
+    'margin:0!important;font:700 9px/1.2 system-ui,-apple-system,sans-serif!important;',
     'color:#FFC15A!important;white-space:nowrap!important}',
-    // The stale-reading dot must not consume layout width or shift the number.
-    // Anchor it to the far side of the plaque, away from the text baseline.
+    // Cached readings have a status dot, but it must not use any row width.
     '.hmtc-corner-hud .hmtc-hud-cache-dot{position:absolute!important;right:1px;left:auto;',
     'bottom:1px;width:4px;height:4px;border-radius:50%;',
     'background:#FFE2A0;display:none!important}',
@@ -632,7 +640,7 @@
     '.hmtc-corner-hud .hmtc-hud-off-label[hidden]{display:none!important}',
     '.hmtc-corner-hud.hmtc-hud-off{width:24px!important;min-width:24px!important;',
     'height:20px!important;padding:1px 2px!important;',
-    'text-align:center!important;opacity:.85!important}',
+    'align-items:center!important;text-align:center!important;opacity:.85!important}',
     '.hmtc-corner-hud.hmtc-hud-off:hover,.hmtc-corner-hud.hmtc-hud-off:focus-visible,',
     '.hmtc-corner-hud.hmtc-hud-off:active{opacity:1!important}',
     '.mv-frame > .hmtc-corner-hud{position:absolute!important;z-index:46!important;',
@@ -2203,7 +2211,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.33', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.34', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -4570,8 +4578,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.33 说明',()=>
-      alert('v0.6.33：改用半透明深色角标，连接速度 Mbps 缩小，时间和速度严格同侧对齐。'));
+    GM_registerMenuCommand('Touch Controls v0.6.34 说明',()=>
+      alert('v0.6.34：角标内容自适应宽度，清理黑底留白；时间和小号 Mbps 同侧贴齐，四角设置保留。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
