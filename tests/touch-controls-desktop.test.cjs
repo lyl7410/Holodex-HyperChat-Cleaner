@@ -270,6 +270,53 @@ test('HUD position setting persists and rejects invalid values',()=>{
   assert.equal(ctx.hudPosition(),'top-left');
 });
 
+test('HUD size defaults to 100%, persists, clamps and dispatches live updates',()=>{
+  const saved=new Map(),events=[],sizeInputs=[{value:''},{value:''}],sizeLabels=[{textContent:''},{textContent:''}];
+  const ctx=vm.createContext({innerWidth:1200,innerHeight:800,Event,
+    document:{dispatchEvent:event=>events.push(event.type),querySelectorAll:sel=>
+      sel.includes('data-control')?sizeInputs:sizeLabels},
+    GM_getValue:(k,def)=>saved.has(k)?saved.get(k):def,
+    GM_setValue:(k,v)=>saved.set(k,v),prompt:()=>null,alert(){}});
+  vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES='),ctx);
+  assert.equal(ctx.hudSize(),100);
+  for(const [request,expected] of [[70,70],[80,80],[100,100],[130,130],[180,180],[220,180],[40,70]]){
+    assert.equal(ctx.setHudSize(request),true);
+    assert.equal(ctx.hudSize(),expected);
+    assert.ok(sizeInputs.every(x=>x.value===String(expected)));
+    assert.ok(sizeLabels.every(x=>x.textContent===expected+'%'));
+  }
+  assert.equal(ctx.setHudSize('invalid'),false);
+  saved.set('hmtc_corner_hud_size_v1',999);
+  assert.equal(ctx.hudSize(),100);
+  assert.equal(events.length,7);
+  assert.ok(events.every(e=>e==='hmtc:corner-hud-size'));
+});
+test('HUD size uses proportional CSS variables and keeps all four corners',()=>{
+  const saved=new Map(),attrs={},ctx=vm.createContext({
+    GM_getValue:(k,def)=>saved.get(k)??def,
+    GM_setValue:(k,v)=>saved.set(k,v),
+    document:{dispatchEvent(){},querySelectorAll:()=>[]},
+    Event,prompt:()=>null,alert(){},innerWidth:1200,innerHeight:800});
+  vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES='),ctx);
+  const button={style:{setProperty(k,v){attrs[k]=v;}}};
+  for(const [size,scale] of [[70,'0.7'],[100,'1'],[130,'1.3'],[180,'1.8']]){
+    assert.equal(ctx.setHudSize(size),true);
+    ctx.applyHudSize(button);
+    assert.equal(attrs['--hmtc-hud-scale'],scale);
+  }
+  for(const text of [
+    'font:800 calc(13px * var(--hmtc-hud-scale,1))/1.2',
+    'font-size:calc(13px * var(--hmtc-hud-scale,1))!important;',
+    'font-size:calc(9px * var(--hmtc-hud-scale,1))!important;',
+    'padding:calc(2px * var(--hmtc-hud-scale,1)) calc(4px * var(--hmtc-hud-scale,1))!important;',
+    'gap:calc(2px * var(--hmtc-hud-scale,1))!important;',
+    'hmtc:corner-hud-size', 'data-control="hudSize"', 'data-id="hudSize"',
+    'YouTube：调节播放信息大小', '播放信息：调整显示大小'
+  ])assert.ok(source.includes(text),'missing '+text);
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right\{align-items:flex-end!important;text-align:right!important\}/);
+  assert.match(source,/\.mv-frame > \.hmtc-corner-hud\{position:absolute!important;z-index:46!important/);
+});
+
 test('all four HUD corners use a 2px inset for fixed YouTube and local Holodex players',()=>{
   const store=new Map(),ctx=vm.createContext({innerWidth:1200,innerHeight:800,
     document:{dispatchEvent(){}},Event,
@@ -311,14 +358,14 @@ test('all four HUD corners use a 2px inset for fixed YouTube and local Holodex p
 
 test('v0.6.35 HUD gives the time and speed independent snug backplates',()=>{
   assert.match(source,/display:inline-flex!important;flex-direction:column!important/);
-  assert.match(source,/align-items:flex-start!important;justify-content:center!important;gap:2px!important/);
+  assert.ok(source.includes('gap:calc(2px * var(--hmtc-hud-scale,1))!important;'));
   assert.match(source,/width:max-content!important;min-width:0!important/);
   assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right\{align-items:flex-end!important;text-align:right!important\}/);
   assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-time\{display:block!important;flex:0 0 auto!important/);
   assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-speed\{display:inline-flex!important;flex:0 1 auto!important/);
   assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right \.hmtc-hud-speed\{align-self:flex-end!important/);
   assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-speed-unit\{flex:0 0 auto!important/);
-  assert.match(source,/font:700 9px\/1\.2 system-ui/);
+  assert.ok(source.includes('font-size:calc(9px * var(--hmtc-hud-scale,1))!important;'));
   assert.match(source,/speed\.append\(value,unit,dot\)/);
   assert.doesNotMatch(source,/flex-direction:row-reverse/);
   assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-cached \.hmtc-hud-cache-dot\{display:block!important\}/);
@@ -330,7 +377,7 @@ test('black background exists only on independently fitted time and speed rows',
   assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-line\{box-sizing:border-box!important/);
   assert.match(source,/background:rgba\(10,13,20,\.77\)!important/);
   assert.match(source,/border:1px solid rgba\(255,255,255,\.15\)!important/);
-  assert.match(source,/border-radius:5px!important;padding:2px 4px!important/);
+  assert.ok(source.includes('padding:calc(2px * var(--hmtc-hud-scale,1)) calc(4px * var(--hmtc-hud-scale,1))!important;'));
   assert.match(source,/pointer-events:none!important;cursor:pointer!important/);
   assert.match(source,/pointer-events:auto!important;cursor:pointer!important/);
   assert.match(source,/\.mv-frame > \.hmtc-corner-hud\{position:absolute!important;z-index:46!important/);
