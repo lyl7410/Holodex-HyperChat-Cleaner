@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.30
-// @description  修复 Holodex 多视图统计角标覆盖收藏夹与其他界面；角标仅限播放器内，保留原生速度、触控及播放控制。
+// @version      0.6.31
+// @description  播放时间和连接速度支持四角自选、保存与实时切换；保留多视图播放器内定位及原有控制。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -458,6 +458,50 @@
     },{capture:true});
   }
   const HUD_KEY='hmtc_corner_hud_mode_v1';
+  const HUD_POSITION_KEY='hmtc_corner_hud_position_v1';
+  const HUD_POSITIONS=[
+    ['top-left','左上角'],['top-right','右上角'],
+    ['bottom-left','左下角'],['bottom-right','右下角']
+  ];
+  const hudPosition=()=>{
+    const value=GM_getValue(HUD_POSITION_KEY,'top-left');
+    return HUD_POSITIONS.some(([id])=>id===value)?value:'top-left';
+  };
+  function setHudPosition(value){
+    if(!HUD_POSITIONS.some(([id])=>id===value))return false;
+    GM_setValue(HUD_POSITION_KEY,value);
+    document.dispatchEvent(new Event('hmtc:corner-hud-position'));
+    return true;
+  }
+  function chooseHudPosition(){
+    const choices=HUD_POSITIONS.map(([id,label],i)=>
+      (i+1)+'. '+label+(hudPosition()===id?'（当前）':'')).join('\n');
+    const selected=prompt('选择播放时间／连接速度显示位置：\n'+choices,
+      String(HUD_POSITIONS.findIndex(([id])=>id===hudPosition())+1));
+    if(selected===null)return;
+    const choice=HUD_POSITIONS[Number(selected)-1];
+    if(choice)setHudPosition(choice[0]);
+    else alert('请输入 1 至 4 之间的序号');
+  }
+  // The same saved position is used by YouTube and Holodex, while each
+  // player retains its own correct fixed / player-local positioning.
+  function positionCornerHud(button,rect,playerLocal=false){
+    if(!button||!rect)return;
+    const corner=hudPosition();
+    const right=corner.endsWith('right'),bottom=corner.startsWith('bottom');
+    const pad=2;
+    const left=playerLocal?pad:Math.max(0,rect.left+pad);
+    const rightInset=playerLocal?pad:Math.max(0,innerWidth-Math.min(innerWidth,rect.right-pad));
+    const top=playerLocal?pad:Math.max(0,rect.top+pad);
+    const bottomInset=playerLocal?pad:Math.max(0,innerHeight-Math.min(innerHeight,rect.bottom-pad));
+    const width=playerLocal?rect.width:Math.min(innerWidth,rect.right)-Math.max(0,rect.left);
+    button.style.left=right?'auto':left+'px';
+    button.style.right=right?rightInset+'px':'auto';
+    button.style.top=bottom?'auto':top+'px';
+    button.style.bottom=bottom?bottomInset+'px':'auto';
+    button.style.maxWidth=Math.max(1,Math.min(240,width-4))+'px';
+    button.classList.toggle('hmtc-hud-right',right);
+  }
   const HUD_MODES=['time','speed','both','off'];
   const hudMode=()=>{
     const value=GM_getValue(HUD_KEY,'time');
@@ -474,7 +518,7 @@
     const button=document.createElement('button');
     button.type='button';
     button.className='hmtc-corner-hud';
-    button.setAttribute('aria-label','切换视频左上角信息');
+    button.setAttribute('aria-label','切换视频播放信息');
     const line=(name,text)=>{
       const span=document.createElement('span');span.className=name;span.textContent=text;return span;
     };
@@ -522,8 +566,8 @@
     parts.time.textContent=compactHudTime(time);parts.value.textContent=value;
     const cacheNote=cached?'最近一次读取，距今 '+(age/1000).toFixed(1)+' 秒':'';
     button.title='轻点切换：时间 → 连接速度 → 同时 → 隐藏'+(cacheNote?'\n'+cacheNote:'');
-    button.setAttribute('aria-label',mode==='off'?'显示左上角信息':
-      '切换左上角信息（目前'+({time:'播放时间',speed:'连接速度',both:'两项'}[mode])+'）'+
+    button.setAttribute('aria-label',mode==='off'?'显示播放信息':
+      '切换播放信息（目前'+({time:'播放时间',speed:'连接速度',both:'两项'}[mode])+'）'+
       ((mode==='speed'||mode==='both')?'，连接速度 '+value:'')+(cacheNote?'，'+cacheNote:''));
     // A pending iframe request must not keep an old reading visible beyond its lease.
     if(cached&&button.isConnected)button._hmtcHudTimer=setTimeout(
@@ -551,6 +595,8 @@
     'touch-action:manipulation!important;pointer-events:auto!important;cursor:pointer!important}',
     '.hmtc-corner-hud:hover,.hmtc-corner-hud:focus-visible,.hmtc-corner-hud:active{',
     'opacity:1!important}',
+    '.hmtc-corner-hud.hmtc-hud-right{text-align:right!important}',
+    '.hmtc-corner-hud.hmtc-hud-right .hmtc-hud-speed{justify-content:flex-end}',
     '.hmtc-corner-hud .hmtc-hud-line{display:block;color:#FFAA33}',
     '.hmtc-corner-hud .hmtc-hud-time{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
     '.hmtc-corner-hud .hmtc-hud-speed{display:flex;align-items:center;gap:4px;color:#FFAA33}',
@@ -1249,9 +1295,7 @@
         if(!sheet||sheet.hidden)bandwidth.stop();
         return;
       }
-      watchHud.style.left=Math.max(0,rect.left+2)+'px';
-      watchHud.style.top=Math.max(0,rect.top+2)+'px';
-      watchHud.style.maxWidth=Math.max(1,Math.min(240,rect.width-4,innerWidth-Math.max(0,rect.left+2)-2))+'px';
+      positionCornerHud(watchHud,rect);
       const time=hudWantsTime()?clock.time:'—';
       let speed='—';
       if(hudWantsSpeed()){
@@ -1516,7 +1560,12 @@
         '<div class="actions"><button data-action="minus">−10</button>',
         '<button data-action="plus">＋10</button><button data-action="full">100%</button></div>',
         '<div class="hint" data-id="hint" hidden></div>',
-        '<details class="hmtc-yt-preferences"><summary>⚙ 手势设置</summary>',
+        '<details class="hmtc-yt-preferences"><summary>⚙ 手势与角标设置</summary>',
+        '<div class="row"><label>角标</label><select data-id="hudPosition">',
+        '<option value="top-left">左上角</option>',
+        '<option value="top-right">右上角</option>',
+        '<option value="bottom-left">左下角</option>',
+        '<option value="bottom-right">右下角</option></select></div>',
         '<div class="row"><label>统计</label><select data-id="mode">',
         '<option value="tap">左侧轻点打开</option>',
         '<option value="hold">长按 600ms 打开</option>',
@@ -1527,6 +1576,9 @@
         '</details>'
       ].join('');
       document.body.appendChild(sheet);
+      const hudSelect=sheet.querySelector('[data-id="hudPosition"]');
+      hudSelect.value=hudPosition();
+      hudSelect.addEventListener('change',event=>setHudPosition(event.target.value));
       const modeSelect=sheet.querySelector('[data-id="mode"]');
       modeSelect.value=['tap','hold','both'].includes(mode())?mode():'tap';
       modeSelect.addEventListener('change',event=>{
@@ -1582,6 +1634,7 @@
     function open(anchor){
       if(!supported()||!p()||!desktopMountAllowed())return;
       makePanel();sheet.hidden=false;backdrop.hidden=!touchZonesAllowed();
+      sheet.querySelector('[data-id="hudPosition"]').value=hudPosition();
       presentPanel(sheet,touchZonesAllowed()?anchor:desktopVideoAnchor(p()));
       bandwidth.start();
       refreshSheet();
@@ -1714,11 +1767,13 @@
       event.preventDefault();event.stopPropagation();open(point);
     },{capture:true});
     document.addEventListener('hmtc:corner-hud-change',refresh);
+    document.addEventListener('hmtc:corner-hud-position',refresh);
     watchTouchZonePolicy(()=>{
       if(!touchZonesAllowed())bandwidth.stop();
       refresh();
     });
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
+    GM_registerMenuCommand('YouTube：选择播放信息角落',chooseHudPosition);
     GM_registerMenuCommand('YouTube：画质接口诊断',async()=>{
       const c=await controls.qualityOptions();
       alert(['YouTube 画质诊断 · v0.6.8','可用方式：'+c.method,
@@ -2123,7 +2178,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.30', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.31', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -3786,6 +3841,14 @@
       '<button type="button" data-preset="1">标准</button>',
       '<button type="button" data-preset="1.6">快速</button></div>',
       '<div class="setting-summary">系数越大，相同滑动距离改变的音量越多；设置立即生效。</div></div>',
+      '<div class="setting"><label for="hmtc-hud-position">播放时间／连接速度的显示位置</label>',
+      '<select id="hmtc-hud-position" data-control="hudPosition">',
+      '<option value="top-left">左上角（默认）</option>',
+      '<option value="top-right">右上角</option>',
+      '<option value="bottom-left">左下角</option>',
+      '<option value="bottom-right">右下角</option>',
+      '</select>',
+      '<div class="setting-summary">四角任选，立即生效；保存后适用于 Holodex 与 YouTube。</div></div>',
       '<div class="setting"><label for="hmtc-stats-mode">打开统计的触控方式</label>',
       '<select id="hmtc-stats-mode" data-control="statsMode">',
       '<option value="tap">左侧轻点（默认）</option>',
@@ -3830,6 +3893,9 @@
     settings.querySelectorAll('[data-preset]').forEach(b=>{
       b.addEventListener('click',()=>updateSensitivity(b.dataset.preset));
     });
+    settings.querySelector('[data-control="hudPosition"]').addEventListener('change',e=>{
+      setHudPosition(e.target.value);
+    });
     settings.querySelector('[data-control="statsMode"]').addEventListener('change',e=>{
       if(['tap','hold','both'].includes(e.target.value))set(STATS_MODE_KEY,e.target.value);
     });
@@ -3866,6 +3932,7 @@
     settings.querySelector('[data-control="sensitivity"]').value=String(getSensitivity());
     settings.querySelector('[data-value="sensitivity"]').textContent=getSensitivity().toFixed(1)+'×';
     settings.querySelector('[data-control="statsMode"]').value=getStatsMode();
+    settings.querySelector('[data-control="hudPosition"]').value=hudPosition();
     const config=autoplaySettings();
     settings.querySelector('[data-control="autoEnabled"]').checked=config.enabled;
     settings.querySelector('[data-field="autoState"]').textContent=config.enabled?
@@ -4184,10 +4251,13 @@
            style.visibility==='collapse'||Number(style.opacity)===0)return false;
       }
     }
-    // Ignore our own transparent/clickable HUD when hit-testing. A navigation
-    // drawer or dialog appearing above the top-left player corner wins.
+    // Test the selected corner, not just the original upper-left corner.
+    // Ignore our own HUD; menus, dialogs and drawers should occlude it.
     if(typeof document.elementsFromPoint==='function'){
-      const topmost=document.elementsFromPoint(left+Math.min(9,width-1),top+Math.min(9,height-1))
+      const corner=hudPosition();
+      const x=corner.endsWith('right')?left+width-Math.min(9,width-1):left+Math.min(9,width-1);
+      const y=corner.startsWith('bottom')?top+height-Math.min(9,height-1):top+Math.min(9,height-1);
+      const topmost=document.elementsFromPoint(x,y)
         .find(el=>!el.closest?.('.hmtc-corner-hud'));
       if(topmost&&topmost!==frame&&!frame.contains(topmost))return false;
     }
@@ -4213,9 +4283,7 @@
     if(cell.button.parentNode!==frame)frame.appendChild(cell.button);
     cell.viewportVisible=multiviewHudExposed(frame,rect);
     cell.button.hidden=!cell.viewportVisible||!cell.playbackActive;
-    cell.button.style.left='2px';
-    cell.button.style.top='2px';
-    cell.button.style.maxWidth=Math.max(1,Math.min(240,rect.width-4))+'px';
+    positionCornerHud(cell.button,rect,true);
     displayCornerHud(cell.button,cell.time,cell.speed);
   }
   function hudSpeedValue(cell,kbps){
@@ -4287,6 +4355,16 @@
     pollCornerHuds();
   }
   document.addEventListener('hmtc:corner-hud-change',hudModeChanged);
+  function hudPositionChanged(){
+    for(const cell of hudCells.values()){
+      const rect=cell.frame?.getBoundingClientRect();
+      positionCornerHud(cell.button,rect,true);
+      cell.viewportVisible=multiviewHudExposed(cell.frame,rect);
+      cell.button.hidden=!cell.viewportVisible||!cell.playbackActive;
+    }
+    pollCornerHuds();
+  }
+  document.addEventListener('hmtc:corner-hud-position',hudPositionChanged);
   async function refresh(){
     if(!isMulti()){clearHudCells();rowMap.clear();if(active)closeSheet();return;}
     if(!installed||listing||document.hidden)return;
@@ -4344,7 +4422,8 @@
       if(!row)return;
       event.preventDefault();event.stopPropagation();closeSettings();openSheet(row,point);
     },{capture:true});
-    GM_registerMenuCommand('左上角信息：切换时间／速度／隐藏',cycleHudMode);
+    GM_registerMenuCommand('播放信息：切换时间／速度／隐藏',cycleHudMode);
+    GM_registerMenuCommand('播放信息：选择显示角落',chooseHudPosition);
     setInterval(pollCornerHuds,2200);
     const clearOnRouteExit=()=>{
       if(isMulti())return;
@@ -4466,8 +4545,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.30 说明',()=>
-      alert('v0.6.30：左上角时间不足1小时显示分:秒，满1小时显示时:分:秒；保留亮橙色和当前位置。'));
+    GM_registerMenuCommand('Touch Controls v0.6.31 说明',()=>
+      alert('v0.6.31：时间／连接速度角标支持左上、右上、左下、右下，位置自动保存。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
