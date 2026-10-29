@@ -14,6 +14,8 @@
 // @grant        GM_setValue
 // @grant        GM_addValueChangeListener
 // @grant        GM_registerMenuCommand
+// @updateURL    https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/hyperchat-cleaner.user.js
+// @downloadURL  https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/hyperchat-cleaner.user.js
 // ==/UserScript==
 
 (function Cleaner(){
@@ -52,9 +54,12 @@ html.hcc-clean .hyperchat-root .content>.hover-highlight{background:transparent!
 yt-live-chat-text-message-renderer #message,
 yt-live-chat-text-message-renderer #author-name{font-size:var(--hcc-font)!important;line-height:var(--hcc-leading,1.25)!important}
 .hyperchat-root .content .text-xs,yt-live-chat-text-message-renderer #timestamp{font-size:var(--hcc-small)!important}
-/* Message spacing is independent from font size and line-height. */
+/* Message spacing is independent from font size and line-height.
+   Override both Tailwind parent row-gap and each message's own padding. */
+html.hcc-clean .hyperchat-root .content:has(>.hover-highlight.flex){row-gap:0!important}
 html.hcc-clean .hyperchat-root .content>.hover-highlight.flex{
  margin-top:0!important;margin-bottom:0!important;
+ min-height:0!important;
  padding-top:var(--hcc-gap-half,2px)!important;
  padding-bottom:var(--hcc-gap-half,2px)!important;row-gap:0!important
 }
