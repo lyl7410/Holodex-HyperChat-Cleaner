@@ -204,14 +204,17 @@ test('one failing wrapper method does not discard other playback fields',async()
   assert.equal(result.live,true);assert.equal(result.volume,undefined);
 });
 test('HUD is positioned inside its own player, never as a global body overlay',()=>{
-  const button={style:{},remove(){this.removed=true;}};
+  const button={style:{},classList:{toggle(){}},remove(){this.removed=true;}};
   const row={layoutId:1,videoId:'abcdefghijk'};
   const frame={isConnected:true,style:{},appendChild(el){el.parentNode=this;},
     contains(el){return el===this;},
     getBoundingClientRect:()=>({width:500,height:300,left:10,top:20,right:510,bottom:320})};
   const ctx=vm.createContext({hudCells:new Map(),hudSessionStop(){},createCornerHud:()=>button,
-    isMulti:()=>true,document:{elementsFromPoint:()=>[frame],fullscreenElement:null},
+    isMulti:()=>true,hudPosition:()=> 'top-left',
+    document:{elementsFromPoint:()=>[frame],fullscreenElement:null},
     innerHeight:1000,innerWidth:1200,displayCornerHud(){},clearTimeout(){}});
+  vm.runInContext(section('  function positionCornerHud(button,rect,playerLocal=false){',
+    '  const HUD_MODES='),ctx);
   vm.runInContext(section('  function hudCellDispose(cell){','  function hudSpeedValue(cell,kbps){'),ctx);
   ctx.attachCornerHud({querySelector:()=>frame},row);
   assert.equal(ctx.hudCells.get('1:abcdefghijk').button,button);
@@ -222,17 +225,25 @@ test('HUD is positioned inside its own player, never as a global body overlay',(
   assert.match(source,/\.mv-frame > \.hmtc-corner-hud\{position:absolute!important/);
   assert.doesNotMatch(source,/hmtc-panel-open|panelButton/);
 });
-test('multiview HUD hides when Favorites or dialogs cover the player corner',()=>{
-  let multi=true,overlap=null;
+test('multiview HUD hides when Favorites or dialogs cover the selected corner',()=>{
+  let multi=true,overlap=null,corner='top-left',hit=[];
   const frame={isConnected:true,parentElement:null,contains(el){return el===this||el===inside;}};
   const inside={closest:()=>null},drawer={closest:()=>null};
-  const ctx=vm.createContext({isMulti:()=>multi,innerWidth:1200,innerHeight:800,
-    document:{fullscreenElement:null,elementsFromPoint:()=>[overlap]}});
+  const ctx=vm.createContext({isMulti:()=>multi,hudPosition:()=>corner,
+    innerWidth:1200,innerHeight:800,
+    document:{fullscreenElement:null,elementsFromPoint:(x,y)=>{hit=[x,y];return [overlap];}}});
   vm.runInContext(section('  function multiviewHudExposed(frame,rect){',
     '  function attachCornerHud(root,row){'),ctx);
   const rect={left:10,top:20,right:510,bottom:320,width:500,height:300};
-  overlap=inside;assert.equal(ctx.multiviewHudExposed(frame,rect),true);
-  overlap=drawer;assert.equal(ctx.multiviewHudExposed(frame,rect),false);
+  for(const [selected,expectX,expectY] of [
+    ['top-left',19,29],['top-right',501,29],
+    ['bottom-left',19,311],['bottom-right',501,311]
+  ]){
+    corner=selected;
+    overlap=inside;assert.equal(ctx.multiviewHudExposed(frame,rect),true);
+    assert.deepEqual(hit,[expectX,expectY]);
+    overlap=drawer;assert.equal(ctx.multiviewHudExposed(frame,rect),false);
+  }
   overlap=inside;frame.hidden=true;
   assert.equal(ctx.multiviewHudExposed(frame,rect),false);
   frame.hidden=false;frame.isConnected=false;
@@ -241,6 +252,136 @@ test('multiview HUD hides when Favorites or dialogs cover the player corner',()=
   assert.equal(ctx.multiviewHudExposed(frame,rect),false);
 });
 
+
+test('HUD position setting persists and rejects invalid values',()=>{
+  const store=new Map(),events=[];
+  const ctx=vm.createContext({innerWidth:1200,innerHeight:800,
+    document:{dispatchEvent:event=>events.push(event.type)},
+    Event,GM_getValue:(key,fallback)=>store.has(key)?store.get(key):fallback,
+    GM_setValue:(key,value)=>store.set(key,value),prompt:()=>null,alert(){}});
+  vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES='),ctx);
+  assert.equal(ctx.hudPosition(),'top-left');
+  assert.equal(ctx.setHudPosition('bottom-right'),true);
+  assert.equal(ctx.hudPosition(),'bottom-right');
+  assert.deepEqual(events,['hmtc:corner-hud-position']);
+  assert.equal(ctx.setHudPosition('middle'),false);
+  assert.equal(ctx.hudPosition(),'bottom-right');
+  store.set('hmtc_corner_hud_position_v1','invalid');
+  assert.equal(ctx.hudPosition(),'top-left');
+});
+
+test('HUD size defaults to 100%, persists, clamps and dispatches live updates',()=>{
+  const saved=new Map(),events=[],sizeInputs=[{value:''},{value:''}],sizeLabels=[{textContent:''},{textContent:''}];
+  const ctx=vm.createContext({innerWidth:1200,innerHeight:800,Event,
+    document:{dispatchEvent:event=>events.push(event.type),querySelectorAll:sel=>
+      sel.includes('data-control')?sizeInputs:sizeLabels},
+    GM_getValue:(k,def)=>saved.has(k)?saved.get(k):def,
+    GM_setValue:(k,v)=>saved.set(k,v),prompt:()=>null,alert(){}});
+  vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES='),ctx);
+  assert.equal(ctx.hudSize(),100);
+  for(const [request,expected] of [[70,70],[80,80],[100,100],[130,130],[180,180],[220,180],[40,70]]){
+    assert.equal(ctx.setHudSize(request),true);
+    assert.equal(ctx.hudSize(),expected);
+    assert.ok(sizeInputs.every(x=>x.value===String(expected)));
+    assert.ok(sizeLabels.every(x=>x.textContent===expected+'%'));
+  }
+  assert.equal(ctx.setHudSize('invalid'),false);
+  saved.set('hmtc_corner_hud_size_v1',999);
+  assert.equal(ctx.hudSize(),100);
+  assert.equal(events.length,7);
+  assert.ok(events.every(e=>e==='hmtc:corner-hud-size'));
+});
+test('HUD size uses proportional CSS variables and keeps all four corners',()=>{
+  const saved=new Map(),attrs={},ctx=vm.createContext({
+    GM_getValue:(k,def)=>saved.get(k)??def,
+    GM_setValue:(k,v)=>saved.set(k,v),
+    document:{dispatchEvent(){},querySelectorAll:()=>[]},
+    Event,prompt:()=>null,alert(){},innerWidth:1200,innerHeight:800});
+  vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES='),ctx);
+  const button={style:{setProperty(k,v){attrs[k]=v;}}};
+  for(const [size,scale] of [[70,'0.7'],[100,'1'],[130,'1.3'],[180,'1.8']]){
+    assert.equal(ctx.setHudSize(size),true);
+    ctx.applyHudSize(button);
+    assert.equal(attrs['--hmtc-hud-scale'],scale);
+  }
+  for(const text of [
+    'font:800 calc(13px * var(--hmtc-hud-scale,1))/1.2',
+    'font-size:calc(13px * var(--hmtc-hud-scale,1))!important;',
+    'font-size:calc(9px * var(--hmtc-hud-scale,1))!important;',
+    'padding:calc(2px * var(--hmtc-hud-scale,1)) calc(4px * var(--hmtc-hud-scale,1))!important;',
+    'gap:calc(2px * var(--hmtc-hud-scale,1))!important;',
+    'hmtc:corner-hud-size', 'data-control="hudSize"', 'data-id="hudSize"',
+    'YouTube：调节播放信息大小', '播放信息：调整显示大小'
+  ])assert.ok(source.includes(text),'missing '+text);
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right\{align-items:flex-end!important;text-align:right!important\}/);
+  assert.match(source,/\.mv-frame > \.hmtc-corner-hud\{position:absolute!important;z-index:46!important/);
+});
+
+test('all four HUD corners use a 2px inset for fixed YouTube and local Holodex players',()=>{
+  const store=new Map(),ctx=vm.createContext({innerWidth:1200,innerHeight:800,
+    document:{dispatchEvent(){}},Event,
+    GM_getValue:(key,fallback)=>store.has(key)?store.get(key):fallback,
+    GM_setValue:(key,value)=>store.set(key,value),prompt:()=>null,alert(){}});
+  vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES='),ctx);
+  const rect={left:10,top:20,right:510,bottom:320,width:500,height:300};
+  const button=()=>({style:{},classList:{values:new Set(),toggle(k,v){
+    if(v)this.values.add(k);else this.values.delete(k);
+  }}});
+  for(const [corner,vertical,horizontal] of [
+    ['top-left','top','left'],['top-right','top','right'],
+    ['bottom-left','bottom','left'],['bottom-right','bottom','right']
+  ]){
+    ctx.setHudPosition(corner);
+    const yt=button(),multi=button();
+    ctx.positionCornerHud(yt,rect);
+    ctx.positionCornerHud(multi,rect,true);
+    const otherVertical=vertical==='top'?'bottom':'top';
+    const otherHorizontal=horizontal==='left'?'right':'left';
+    assert.equal(yt.style[vertical],vertical==='top'?'22px':'482px');
+    assert.equal(yt.style[horizontal],horizontal==='left'?'12px':'692px');
+    assert.equal(yt.style[otherVertical],'auto');
+    assert.equal(yt.style[otherHorizontal],'auto');
+    assert.equal(multi.style[vertical],'2px');
+    assert.equal(multi.style[horizontal],'2px');
+    assert.equal(multi.style[otherVertical],'auto');
+    assert.equal(multi.style[otherHorizontal],'auto');
+    assert.equal(yt.style.maxWidth,'240px');
+    assert.equal(multi.style.maxWidth,'240px');
+    assert.equal(yt.classList.values.has('hmtc-hud-right'),horizontal==='right');
+  }
+  assert.match(source,/YouTube：选择播放信息角落/);
+  assert.match(source,/播放信息：选择显示角落/);
+  assert.match(source,/data-id="hudPosition"/);
+  assert.match(source,/data-control="hudPosition"/);
+});
+
+
+test('v0.6.35 HUD gives the time and speed independent snug backplates',()=>{
+  assert.match(source,/display:inline-flex!important;flex-direction:column!important/);
+  assert.ok(source.includes('gap:calc(2px * var(--hmtc-hud-scale,1))!important;'));
+  assert.match(source,/width:max-content!important;min-width:0!important/);
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right\{align-items:flex-end!important;text-align:right!important\}/);
+  assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-time\{display:block!important;flex:0 0 auto!important/);
+  assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-speed\{display:inline-flex!important;flex:0 1 auto!important/);
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right \.hmtc-hud-speed\{align-self:flex-end!important/);
+  assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-speed-unit\{flex:0 0 auto!important/);
+  assert.ok(source.includes('font-size:calc(9px * var(--hmtc-hud-scale,1))!important;'));
+  assert.match(source,/speed\.append\(value,unit,dot\)/);
+  assert.doesNotMatch(source,/flex-direction:row-reverse/);
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-cached \.hmtc-hud-cache-dot\{display:block!important\}/);
+});
+test('black background exists only on independently fitted time and speed rows',()=>{
+  // Do not regress to the single over-wide black rectangle from v0.6.34.
+  assert.match(source,/border:0!important;border-radius:0!important;padding:0!important;margin:0!important/);
+  assert.match(source,/background:transparent!important;color:#FFC15A!important/);
+  assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-line\{box-sizing:border-box!important/);
+  assert.match(source,/background:rgba\(10,13,20,\.77\)!important/);
+  assert.match(source,/border:1px solid rgba\(255,255,255,\.15\)!important/);
+  assert.ok(source.includes('padding:calc(2px * var(--hmtc-hud-scale,1)) calc(4px * var(--hmtc-hud-scale,1))!important;'));
+  assert.match(source,/pointer-events:none!important;cursor:pointer!important/);
+  assert.match(source,/pointer-events:auto!important;cursor:pointer!important/);
+  assert.match(source,/\.mv-frame > \.hmtc-corner-hud\{position:absolute!important;z-index:46!important/);
+});
 test('HUD shortens each sub-hour clock independently and preserves hour boundaries and unknown values',()=>{
   const {ctx}=cornerHudContext(),button=ctx.createCornerHud();
   for(const [input,expected] of [['00:00:00','00:00'],['00:00:59','00:59'],['00:03:34','03:34'],
@@ -283,14 +424,17 @@ test('HUD uses separate colored readings in all modes and cache timer expires wi
   const f=cornerHudContext(),button=f.ctx.createCornerHud(),parts=button._hmtcHudParts;
   const fresh=f.ctx.hudSpeedReading(12340);f.ctx.displayCornerHud(button,'01:02:03',fresh);
   assert.equal(parts.time.hidden,true);assert.equal(parts.speed.hidden,false);
-  assert.equal(parts.value.textContent,'12.34 Mbps');
+  assert.equal(parts.value.textContent,'12.34');
+  assert.equal(parts.unit.textContent,'Mbps');assert.equal(parts.unit.hidden,false);
   f.setNow(13000);const cached=f.ctx.hudSpeedReading(12340,true,10000);
   f.ctx.displayCornerHud(button,'01:02:03',cached);
-  assert.equal(parts.value.textContent,fresh.text);assert.ok(button.classList.values.has('hmtc-hud-cached'));
+  assert.equal(parts.value.textContent,'12.34');
+  assert.equal(parts.unit.textContent,'Mbps');assert.ok(button.classList.values.has('hmtc-hud-cached'));
   assert.match(button.title,/距今 3\.0 秒/);assert.match(button.attributes['aria-label'],/最近一次读取/);
   assert.ok(!parts.value.textContent.includes('上次'));
   while(f.timers.size)f.runNext();
-  assert.equal(parts.value.textContent,'—');assert.ok(!button.classList.values.has('hmtc-hud-cached'));
+  assert.equal(parts.value.textContent,'—');assert.equal(parts.unit.hidden,true);
+  assert.ok(!button.classList.values.has('hmtc-hud-cached'));
   for(const mode of ['time','both','off','speed']){
     f.setMode(mode);f.ctx.displayCornerHud(button,'01:02:03',fresh);
     assert.equal(parts.time.hidden,!['time','both'].includes(mode));
@@ -300,14 +444,18 @@ test('HUD uses separate colored readings in all modes and cache timer expires wi
   assert.equal(f.timers.size,1);f.ctx.displayCornerHud(button,'01:02:03',fresh);assert.equal(f.timers.size,0);
 });
 test('watch HUD forwards cache timestamp and uses the same two-pixel viewport-safe position',()=>{
-  const button={style:{},isConnected:true},layer={appendChild(b){b.parentNode=this;}};
+  const button={style:{},classList:{toggle(){}},isConnected:true},
+    layer={appendChild(b){b.parentNode=this;}};
   let reading,rect={width:100,height:100,left:1150,top:20,right:1250,bottom:120};
   const ctx=vm.createContext({watchHud:null,document:{body:layer},innerWidth:1200,innerHeight:800,
+    hudPosition:()=> 'top-left',
     createCornerHud:()=>button,hudWantsTime:()=>true,hudWantsSpeed:()=>true,
     hudPlaybackStarted:()=>true,readWatchClock:()=>({time:'01:02:03',state:{ready:true,playerState:1}}),bandwidth:{start(){},read:()=>({available:true,
       bandwidthKbps:12340,stale:true,sampledAt:10000})},
     hudSpeedReading:(kbps,stale,sampledAt)=>({kbps,stale,sampledAt}),
     displayCornerHud:(b,t,s)=>{reading=s;},clearTimeout(){}});
+  vm.runInContext(section('  function positionCornerHud(button,rect,playerLocal=false){',
+    '  const HUD_MODES='),ctx);
   vm.runInContext(section('    function refreshWatchHud(player){','    function refreshSheet(){'),ctx);
   ctx.refreshWatchHud({getBoundingClientRect:()=>rect});
   assert.equal(button.style.left,'1152px');assert.equal(button.style.top,'22px');

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.30
-// @description  修复 Holodex 多视图统计角标覆盖收藏夹与其他界面；角标仅限播放器内，保留原生速度、触控及播放控制。
+// @version      0.6.36
+// @description  角标大小70%～180%可调、四角位置可选，保留独立紧凑背景与自动保存。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -458,6 +458,80 @@
     },{capture:true});
   }
   const HUD_KEY='hmtc_corner_hud_mode_v1';
+  const HUD_POSITION_KEY='hmtc_corner_hud_position_v1';
+  const HUD_SIZE_KEY='hmtc_corner_hud_size_v1';
+  const HUD_SIZE_MIN=70,HUD_SIZE_MAX=180,HUD_SIZE_DEFAULT=100;
+  function hudSize(){
+    const v=Number(GM_getValue(HUD_SIZE_KEY,HUD_SIZE_DEFAULT));
+    return Number.isFinite(v)&&v>=HUD_SIZE_MIN&&v<=HUD_SIZE_MAX?
+      Math.round(v/10)*10:HUD_SIZE_DEFAULT;
+  }
+  function applyHudSize(button){
+    button?.style?.setProperty?.('--hmtc-hud-scale',String(hudSize()/100));
+  }
+  function setHudSize(value){
+    const n=Number(value);
+    if(!Number.isFinite(n))return false;
+    const percent=Math.max(HUD_SIZE_MIN,Math.min(HUD_SIZE_MAX,Math.round(n/10)*10));
+    GM_setValue(HUD_SIZE_KEY,percent);
+    document.querySelectorAll?.('[data-control="hudSize"],[data-id="hudSize"]')
+      .forEach(el=>{el.value=String(percent);});
+    document.querySelectorAll?.('[data-value="hudSize"],[data-id="hudSizeText"]')
+      .forEach(el=>{el.textContent=percent+'%';});
+    document.dispatchEvent(new Event('hmtc:corner-hud-size'));
+    return true;
+  }
+  function chooseHudSize(){
+    const selected=prompt('播放时间／连接速度角标大小（70～180%，10%一级）：',String(hudSize()));
+    if(selected===null)return;
+    const raw=String(selected).trim(),n=Number(raw.replace(/%$/,''));
+    if(!raw||!Number.isFinite(n)||n<HUD_SIZE_MIN||n>HUD_SIZE_MAX)
+      return alert('请输入 70 至 180 之间的数字，例如 100、130、160');
+    setHudSize(n);
+  }
+  const HUD_POSITIONS=[
+    ['top-left','左上角'],['top-right','右上角'],
+    ['bottom-left','左下角'],['bottom-right','右下角']
+  ];
+  const hudPosition=()=>{
+    const value=GM_getValue(HUD_POSITION_KEY,'top-left');
+    return HUD_POSITIONS.some(([id])=>id===value)?value:'top-left';
+  };
+  function setHudPosition(value){
+    if(!HUD_POSITIONS.some(([id])=>id===value))return false;
+    GM_setValue(HUD_POSITION_KEY,value);
+    document.dispatchEvent(new Event('hmtc:corner-hud-position'));
+    return true;
+  }
+  function chooseHudPosition(){
+    const choices=HUD_POSITIONS.map(([id,label],i)=>
+      (i+1)+'. '+label+(hudPosition()===id?'（当前）':'')).join('\n');
+    const selected=prompt('选择播放时间／连接速度显示位置：\n'+choices,
+      String(HUD_POSITIONS.findIndex(([id])=>id===hudPosition())+1));
+    if(selected===null)return;
+    const choice=HUD_POSITIONS[Number(selected)-1];
+    if(choice)setHudPosition(choice[0]);
+    else alert('请输入 1 至 4 之间的序号');
+  }
+  // The same saved position is used by YouTube and Holodex, while each
+  // player retains its own correct fixed / player-local positioning.
+  function positionCornerHud(button,rect,playerLocal=false){
+    if(!button||!rect)return;
+    const corner=hudPosition();
+    const right=corner.endsWith('right'),bottom=corner.startsWith('bottom');
+    const pad=2;
+    const left=playerLocal?pad:Math.max(pad,rect.left+pad);
+    const rightInset=playerLocal?pad:Math.max(pad,innerWidth-rect.right+pad);
+    const top=playerLocal?pad:Math.max(pad,rect.top+pad);
+    const bottomInset=playerLocal?pad:Math.max(pad,innerHeight-rect.bottom+pad);
+    const width=playerLocal?rect.width:Math.min(innerWidth,rect.right)-Math.max(0,rect.left);
+    button.style.left=right?'auto':left+'px';
+    button.style.right=right?rightInset+'px':'auto';
+    button.style.top=bottom?'auto':top+'px';
+    button.style.bottom=bottom?bottomInset+'px':'auto';
+    button.style.maxWidth=Math.max(1,Math.min(240,width-4))+'px';
+    button.classList.toggle('hmtc-hud-right',right);
+  }
   const HUD_MODES=['time','speed','both','off'];
   const hudMode=()=>{
     const value=GM_getValue(HUD_KEY,'time');
@@ -474,17 +548,19 @@
     const button=document.createElement('button');
     button.type='button';
     button.className='hmtc-corner-hud';
-    button.setAttribute('aria-label','切换视频左上角信息');
+    applyHudSize(button);
+    button.setAttribute('aria-label','切换视频播放信息');
     const line=(name,text)=>{
       const span=document.createElement('span');span.className=name;span.textContent=text;return span;
     };
     const time=line('hmtc-hud-line hmtc-hud-time','—');
     const speed=line('hmtc-hud-line hmtc-hud-speed','');
     const value=line('hmtc-hud-speed-value','—');
+    const unit=line('hmtc-hud-speed-unit','');unit.hidden=true;
     const dot=line('hmtc-hud-cache-dot','');dot.setAttribute('aria-hidden','true');
     const off=line('hmtc-hud-off-label','···');
-    speed.append(value,dot);button.append(time,speed,off);
-    button._hmtcHudParts={time,speed,value,dot,off};
+    speed.append(value,unit,dot);button.append(time,speed,off);
+    button._hmtcHudParts={time,speed,value,unit,dot,off};
     button.addEventListener('click',e=>{
       e.preventDefault();e.stopPropagation();cycleHudMode();
     });
@@ -519,11 +595,17 @@
     button.classList.toggle('hmtc-hud-cached',!!cached);
     parts.time.hidden=mode!=='time'&&mode!=='both';
     parts.speed.hidden=mode!=='speed'&&mode!=='both';parts.off.hidden=mode!=='off';
-    parts.time.textContent=compactHudTime(time);parts.value.textContent=value;
+    parts.time.textContent=compactHudTime(time);
+    // Speed text stays numeric for a full-size tabular reading; its smaller unit
+    // has its own element so the entire row can share the time's right edge.
+    const partsOfSpeed=value.match(/^([\d.,]+)\s+(Mbps)$/i);
+    parts.value.textContent=partsOfSpeed?partsOfSpeed[1]:value;
+    parts.unit.textContent=partsOfSpeed?partsOfSpeed[2]:'';
+    parts.unit.hidden=!partsOfSpeed;
     const cacheNote=cached?'最近一次读取，距今 '+(age/1000).toFixed(1)+' 秒':'';
     button.title='轻点切换：时间 → 连接速度 → 同时 → 隐藏'+(cacheNote?'\n'+cacheNote:'');
-    button.setAttribute('aria-label',mode==='off'?'显示左上角信息':
-      '切换左上角信息（目前'+({time:'播放时间',speed:'连接速度',both:'两项'}[mode])+'）'+
+    button.setAttribute('aria-label',mode==='off'?'显示播放信息':
+      '切换播放信息（目前'+({time:'播放时间',speed:'连接速度',both:'两项'}[mode])+'）'+
       ((mode==='speed'||mode==='both')?'，连接速度 '+value:'')+(cacheNote?'，'+cacheNote:''));
     // A pending iframe request must not keep an old reading visible beyond its lease.
     if(cached&&button.isConnected)button._hmtcHudTimer=setTimeout(
@@ -536,32 +618,75 @@
     'html.hmtc-mouse-input .hmtc-edge,html.hmtc-mouse-input .hmtc-yt-edge,',
     'html.hmtc-mouse-input #hmtc-backdrop,html.hmtc-mouse-input #hmtc-yt-backdrop{',
     'display:none!important;pointer-events:none!important}',
+    // A shared backdrop can never fit both differently sized lines without
+    // leaving unused space beside the shorter line. Each line gets its OWN
+    // shrink-wrapped dark pill; the common ancestor is fully transparent.
     '.hmtc-corner-hud{position:fixed!important;z-index:2147482700!important;',
-    'display:block!important;box-sizing:border-box!important;max-width:240px;',
-    'border:0!important;border-radius:0!important;',
-    'padding:1px 2px!important;margin:0!important;',
-    'background:transparent!important;color:#FFAA33!important;',
-    'font:700 13px/1.3 system-ui,-apple-system,sans-serif!important;',
-    'font-variant-numeric:tabular-nums!important;white-space:pre-line!important;',
-    'text-align:left!important;overflow:hidden!important;text-overflow:ellipsis!important;',
-    'box-shadow:none!important;text-shadow:-.8px 0 #000,.8px 0 #000,0 -.8px #000,0 .8px #000,0 1px 2px #000;',
-    '-webkit-text-stroke:.35px #000;paint-order:stroke fill;',
-    '-webkit-tap-highlight-color:transparent;opacity:.95!important;',
+    'display:inline-flex!important;flex-direction:column!important;',
+    'align-items:flex-start!important;justify-content:center!important;',
+    'gap:calc(2px * var(--hmtc-hud-scale,1))!important;',
+    'box-sizing:border-box!important;width:max-content!important;min-width:0!important;',
+    'min-height:0!important;max-width:240px;',
+    'border:0!important;border-radius:0!important;padding:0!important;margin:0!important;',
+    'background:transparent!important;color:#FFC15A!important;',
+    'font:800 calc(13px * var(--hmtc-hud-scale,1))/1.2 system-ui,-apple-system,sans-serif!important;',
+    'font-variant-numeric:tabular-nums!important;white-space:nowrap!important;',
+    'text-align:left!important;overflow:visible!important;',
+    'box-shadow:none!important;text-shadow:none!important;',
+    '-webkit-tap-highlight-color:transparent;opacity:.98!important;',
     'transition:opacity .18s ease!important;',
-    'touch-action:manipulation!important;pointer-events:auto!important;cursor:pointer!important}',
+    // The transparent gap between the two pills is NOT a clickable overlay.
+    'touch-action:manipulation!important;pointer-events:none!important;cursor:pointer!important}',
     '.hmtc-corner-hud:hover,.hmtc-corner-hud:focus-visible,.hmtc-corner-hud:active{',
     'opacity:1!important}',
-    '.hmtc-corner-hud .hmtc-hud-line{display:block;color:#FFAA33}',
-    '.hmtc-corner-hud .hmtc-hud-time{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
-    '.hmtc-corner-hud .hmtc-hud-speed{display:flex;align-items:center;gap:4px;color:#FFAA33}',
-    '.hmtc-corner-hud .hmtc-hud-speed-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-    '.hmtc-corner-hud .hmtc-hud-cache-dot{flex:0 0 5px;width:5px;height:5px;border-radius:50%;',
-    'background:#F2CA7A;visibility:hidden}',
-    '.hmtc-corner-hud.hmtc-hud-cached .hmtc-hud-cache-dot{visibility:visible}',
-    '.hmtc-corner-hud .hmtc-hud-line[hidden],.hmtc-corner-hud .hmtc-hud-off-label[hidden]{display:none!important}',
+    '.hmtc-corner-hud.hmtc-hud-right{align-items:flex-end!important;text-align:right!important}',
+    // The time pill and speed pill each hug their own text, so different line
+    // lengths do not create a wide empty rectangle on bright video frames.
+    '.hmtc-corner-hud .hmtc-hud-line{box-sizing:border-box!important;',
+    'background:rgba(10,13,20,.77)!important;',
+    'border:1px solid rgba(255,255,255,.15)!important;',
+    'border-radius:calc(5px * var(--hmtc-hud-scale,1))!important;',
+    'padding:calc(2px * var(--hmtc-hud-scale,1)) calc(4px * var(--hmtc-hud-scale,1))!important;',
+    'box-shadow:0 1px 4px rgba(0,0,0,.33)!important;',
+    'color:#FFC15A!important;',
+    'text-shadow:0 1px 2px #000,0 0 2px #000!important;',
+    '-webkit-text-stroke:.12px #000;paint-order:stroke fill;',
+    'pointer-events:auto!important;cursor:pointer!important}',
+    '.hmtc-corner-hud .hmtc-hud-time{display:block!important;flex:0 0 auto!important;',
+    'width:max-content!important;max-width:100%!important;',
+    'font-size:calc(13px * var(--hmtc-hud-scale,1))!important;',
+    'font-weight:800!important;line-height:1.2!important;',
+    'overflow:hidden!important;white-space:nowrap!important;text-overflow:ellipsis!important}',
+    '.hmtc-corner-hud .hmtc-hud-speed{display:inline-flex!important;flex:0 1 auto!important;',
+    'width:max-content!important;max-width:100%!important;',
+    'align-items:baseline!important;justify-content:flex-start!important;',
+    'gap:calc(2px * var(--hmtc-hud-scale,1))!important;white-space:nowrap!important}',
+    '.hmtc-corner-hud.hmtc-hud-right .hmtc-hud-speed{align-self:flex-end!important;',
+    'justify-content:flex-end!important}',
+    '.hmtc-corner-hud .hmtc-hud-speed-value{flex:0 1 auto!important;min-width:0;',
+    'font-size:calc(13px * var(--hmtc-hud-scale,1))!important;',
+    'font-weight:800!important;line-height:1.2!important;',
+    'overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}',
+    '.hmtc-corner-hud .hmtc-hud-speed-unit{flex:0 0 auto!important;',
+    'margin:0!important;font-weight:700!important;',
+    'font-size:calc(9px * var(--hmtc-hud-scale,1))!important;',
+    'line-height:1.2!important;font-family:system-ui,-apple-system,sans-serif!important;',
+    'color:#FFC15A!important;white-space:nowrap!important}',
+    // Cached-reading indicator is absolutely positioned inside the speed
+    // pill, not part of the number+unit flex flow.
+    '.hmtc-corner-hud .hmtc-hud-cache-dot{position:absolute!important;',
+    'right:1px;left:auto;bottom:1px;width:4px;height:4px;border-radius:50%;',
+    'background:#FFE2A0;display:none!important;pointer-events:none!important}',
+    '.hmtc-corner-hud.hmtc-hud-right .hmtc-hud-cache-dot{left:1px;right:auto}',
+    '.hmtc-corner-hud.hmtc-hud-cached .hmtc-hud-cache-dot{display:block!important}',
+    '.hmtc-corner-hud .hmtc-hud-line[hidden],.hmtc-corner-hud .hmtc-hud-speed-unit[hidden],',
+    '.hmtc-corner-hud .hmtc-hud-off-label[hidden]{display:none!important}',
     '.hmtc-corner-hud.hmtc-hud-off{width:24px!important;min-width:24px!important;',
-    'height:20px!important;padding:1px 2px!important;',
-    'text-align:center!important;opacity:.85!important}',
+    'height:20px!important;padding:0!important;',
+    'align-items:center!important;text-align:center!important;opacity:.85!important}',
+    '.hmtc-corner-hud .hmtc-hud-off-label{pointer-events:auto!important;',
+    'display:block;box-sizing:border-box;border-radius:5px;',
+    'padding:1px 3px;background:rgba(10,13,20,.77);color:#FFC15A}',
     '.hmtc-corner-hud.hmtc-hud-off:hover,.hmtc-corner-hud.hmtc-hud-off:focus-visible,',
     '.hmtc-corner-hud.hmtc-hud-off:active{opacity:1!important}',
     '.mv-frame > .hmtc-corner-hud{position:absolute!important;z-index:46!important;',
@@ -1249,9 +1374,7 @@
         if(!sheet||sheet.hidden)bandwidth.stop();
         return;
       }
-      watchHud.style.left=Math.max(0,rect.left+2)+'px';
-      watchHud.style.top=Math.max(0,rect.top+2)+'px';
-      watchHud.style.maxWidth=Math.max(1,Math.min(240,rect.width-4,innerWidth-Math.max(0,rect.left+2)-2))+'px';
+      positionCornerHud(watchHud,rect);
       const time=hudWantsTime()?clock.time:'—';
       let speed='—';
       if(hudWantsSpeed()){
@@ -1516,7 +1639,15 @@
         '<div class="actions"><button data-action="minus">−10</button>',
         '<button data-action="plus">＋10</button><button data-action="full">100%</button></div>',
         '<div class="hint" data-id="hint" hidden></div>',
-        '<details class="hmtc-yt-preferences"><summary>⚙ 手势设置</summary>',
+        '<details class="hmtc-yt-preferences"><summary>⚙ 手势与角标设置</summary>',
+        '<div class="row"><label>角标</label><select data-id="hudPosition">',
+        '<option value="top-left">左上角</option>',
+        '<option value="top-right">右上角</option>',
+        '<option value="bottom-left">左下角</option>',
+        '<option value="bottom-right">右下角</option></select></div>',
+        '<div class="row"><label>大小</label>',
+        '<input type="range" data-id="hudSize" min="70" max="180" step="10">',
+        '<strong data-id="hudSizeText">100%</strong></div>',
         '<div class="row"><label>统计</label><select data-id="mode">',
         '<option value="tap">左侧轻点打开</option>',
         '<option value="hold">长按 600ms 打开</option>',
@@ -1527,6 +1658,13 @@
         '</details>'
       ].join('');
       document.body.appendChild(sheet);
+      const hudSelect=sheet.querySelector('[data-id="hudPosition"]');
+      hudSelect.value=hudPosition();
+      hudSelect.addEventListener('change',event=>setHudPosition(event.target.value));
+      const hudSizeSlider=sheet.querySelector('[data-id="hudSize"]');
+      hudSizeSlider.value=String(hudSize());
+      sheet.querySelector('[data-id="hudSizeText"]').textContent=hudSize()+'%';
+      hudSizeSlider.addEventListener('input',event=>setHudSize(event.target.value));
       const modeSelect=sheet.querySelector('[data-id="mode"]');
       modeSelect.value=['tap','hold','both'].includes(mode())?mode():'tap';
       modeSelect.addEventListener('change',event=>{
@@ -1582,6 +1720,9 @@
     function open(anchor){
       if(!supported()||!p()||!desktopMountAllowed())return;
       makePanel();sheet.hidden=false;backdrop.hidden=!touchZonesAllowed();
+      sheet.querySelector('[data-id="hudPosition"]').value=hudPosition();
+      sheet.querySelector('[data-id="hudSize"]').value=String(hudSize());
+      sheet.querySelector('[data-id="hudSizeText"]').textContent=hudSize()+'%';
       presentPanel(sheet,touchZonesAllowed()?anchor:desktopVideoAnchor(p()));
       bandwidth.start();
       refreshSheet();
@@ -1714,11 +1855,17 @@
       event.preventDefault();event.stopPropagation();open(point);
     },{capture:true});
     document.addEventListener('hmtc:corner-hud-change',refresh);
+    document.addEventListener('hmtc:corner-hud-position',refresh);
+    document.addEventListener('hmtc:corner-hud-size',()=>{
+      if(watchHud)applyHudSize(watchHud);
+    });
     watchTouchZonePolicy(()=>{
       if(!touchZonesAllowed())bandwidth.stop();
       refresh();
     });
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
+    GM_registerMenuCommand('YouTube：选择播放信息角落',chooseHudPosition);
+    GM_registerMenuCommand('YouTube：调节播放信息大小',chooseHudSize);
     GM_registerMenuCommand('YouTube：画质接口诊断',async()=>{
       const c=await controls.qualityOptions();
       alert(['YouTube 画质诊断 · v0.6.8','可用方式：'+c.method,
@@ -2123,7 +2270,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.30', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.36', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -3786,6 +3933,18 @@
       '<button type="button" data-preset="1">标准</button>',
       '<button type="button" data-preset="1.6">快速</button></div>',
       '<div class="setting-summary">系数越大，相同滑动距离改变的音量越多；设置立即生效。</div></div>',
+      '<div class="setting"><label for="hmtc-hud-position">播放时间／连接速度的显示位置</label>',
+      '<select id="hmtc-hud-position" data-control="hudPosition">',
+      '<option value="top-left">左上角（默认）</option>',
+      '<option value="top-right">右上角</option>',
+      '<option value="bottom-left">左下角</option>',
+      '<option value="bottom-right">右下角</option>',
+      '</select>',
+      '<div class="setting-summary">四角任选，立即生效；保存后适用于 Holodex 与 YouTube。</div></div>',
+      '<div class="setting"><label>播放时间／连接速度的大小：',
+      '<b data-value="hudSize">100%</b></label>',
+      '<input type="range" min="70" max="180" step="10" data-control="hudSize">',
+      '<div class="setting-summary">70%～180%，默认100%；数字、Mbps和独立背景同步缩放，立即生效。</div></div>',
       '<div class="setting"><label for="hmtc-stats-mode">打开统计的触控方式</label>',
       '<select id="hmtc-stats-mode" data-control="statsMode">',
       '<option value="tap">左侧轻点（默认）</option>',
@@ -3830,6 +3989,10 @@
     settings.querySelectorAll('[data-preset]').forEach(b=>{
       b.addEventListener('click',()=>updateSensitivity(b.dataset.preset));
     });
+    settings.querySelector('[data-control="hudPosition"]').addEventListener('change',e=>{
+      setHudPosition(e.target.value);
+    });
+    settings.querySelector('[data-control="hudSize"]').addEventListener('input',e=>setHudSize(e.target.value));
     settings.querySelector('[data-control="statsMode"]').addEventListener('change',e=>{
       if(['tap','hold','both'].includes(e.target.value))set(STATS_MODE_KEY,e.target.value);
     });
@@ -3866,6 +4029,9 @@
     settings.querySelector('[data-control="sensitivity"]').value=String(getSensitivity());
     settings.querySelector('[data-value="sensitivity"]').textContent=getSensitivity().toFixed(1)+'×';
     settings.querySelector('[data-control="statsMode"]').value=getStatsMode();
+    settings.querySelector('[data-control="hudPosition"]').value=hudPosition();
+    settings.querySelector('[data-control="hudSize"]').value=String(hudSize());
+    settings.querySelector('[data-value="hudSize"]').textContent=hudSize()+'%';
     const config=autoplaySettings();
     settings.querySelector('[data-control="autoEnabled"]').checked=config.enabled;
     settings.querySelector('[data-field="autoState"]').textContent=config.enabled?
@@ -4184,10 +4350,13 @@
            style.visibility==='collapse'||Number(style.opacity)===0)return false;
       }
     }
-    // Ignore our own transparent/clickable HUD when hit-testing. A navigation
-    // drawer or dialog appearing above the top-left player corner wins.
+    // Test the selected corner, not just the original upper-left corner.
+    // Ignore our own HUD; menus, dialogs and drawers should occlude it.
     if(typeof document.elementsFromPoint==='function'){
-      const topmost=document.elementsFromPoint(left+Math.min(9,width-1),top+Math.min(9,height-1))
+      const corner=hudPosition();
+      const x=corner.endsWith('right')?left+width-Math.min(9,width-1):left+Math.min(9,width-1);
+      const y=corner.startsWith('bottom')?top+height-Math.min(9,height-1):top+Math.min(9,height-1);
+      const topmost=document.elementsFromPoint(x,y)
         .find(el=>!el.closest?.('.hmtc-corner-hud'));
       if(topmost&&topmost!==frame&&!frame.contains(topmost))return false;
     }
@@ -4213,9 +4382,7 @@
     if(cell.button.parentNode!==frame)frame.appendChild(cell.button);
     cell.viewportVisible=multiviewHudExposed(frame,rect);
     cell.button.hidden=!cell.viewportVisible||!cell.playbackActive;
-    cell.button.style.left='2px';
-    cell.button.style.top='2px';
-    cell.button.style.maxWidth=Math.max(1,Math.min(240,rect.width-4))+'px';
+    positionCornerHud(cell.button,rect,true);
     displayCornerHud(cell.button,cell.time,cell.speed);
   }
   function hudSpeedValue(cell,kbps){
@@ -4287,6 +4454,19 @@
     pollCornerHuds();
   }
   document.addEventListener('hmtc:corner-hud-change',hudModeChanged);
+  function hudPositionChanged(){
+    for(const cell of hudCells.values()){
+      const rect=cell.frame?.getBoundingClientRect();
+      positionCornerHud(cell.button,rect,true);
+      cell.viewportVisible=multiviewHudExposed(cell.frame,rect);
+      cell.button.hidden=!cell.viewportVisible||!cell.playbackActive;
+    }
+    pollCornerHuds();
+  }
+  document.addEventListener('hmtc:corner-hud-position',hudPositionChanged);
+  document.addEventListener('hmtc:corner-hud-size',()=>{
+    for(const cell of hudCells.values())applyHudSize(cell.button);
+  });
   async function refresh(){
     if(!isMulti()){clearHudCells();rowMap.clear();if(active)closeSheet();return;}
     if(!installed||listing||document.hidden)return;
@@ -4344,7 +4524,9 @@
       if(!row)return;
       event.preventDefault();event.stopPropagation();closeSettings();openSheet(row,point);
     },{capture:true});
-    GM_registerMenuCommand('左上角信息：切换时间／速度／隐藏',cycleHudMode);
+    GM_registerMenuCommand('播放信息：切换时间／速度／隐藏',cycleHudMode);
+    GM_registerMenuCommand('播放信息：选择显示角落',chooseHudPosition);
+    GM_registerMenuCommand('播放信息：调整显示大小',chooseHudSize);
     setInterval(pollCornerHuds,2200);
     const clearOnRouteExit=()=>{
       if(isMulti())return;
@@ -4466,8 +4648,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.30 说明',()=>
-      alert('v0.6.30：左上角时间不足1小时显示分:秒，满1小时显示时:分:秒；保留亮橙色和当前位置。'));
+    GM_registerMenuCommand('Touch Controls v0.6.36 说明',()=>
+      alert('v0.6.36：时间和速度可在70%～180%范围调节大小，四角位置和缩放分别保存。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
