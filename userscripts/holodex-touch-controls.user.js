@@ -490,10 +490,10 @@
     const corner=hudPosition();
     const right=corner.endsWith('right'),bottom=corner.startsWith('bottom');
     const pad=2;
-    const left=playerLocal?pad:Math.max(0,rect.left+pad);
-    const rightInset=playerLocal?pad:Math.max(0,innerWidth-Math.min(innerWidth,rect.right-pad));
-    const top=playerLocal?pad:Math.max(0,rect.top+pad);
-    const bottomInset=playerLocal?pad:Math.max(0,innerHeight-Math.min(innerHeight,rect.bottom-pad));
+    const left=playerLocal?pad:Math.max(pad,rect.left+pad);
+    const rightInset=playerLocal?pad:Math.max(pad,innerWidth-rect.right+pad);
+    const top=playerLocal?pad:Math.max(pad,rect.top+pad);
+    const bottomInset=playerLocal?pad:Math.max(pad,innerHeight-rect.bottom+pad);
     const width=playerLocal?rect.width:Math.min(innerWidth,rect.right)-Math.max(0,rect.left);
     button.style.left=right?'auto':left+'px';
     button.style.right=right?rightInset+'px':'auto';
