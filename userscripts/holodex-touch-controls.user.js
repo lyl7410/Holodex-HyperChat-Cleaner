@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.29
-// @description  修复安卓 YouTube/Holodex 原生连接速度缺失；恢复统计采集，保留角标、触控及播放控制。
+// @version      0.6.30
+// @description  修复 Holodex 多视图统计角标覆盖收藏夹与其他界面；角标仅限播放器内，保留原生速度、触控及播放控制。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -564,6 +564,8 @@
     'text-align:center!important;opacity:.85!important}',
     '.hmtc-corner-hud.hmtc-hud-off:hover,.hmtc-corner-hud.hmtc-hud-off:focus-visible,',
     '.hmtc-corner-hud.hmtc-hud-off:active{opacity:1!important}',
+    '.mv-frame > .hmtc-corner-hud{position:absolute!important;z-index:46!important;',
+    'max-height:calc(100% - 4px)!important}',
     '.hmtc-corner-hud[hidden]{display:none!important}'
   ].join(''));
   // Common touch-sized, fixed rate presets shown on Holodex and YouTube.
@@ -2121,7 +2123,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.28', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.30', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -4163,7 +4165,36 @@
     for(const cell of hudCells.values())hudCellDispose(cell);
     hudCells.clear();
   }
+  // A player left in the DOM by Holodex's router may still have a valid
+  // rectangle. Never draw its HUD over Favorites, menus, dialogs or headers.
+  function multiviewHudExposed(frame,rect){
+    if(!isMulti()||!frame?.isConnected||!rect||rect.width<65||rect.height<45||
+       rect.bottom<=0||rect.top>=innerHeight||rect.right<=0||rect.left>=innerWidth)return false;
+    const left=Math.max(0,rect.left),top=Math.max(0,rect.top);
+    const width=Math.min(innerWidth,rect.right)-left;
+    const height=Math.min(innerHeight,rect.bottom)-top;
+    if(width<24||height<24)return false;
+    const full=document.fullscreenElement;
+    if(full&&full!==frame&&!full.contains?.(frame)&&!frame.contains(full))return false;
+    for(let el=frame;el;el=el.parentElement){
+      if(el.hidden||el.inert||el.getAttribute?.('aria-hidden')==='true')return false;
+      if(typeof getComputedStyle==='function'){
+        const style=getComputedStyle(el);
+        if(style.display==='none'||style.visibility==='hidden'||
+           style.visibility==='collapse'||Number(style.opacity)===0)return false;
+      }
+    }
+    // Ignore our own transparent/clickable HUD when hit-testing. A navigation
+    // drawer or dialog appearing above the top-left player corner wins.
+    if(typeof document.elementsFromPoint==='function'){
+      const topmost=document.elementsFromPoint(left+Math.min(9,width-1),top+Math.min(9,height-1))
+        .find(el=>!el.closest?.('.hmtc-corner-hud'));
+      if(topmost&&topmost!==frame&&!frame.contains(topmost))return false;
+    }
+    return true;
+  }
   function attachCornerHud(root,row){
+    if(!isMulti())return;
     const frame=root?.querySelector('.mv-frame');
     if(!frame)return;
     const rect=frame.getBoundingClientRect();
@@ -4175,16 +4206,17 @@
         time:'—',speed:'—',playbackActive:false,lastSpeed:null,monitorWin:null,monitorOrigin:null};
       hudCells.set(key,cell);
     }
-    const layer=document.fullscreenElement||document.body;
-    if(cell.button.parentNode!==layer)layer.appendChild(cell.button);
-    cell.viewportVisible=rect.width>=65&&rect.height>=45&&rect.bottom>0&&
-      rect.top<innerHeight&&rect.right>0&&rect.left<innerWidth;
+    // The frame establishes a local stacking/positioning context; a body-level
+    // position:fixed HUD would otherwise escape the player and cover the app.
+    if(typeof getComputedStyle==='function'&&getComputedStyle(frame).position==='static')
+      frame.style.position='relative';
+    if(cell.button.parentNode!==frame)frame.appendChild(cell.button);
+    cell.viewportVisible=multiviewHudExposed(frame,rect);
     cell.button.hidden=!cell.viewportVisible||!cell.playbackActive;
-    cell.button.style.left=Math.max(0,rect.left+2)+'px';
-    cell.button.style.top=Math.max(0,rect.top+2)+'px';
-    cell.button.style.maxWidth=Math.max(1,Math.min(240,rect.width-4,innerWidth-Math.max(0,rect.left+2)-2))+'px';
+    cell.button.style.left='2px';
+    cell.button.style.top='2px';
+    cell.button.style.maxWidth=Math.max(1,Math.min(240,rect.width-4))+'px';
     displayCornerHud(cell.button,cell.time,cell.speed);
-
   }
   function hudSpeedValue(cell,kbps){
     const now=Date.now();
@@ -4196,17 +4228,22 @@
     return last?hudSpeedReading(last.kbps,true,last.at):hudSpeedReading(NaN);
   }
   async function pollCornerHuds(){
-    if(hudBusy||!installed||!isMulti()||document.hidden)return;
+    if(!isMulti()){clearHudCells();return;}
+    if(hudBusy||!installed||document.hidden)return;
     const wantTime=hudWantsTime(),wantSpeed=hudWantsSpeed();
     hudBusy=true;
     try{
+      for(const cell of hudCells.values()){
+        cell.viewportVisible=multiviewHudExposed(cell.frame,cell.frame?.getBoundingClientRect());
+        if(!cell.viewportVisible){cell.button.hidden=true;hudSessionStop(cell);}
+      }
       const cells=[...hudCells.values()].filter(cell=>cell.viewportVisible).slice(0,12);
       await Promise.allSettled(cells.map(async cell=>{
         const row=rowMap.get(cell.key);
         if(!row)return;
         const instance=cell;
         const stillHere=()=>hudCells.get(cell.key)===instance&&
-          rowMap.has(cell.key)&&isMulti();
+          rowMap.has(cell.key)&&multiviewHudExposed(cell.frame,cell.frame?.getBoundingClientRect());
         // A bandwidth field can exist on an unstarted YouTube thumbnail.
         // Check actual playback even in speed-only mode before collecting it.
         let clock=null;
@@ -4251,10 +4288,13 @@
   }
   document.addEventListener('hmtc:corner-hud-change',hudModeChanged);
   async function refresh(){
-    if(!installed||listing||!isMulti()||document.hidden)return;
+    if(!isMulti()){clearHudCells();rowMap.clear();if(active)closeSheet();return;}
+    if(!installed||listing||document.hidden)return;
     listing=true;
     try{
       const rows=await rpc('list',{},3500);
+      // Async list results from a prior route must not recreate stale HUDs.
+      if(!isMulti()){clearHudCells();rowMap.clear();if(active)closeSheet();return;}
       const roots=[...document.querySelectorAll('.multiview .mv-cell > .cell-content')];
       const validKeys=new Set();
       for(const row of rows){
@@ -4306,6 +4346,15 @@
     },{capture:true});
     GM_registerMenuCommand('左上角信息：切换时间／速度／隐藏',cycleHudMode);
     setInterval(pollCornerHuds,2200);
+    const clearOnRouteExit=()=>{
+      if(isMulti())return;
+      if(hudCells.size||rowMap.size){clearHudCells();rowMap.clear();}
+      if(active)closeSheet();
+    };
+    // Vue's pushState does not emit popstate; cheap pathname checks cover it.
+    window.addEventListener('popstate',clearOnRouteExit,{passive:true});
+    window.addEventListener('hashchange',clearOnRouteExit,{passive:true});
+    setInterval(clearOnRouteExit,300);
     window.addEventListener('pagehide',clearHudCells,{passive:true});
     setInterval(()=>{
       if(isMulti()&&!document.hidden)for(const row of rowMap.values())configureDesktopFrame(row);
@@ -4340,7 +4389,7 @@
           ].join('\n');
         }catch(error){return (row.title||row.videoId)+'：'+String(error?.message||error);}
       }));
-      alert('数据诊断 · v0.6.28\n'+reports.join('\n\n'));
+      alert('数据诊断 · v0.6.30\n'+reports.join('\n\n'));
     });
     GM_registerMenuCommand('诊断多视图右键面板',async()=>{
       const rows=[...rowMap.values()];
@@ -4352,7 +4401,7 @@
             '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
         }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
       }));
-      alert('右键面板诊断 · v0.6.28\n'+reports.join('\n'));
+      alert('右键面板诊断 · v0.6.30\n'+reports.join('\n'));
     });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
@@ -4417,8 +4466,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.28 说明',()=>
-      alert('v0.6.28：左上角时间不足1小时显示分:秒，满1小时显示时:分:秒；保留亮橙色和当前位置。'));
+    GM_registerMenuCommand('Touch Controls v0.6.30 说明',()=>
+      alert('v0.6.30：左上角时间不足1小时显示分:秒，满1小时显示时:分:秒；保留亮橙色和当前位置。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
