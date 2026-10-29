@@ -1,15 +1,27 @@
-# Holodex / YouTube Touch Controls — v0.6.28 紧凑时间
+# Holodex / YouTube Touch Controls — v0.6.29 连接速度兼容性修复
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新 PR 测试版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/feat/lightweight-hud-v0625/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.28；更新后完整刷新页面与 iframe） · [项目首页](../README.md)
+**[安装／更新正式版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.29；更新后完整刷新页面与 iframe） · [项目首页](../README.md)
 
 ## 安装与升级
 
 1. 在 PC 或安卓浏览器的 ScriptCat / Tampermonkey 中更新原有 **Holodex Touch Controls** 脚本，**不要同时启用两个版本**。
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
-4. 原来的 Cleaner、Quick Add、Channel Name Fix 不需修改。
+4. Cleaner 的聊天间距功能已独立更新至 v2.5.0；Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.29：恢复安卓原生 Connection Speed 采集
+
+在部分安卓浏览器的嵌入 YouTube 播放器中，`showVideoInfo()`（显示原版详细统计）可以工作，但 `isVideoInfoVisible()`（读取显示状态）不存在。旧版的 Holodex iframe 采集器要求后者必须存在，导致开启自定义统计时直接拒绝采集，连接速度显示「—」。
+
+本版改为：**先检查真正的原生统计 DOM，再决定能否确认原版面板可见**。在触摸设备上，既无可见状态 API、也尚未创建统计 DOM 时，可在脚本自己的采集会话中尝试开启原版统计并使其透明；面板关闭时只关闭由本脚本打开的统计，避免改动用户自己打开的状态。没有读取到速度时，不显示编造数据。
+
+同时增加**共用原生速度解析器**作为后备，兼容 YouTube 返回的数值字段、嵌套数据以及 `Connection Speed: 9.80 Mbps` 等带单位文本。Holodex 的原生统计桥接仍对比当前 iframe 视频 ID，避免将别的视频速率混入当前格子。
+
+**验证**：在模拟缺少 `isVideoInfoVisible()` 的 YouTube iframe 中，`monitorStart` 能启用；返回实际 `9.80 Mbps` 的原生统计后，自定义面板可取得 9800 Kbps；`monitorStop` 能恢复原版面板。仍需安卓真机验证具体 YouTube 版本是否提供带宽数据。
+
+如果 YouTube 原版统计自身也不报告 Connection Speed，或篡改猴未获准在 YouTube embed iframe 中运行，脚本无法提供真实数值。可在 YouTube 页的篡改猴菜单使用「YouTube：连接速度诊断」，观察播放器是否开放原生接口及报告数据来源。
 
 ## v0.6.28：左上角紧凑时间
 
