@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.28
-// @description  左上角透明亮橙文字与黑色描边；未开始播放的封面隐藏标签，保留紧凑统计与播放控制。
+// @version      0.6.29
+// @description  修复安卓 YouTube/Holodex 原生连接速度缺失；恢复统计采集，保留角标、触控及播放控制。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -1768,6 +1768,8 @@
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const player = () => page.document.getElementById('movie_player');
     const controls=youtubePlaybackTools(page.document,player);
+    // Reuse the robust native watch parser for alternate Connection Speed formats.
+    const fallbackBandwidth=youtubeWatchBandwidth(page.document,player,()=>false);
     const desktopBridge=installDesktopFrameBridge(videoId,player,origins);
     const number = value => {
       if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -1850,7 +1852,14 @@
         if(typeof p?.isVideoInfoVisible==='function')
           return !!p.isVideoInfoVisible();
       } catch {}
-      return null;
+      // Mobile iframe builds may expose showVideoInfo() but not its matching
+      // isVideoInfoVisible(). Check the actual DOM before assuming unavailable.
+      const panel=page.document.querySelector(
+        '.html5-video-info-panel-content, .html5-video-info-panel, .ytp-stats-for-nerds');
+      if(!panel)return null;
+      const css=page.getComputedStyle?.(panel);
+      return !!panel.getClientRects?.().length&&css?.display!=='none'&&
+        css?.visibility!=='hidden';
     }
     function startMonitor(){
       if(!touchZonesAllowed()){
@@ -1863,8 +1872,8 @@
       if(typeof p.showVideoInfo!=='function')
         return {enabled:false,reason:'播放器没有原生统计启动接口'};
       const visible=isNativeVisible(p);
-      if(visible===null)
-        return {enabled:false,reason:'播放器无法确认原版统计的显示状态'};
+      // The visibility API can be absent before YouTube creates its stats
+      // DOM. Start an owned, silent monitor on touch-only devices anyway.
       if(monitor.active){
         // The player may turn off its diagnostics after a media reload.
         if(monitor.forced&&!monitor.manual&&!visible){
@@ -1874,8 +1883,8 @@
         return {enabled:true,hidden:monitor.forced&&!monitor.manual};
       }
       monitor.active=true;
-      monitor.initiallyVisible=visible;
-      monitor.forced=!visible;
+      monitor.initiallyVisible=visible===true;
+      monitor.forced=visible!==true;
       monitor.manual=false;
       if(monitor.forced){
         silent(true); // CSS is active BEFORE enabling the original overlay.
@@ -1982,7 +1991,7 @@
       }
       // DOM is used only as a fallback, and only while YouTube says its
       // statistics panel is actively enabled. Hidden snapshots can be stale.
-      if(isNativeVisible(p)===true){
+      if(monitor.active||isNativeVisible(p)===true){
         const fromPanel=parse(null,true);
         // When the native panel is actively updating, its displayed value
         // may be newer than the return value of a cached internal method.
@@ -1993,6 +2002,19 @@
         if(fromPanel.bufferSeconds!=null)data.bufferSeconds=fromPanel.bufferSeconds;
         if(!data.resolution) data.resolution=fromPanel.resolution;
         if(fromPanel.liveLatencySeconds!=null)data.liveLatencySeconds=fromPanel.liveLatencySeconds;
+      }
+      // YouTube may return bandwidth as a nested field, Mbps text, or a
+      // differently named metric. Reuse the source-verified watch parser
+      // without opening an additional native stats overlay.
+      if(data.bandwidthKbps==null){
+        try{
+          const net=fallbackBandwidth.read();
+          if(net.available&&Number.isFinite(Number(net.bandwidthKbps))&&
+             Number(net.bandwidthKbps)>0){
+            data.bandwidthKbps=Number(net.bandwidthKbps);
+            source='shared-'+(net.source||'YouTube-native');
+          }
+        }catch{}
       }
       const liveState=resolvePlaybackState(youtubeWatchLiveState(page.document,player,controls.video,page),statusHint);
       data.live=liveState.live;data.liveReason=liveState.reason;
