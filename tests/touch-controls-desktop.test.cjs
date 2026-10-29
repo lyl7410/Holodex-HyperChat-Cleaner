@@ -203,19 +203,42 @@ test('one failing wrapper method does not discard other playback fields',async()
   assert.equal(result.position,123);assert.equal(result.duration,3600);assert.equal(result.rate,1.25);
   assert.equal(result.live,true);assert.equal(result.volume,undefined);
 });
-test('HUD remains and no constant statistics button is created',()=>{
-  const layer={appendChild(el){el.parentNode=this;}};
+test('HUD is positioned inside its own player, never as a global body overlay',()=>{
   const button={style:{},remove(){this.removed=true;}};
   const row={layoutId:1,videoId:'abcdefghijk'};
-  const frame={getBoundingClientRect:()=>({width:500,height:300,left:10,top:20,right:510,bottom:320})};
+  const frame={isConnected:true,style:{},appendChild(el){el.parentNode=this;},
+    contains(el){return el===this;},
+    getBoundingClientRect:()=>({width:500,height:300,left:10,top:20,right:510,bottom:320})};
   const ctx=vm.createContext({hudCells:new Map(),hudSessionStop(){},createCornerHud:()=>button,
-    document:{body:layer},innerHeight:1000,innerWidth:1200,displayCornerHud(){},clearTimeout(){}});
+    isMulti:()=>true,document:{elementsFromPoint:()=>[frame],fullscreenElement:null},
+    innerHeight:1000,innerWidth:1200,displayCornerHud(){},clearTimeout(){}});
   vm.runInContext(section('  function hudCellDispose(cell){','  function hudSpeedValue(cell,kbps){'),ctx);
   ctx.attachCornerHud({querySelector:()=>frame},row);
   assert.equal(ctx.hudCells.get('1:abcdefghijk').button,button);
-  assert.equal(button.style.left,'12px');assert.equal(button.style.top,'22px');
+  assert.equal(button.parentNode,frame);
+  assert.equal(button.style.left,'2px');assert.equal(button.style.top,'2px');
+  assert.equal(button.style.maxWidth,'240px');
   ctx.hudCellDispose(ctx.hudCells.get('1:abcdefghijk'));assert.ok(button.removed);
+  assert.match(source,/\.mv-frame > \.hmtc-corner-hud\{position:absolute!important/);
   assert.doesNotMatch(source,/hmtc-panel-open|panelButton/);
+});
+test('multiview HUD hides when Favorites or dialogs cover the player corner',()=>{
+  let multi=true,overlap=null;
+  const frame={isConnected:true,parentElement:null,contains(el){return el===this||el===inside;}};
+  const inside={closest:()=>null},drawer={closest:()=>null};
+  const ctx=vm.createContext({isMulti:()=>multi,innerWidth:1200,innerHeight:800,
+    document:{fullscreenElement:null,elementsFromPoint:()=>[overlap]}});
+  vm.runInContext(section('  function multiviewHudExposed(frame,rect){',
+    '  function attachCornerHud(root,row){'),ctx);
+  const rect={left:10,top:20,right:510,bottom:320,width:500,height:300};
+  overlap=inside;assert.equal(ctx.multiviewHudExposed(frame,rect),true);
+  overlap=drawer;assert.equal(ctx.multiviewHudExposed(frame,rect),false);
+  overlap=inside;frame.hidden=true;
+  assert.equal(ctx.multiviewHudExposed(frame,rect),false);
+  frame.hidden=false;frame.isConnected=false;
+  assert.equal(ctx.multiviewHudExposed(frame,rect),false);
+  frame.isConnected=true;multi=false;
+  assert.equal(ctx.multiviewHudExposed(frame,rect),false);
 });
 
 test('HUD shortens each sub-hour clock independently and preserves hour boundaries and unknown values',()=>{
@@ -318,13 +341,15 @@ test('speed-only multiview polls hidden thumbnails for playback but never reads 
   const f=cornerHudContext(),ctx=f.ctx,button=ctx.createCornerHud(),calls=[];
   let playerState=5;
   const row={layoutId:1,videoId:'abcdefghijk'},cell={key:'1:abcdefghijk',videoId:row.videoId,
-    button,viewportVisible:true,playbackActive:false,lastSpeed:null};
+    button,frame:{getBoundingClientRect:()=>({width:500,height:300})},
+    viewportVisible:true,playbackActive:false,lastSpeed:null};
   Object.assign(ctx,{hudCells:new Map([[cell.key,cell]]),rowMap:new Map([[cell.key,row]]),
-    hudBusy:false,installed:true,isMulti:()=>true,playbackTimeText:()=> '01:08:05',
+    hudBusy:false,installed:true,isMulti:()=>true,multiviewHudExposed:()=>true,
+    playbackTimeText:()=> '01:08:05',
     readMultiviewClock:async()=>({ready:true,live:true,playerState,position:4085}),
     nativeFrame:()=>({frame:{contentWindow:{}},origin:'https://www.youtube.com'}),
     nativeRequest:async(r,action)=>{calls.push(action);return {available:true,bandwidthKbps:12340};},
-    hudSessionStop(){calls.push('stop');}});
+    hudSessionStop(){calls.push('stop');},clearHudCells(){}});
   vm.runInContext(section('  async function pollCornerHuds(){','  function hudModeChanged(){'),ctx);
   await ctx.pollCornerHuds();assert.equal(button.hidden,true);assert.ok(!calls.includes('stats'));
   playerState=1;await ctx.pollCornerHuds();assert.equal(button.hidden,false);assert.ok(calls.includes('stats'));
