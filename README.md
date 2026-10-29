@@ -8,8 +8,11 @@
 2. [Channel Name Fix](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/channel-name-fix.user.js)
 3. [Holodex Quick Add（PC + Android）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-mobile-quick-add.user.js)
 4. [Holodex Touch Controls（Holodex／YouTube 手势、倍速、画质＋多视图自动播放）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)
+5. [Holodex Embed Recovery（Edge 播放器复用与卡顿恢复）](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-embed-recovery.user.js)
 
-四个脚本可独立安装。Quick Add 不要求安装另外三个脚本；Touch Controls 独立提供 Holodex 多视图 PC／安卓智能自动播放，也在 Holodex 和普通 YouTube 播放页提供手机触控、统计、倍速与原生画质控制；其他功能按需安装。更新时覆盖同名脚本并刷新相关页面，不要同时启用多份旧版。
+五个脚本可独立安装。Quick Add 不要求安装另外三个脚本；Touch Controls 独立提供 Holodex 多视图 PC／安卓智能自动播放，也在 Holodex 和普通 YouTube 播放页提供手机触控、统计、倍速与原生画质控制；其他功能按需安装。更新时覆盖同名脚本并刷新相关页面，不要同时启用多份旧版。
+
+Recovery 为可选独立脚本；已有同名 Recovery 的用户请覆盖升级，不要并行启用旧版。使用 Edge 复用模式时，建议先关闭 Touch Controls 的“智能自动播放”，保留手势、统计等功能。黄色返回和垃圾桶维持网站原生行为，仍可能触发其他格中断。详见 [恢复脚本设置与共存说明](docs/embed-recovery.md)。
 
 ## 功能
 
@@ -34,6 +37,14 @@
 - **减少反复开关面板时的闪烁**：检测 Vuetify 弹窗显隐变化，面板显示时尽早挂载已经预热的头像；同一视频更换头像时，旧头像会保留到新头像加载完成。
 - 保留油猴菜单：查看缓存、重新获取当前视频资料、清空缓存。
 - 聊天切换无反应时，先从脚本菜单选择「开始聊天切换诊断」，切换一次视频后选择「查看聊天切换诊断」；报告可选中复制，对比选择事件、当前视频、组件更新依赖与聊天框地址。
+
+### Holodex Embed Recovery v0.2.1
+
+- 检测播放进度停滞、持续缓冲和已播放直播的异常结束，按冷却、退避和次数上限尝试恢复。
+- Edge 默认复用现有播放器，蓝色刷新与自动恢复共用单格流程，保留音量与静音；失败不自动退回销毁重建。
+- 黄色返回和垃圾桶不拦截；复用成功不弹提示，失败及待手动播放提示保留。
+- 保留原脚本名称、`Nep` namespace 及已有配置；其他浏览器默认沿用原恢复方式，可在菜单中设置。
+- 已通过70项模拟测试，Holodex真实Edge与多脚本共存效果仍待实测；不宣称修复浏览器底层故障。
 
 ## 使用说明
 
@@ -91,7 +102,18 @@ docs/
 README.md
 ```
 
+## 恢复脚本测试
+
+```sh
+node --check userscripts/holodex-embed-recovery.user.js
+node tests/holodex-embed-recovery.test.cjs
+```
+
+测试仅使用 Node.js 内置模块。模拟结果不替代真实浏览器验证。
+
 ## 版本记录
+
+- **2026-10-30 — Embed Recovery v0.2.1**：新增独立播放器恢复脚本；Edge 使用现有播放器重新加载，保留配置与音频状态；放行原生返回/删除，取消复用成功提示。新增70项模拟测试与中文共存说明。
 
 - **2026-10-29 — Cleaner v2.5.0**：根据安卓聊天截图，新增 0–24px 消息上下间距与 1.00–1.90 倍文字行高配置，默认更紧凑；Holodex Aa 面板与 Tampermonkey 菜单双入口，持久保存并通过 GM 及 iframe 消息同步，兼容 HyperChat 和 YouTube 原生聊天布局。
 - **2026-10-29 — Touch Controls v0.6.29**：安卓嵌入播放器缺少 `isVideoInfoVisible()` 时不再直接拒绝启动原生统计；补充 DOM 可见性判断及实际 Mbps/Kbps、嵌套诊断字段后备读取。保持当前视频与最后一条真实读数的边界，不伪造连接速度。通过模拟 iframe 9.8 Mbps 及统计恢复验证，安卓真机待复测。
