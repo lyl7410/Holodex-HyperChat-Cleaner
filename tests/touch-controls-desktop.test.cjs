@@ -309,10 +309,10 @@ test('all four HUD corners use a 2px inset for fixed YouTube and local Holodex p
 });
 
 
-test('v0.6.34 HUD shrink-wraps visible content rather than stretching a flex row',()=>{
+test('v0.6.35 HUD gives the time and speed independent snug backplates',()=>{
   assert.match(source,/display:inline-flex!important;flex-direction:column!important/);
-  assert.match(source,/align-items:flex-start!important;justify-content:center!important;gap:1px!important/);
-  assert.match(source,/width:fit-content!important;min-width:0!important/);
+  assert.match(source,/align-items:flex-start!important;justify-content:center!important;gap:2px!important/);
+  assert.match(source,/width:max-content!important;min-width:0!important/);
   assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right\{align-items:flex-end!important;text-align:right!important\}/);
   assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-time\{display:block!important;flex:0 0 auto!important/);
   assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-speed\{display:inline-flex!important;flex:0 1 auto!important/);
@@ -322,13 +322,17 @@ test('v0.6.34 HUD shrink-wraps visible content rather than stretching a flex row
   assert.match(source,/speed\.append\(value,unit,dot\)/);
   assert.doesNotMatch(source,/flex-direction:row-reverse/);
   assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-cached \.hmtc-hud-cache-dot\{display:block!important\}/);
-  assert.match(source,/position:absolute!important;right:1px;left:auto/);
 });
-test('compact translucent background stays scoped to each player',()=>{
-  assert.match(source,/background:rgba\(10,13,20,\.73\)!important/);
+test('black background exists only on independently fitted time and speed rows',()=>{
+  // Do not regress to the single over-wide black rectangle from v0.6.34.
+  assert.match(source,/border:0!important;border-radius:0!important;padding:0!important;margin:0!important/);
+  assert.match(source,/background:transparent!important;color:#FFC15A!important/);
+  assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-line\{box-sizing:border-box!important/);
+  assert.match(source,/background:rgba\(10,13,20,\.77\)!important/);
   assert.match(source,/border:1px solid rgba\(255,255,255,\.15\)!important/);
-  assert.match(source,/backdrop-filter:blur\(3px\)/);
-  assert.match(source,/padding:3px 5px!important/);
+  assert.match(source,/border-radius:5px!important;padding:2px 4px!important/);
+  assert.match(source,/pointer-events:none!important;cursor:pointer!important/);
+  assert.match(source,/pointer-events:auto!important;cursor:pointer!important/);
   assert.match(source,/\.mv-frame > \.hmtc-corner-hud\{position:absolute!important;z-index:46!important/);
 });
 test('HUD shortens each sub-hour clock independently and preserves hour boundaries and unknown values',()=>{
