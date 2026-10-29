@@ -309,24 +309,27 @@ test('all four HUD corners use a 2px inset for fixed YouTube and local Holodex p
 });
 
 
-test('right-side HUD time and Mbps share an anchor without a hidden cache-dot gap',()=>{
-  // Regression: opacity/visibility does not remove the trailing 5px dot plus
-  // flex gap. In right corners this shifted the speed text ~16px to the left.
-  const rightRule=/\.hmtc-corner-hud\.hmtc-hud-right \.hmtc-hud-speed\{([^}]*)\}/;
-  const rules=source.match(rightRule);
-  assert.ok(rules,'missing right-side HUD flex rule');
-  assert.match(rules[1],/flex-direction:row-reverse/);
-  assert.match(rules[1],/justify-content:flex-start/);
-  const dot=source.match(/\.hmtc-corner-hud \.hmtc-hud-cache-dot\{([^}]*)(?:'[^\n]*\n[^}]*)?\}/);
-  assert.match(source,/background:#F2CA7A;display:none/);
-  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-cached \.hmtc-hud-cache-dot\{display:block\}/);
-  assert.doesNotMatch(source,/background:#F2CA7A;visibility:hidden/);
-  assert.ok(source.indexOf("speed.append(value,dot)")>=0,
-    'cache marker must remain after the speed value in DOM order');
-  // Both date/time and speed must be right-aligned even when the indicator is visible.
+test('time and smaller Mbps unit share the same side edge on all corners',()=>{
+  // v0.6.33 renders the number and unit separately, so the unit is smaller,
+  // yet the full speed row is aligned to the same side as the time.
+  assert.match(source,/speed\.append\(value,unit,dot\)/);
   assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right\{text-align:right!important\}/);
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right \.hmtc-hud-speed\{justify-content:flex-end!important\}/);
+  assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-speed\{display:flex!important;align-items:baseline!important/);
+  assert.match(source,/\.hmtc-corner-hud \.hmtc-hud-speed-unit\{flex:0 0 auto!important/);
+  assert.match(source,/font:700 10px\/1\.2 system-ui/);
+  assert.doesNotMatch(source,/flex-direction:row-reverse/);
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-cached \.hmtc-hud-cache-dot\{display:block!important\}/);
+  assert.match(source,/position:absolute!important;right:1px;left:auto/);
+  assert.match(source,/\.hmtc-corner-hud\.hmtc-hud-right \.hmtc-hud-cache-dot\{left:1px;right:auto\}/);
 });
-
+test('readable compact background does not add a full-screen hit target',()=>{
+  assert.match(source,/background:rgba\(10,13,20,\.78\)!important/);
+  assert.match(source,/border:1px solid rgba\(255,255,255,\.16\)!important/);
+  assert.match(source,/backdrop-filter:blur\(3px\)/);
+  assert.match(source,/width:max-content!important/);
+  assert.match(source,/\.mv-frame > \.hmtc-corner-hud\{position:absolute!important;z-index:46!important/);
+});
 test('HUD shortens each sub-hour clock independently and preserves hour boundaries and unknown values',()=>{
   const {ctx}=cornerHudContext(),button=ctx.createCornerHud();
   for(const [input,expected] of [['00:00:00','00:00'],['00:00:59','00:59'],['00:03:34','03:34'],
@@ -369,14 +372,17 @@ test('HUD uses separate colored readings in all modes and cache timer expires wi
   const f=cornerHudContext(),button=f.ctx.createCornerHud(),parts=button._hmtcHudParts;
   const fresh=f.ctx.hudSpeedReading(12340);f.ctx.displayCornerHud(button,'01:02:03',fresh);
   assert.equal(parts.time.hidden,true);assert.equal(parts.speed.hidden,false);
-  assert.equal(parts.value.textContent,'12.34 Mbps');
+  assert.equal(parts.value.textContent,'12.34');
+  assert.equal(parts.unit.textContent,'Mbps');assert.equal(parts.unit.hidden,false);
   f.setNow(13000);const cached=f.ctx.hudSpeedReading(12340,true,10000);
   f.ctx.displayCornerHud(button,'01:02:03',cached);
-  assert.equal(parts.value.textContent,fresh.text);assert.ok(button.classList.values.has('hmtc-hud-cached'));
+  assert.equal(parts.value.textContent,'12.34');
+  assert.equal(parts.unit.textContent,'Mbps');assert.ok(button.classList.values.has('hmtc-hud-cached'));
   assert.match(button.title,/距今 3\.0 秒/);assert.match(button.attributes['aria-label'],/最近一次读取/);
   assert.ok(!parts.value.textContent.includes('上次'));
   while(f.timers.size)f.runNext();
-  assert.equal(parts.value.textContent,'—');assert.ok(!button.classList.values.has('hmtc-hud-cached'));
+  assert.equal(parts.value.textContent,'—');assert.equal(parts.unit.hidden,true);
+  assert.ok(!button.classList.values.has('hmtc-hud-cached'));
   for(const mode of ['time','both','off','speed']){
     f.setMode(mode);f.ctx.displayCornerHud(button,'01:02:03',fresh);
     assert.equal(parts.time.hidden,!['time','both'].includes(mode));
