@@ -204,14 +204,17 @@ test('one failing wrapper method does not discard other playback fields',async()
   assert.equal(result.live,true);assert.equal(result.volume,undefined);
 });
 test('HUD is positioned inside its own player, never as a global body overlay',()=>{
-  const button={style:{},remove(){this.removed=true;}};
+  const button={style:{},classList:{toggle(){}},remove(){this.removed=true;}};
   const row={layoutId:1,videoId:'abcdefghijk'};
   const frame={isConnected:true,style:{},appendChild(el){el.parentNode=this;},
     contains(el){return el===this;},
     getBoundingClientRect:()=>({width:500,height:300,left:10,top:20,right:510,bottom:320})};
   const ctx=vm.createContext({hudCells:new Map(),hudSessionStop(){},createCornerHud:()=>button,
-    isMulti:()=>true,document:{elementsFromPoint:()=>[frame],fullscreenElement:null},
+    isMulti:()=>true,hudPosition:()=> 'top-left',
+    document:{elementsFromPoint:()=>[frame],fullscreenElement:null},
     innerHeight:1000,innerWidth:1200,displayCornerHud(){},clearTimeout(){}});
+  vm.runInContext(section('  function positionCornerHud(button,rect,playerLocal=false){',
+    '  const HUD_MODES='),ctx);
   vm.runInContext(section('  function hudCellDispose(cell){','  function hudSpeedValue(cell,kbps){'),ctx);
   ctx.attachCornerHud({querySelector:()=>frame},row);
   assert.equal(ctx.hudCells.get('1:abcdefghijk').button,button);
@@ -222,23 +225,87 @@ test('HUD is positioned inside its own player, never as a global body overlay',(
   assert.match(source,/\.mv-frame > \.hmtc-corner-hud\{position:absolute!important/);
   assert.doesNotMatch(source,/hmtc-panel-open|panelButton/);
 });
-test('multiview HUD hides when Favorites or dialogs cover the player corner',()=>{
-  let multi=true,overlap=null;
+test('multiview HUD hides when Favorites or dialogs cover the selected corner',()=>{
+  let multi=true,overlap=null,corner='top-left',hit=[];
   const frame={isConnected:true,parentElement:null,contains(el){return el===this||el===inside;}};
   const inside={closest:()=>null},drawer={closest:()=>null};
-  const ctx=vm.createContext({isMulti:()=>multi,innerWidth:1200,innerHeight:800,
-    document:{fullscreenElement:null,elementsFromPoint:()=>[overlap]}});
+  const ctx=vm.createContext({isMulti:()=>multi,hudPosition:()=>corner,
+    innerWidth:1200,innerHeight:800,
+    document:{fullscreenElement:null,elementsFromPoint:(x,y)=>{hit=[x,y];return [overlap];}}});
   vm.runInContext(section('  function multiviewHudExposed(frame,rect){',
     '  function attachCornerHud(root,row){'),ctx);
   const rect={left:10,top:20,right:510,bottom:320,width:500,height:300};
-  overlap=inside;assert.equal(ctx.multiviewHudExposed(frame,rect),true);
-  overlap=drawer;assert.equal(ctx.multiviewHudExposed(frame,rect),false);
+  for(const [selected,expectX,expectY] of [
+    ['top-left',19,29],['top-right',501,29],
+    ['bottom-left',19,311],['bottom-right',501,311]
+  ]){
+    corner=selected;
+    overlap=inside;assert.equal(ctx.multiviewHudExposed(frame,rect),true);
+    assert.deepEqual(hit,[expectX,expectY]);
+    overlap=drawer;assert.equal(ctx.multiviewHudExposed(frame,rect),false);
+  }
   overlap=inside;frame.hidden=true;
   assert.equal(ctx.multiviewHudExposed(frame,rect),false);
   frame.hidden=false;frame.isConnected=false;
   assert.equal(ctx.multiviewHudExposed(frame,rect),false);
   frame.isConnected=true;multi=false;
   assert.equal(ctx.multiviewHudExposed(frame,rect),false);
+});
+
+
+test('HUD position setting persists and rejects invalid values',()=>{
+  const store=new Map(),events=[];
+  const ctx=vm.createContext({innerWidth:1200,innerHeight:800,
+    document:{dispatchEvent:event=>events.push(event.type)},
+    Event,GM_getValue:(key,fallback)=>store.has(key)?store.get(key):fallback,
+    GM_setValue:(key,value)=>store.set(key,value),prompt:()=>null,alert(){}});
+  vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES='),ctx);
+  assert.equal(ctx.hudPosition(),'top-left');
+  assert.equal(ctx.setHudPosition('bottom-right'),true);
+  assert.equal(ctx.hudPosition(),'bottom-right');
+  assert.deepEqual(events,['hmtc:corner-hud-position']);
+  assert.equal(ctx.setHudPosition('middle'),false);
+  assert.equal(ctx.hudPosition(),'bottom-right');
+  store.set('hmtc_corner_hud_position_v1','invalid');
+  assert.equal(ctx.hudPosition(),'top-left');
+});
+
+test('all four HUD corners use a 2px inset for fixed YouTube and local Holodex players',()=>{
+  const store=new Map(),ctx=vm.createContext({innerWidth:1200,innerHeight:800,
+    document:{dispatchEvent(){}},Event,
+    GM_getValue:(key,fallback)=>store.has(key)?store.get(key):fallback,
+    GM_setValue:(key,value)=>store.set(key,value),prompt:()=>null,alert(){}});
+  vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES='),ctx);
+  const rect={left:10,top:20,right:510,bottom:320,width:500,height:300};
+  const button=()=>({style:{},classList:{values:new Set(),toggle(k,v){
+    if(v)this.values.add(k);else this.values.delete(k);
+  }}});
+  for(const [corner,vertical,horizontal] of [
+    ['top-left','top','left'],['top-right','top','right'],
+    ['bottom-left','bottom','left'],['bottom-right','bottom','right']
+  ]){
+    ctx.setHudPosition(corner);
+    const yt=button(),multi=button();
+    ctx.positionCornerHud(yt,rect);
+    ctx.positionCornerHud(multi,rect,true);
+    const otherVertical=vertical==='top'?'bottom':'top';
+    const otherHorizontal=horizontal==='left'?'right':'left';
+    assert.equal(yt.style[vertical],vertical==='top'?'22px':'482px');
+    assert.equal(yt.style[horizontal],horizontal==='left'?'12px':'692px');
+    assert.equal(yt.style[otherVertical],'auto');
+    assert.equal(yt.style[otherHorizontal],'auto');
+    assert.equal(multi.style[vertical],'2px');
+    assert.equal(multi.style[horizontal],'2px');
+    assert.equal(multi.style[otherVertical],'auto');
+    assert.equal(multi.style[otherHorizontal],'auto');
+    assert.equal(yt.style.maxWidth,'240px');
+    assert.equal(multi.style.maxWidth,'240px');
+    assert.equal(yt.classList.values.has('hmtc-hud-right'),horizontal==='right');
+  }
+  assert.match(source,/YouTube：选择播放信息角落/);
+  assert.match(source,/播放信息：选择显示角落/);
+  assert.match(source,/data-id="hudPosition"/);
+  assert.match(source,/data-control="hudPosition"/);
 });
 
 test('HUD shortens each sub-hour clock independently and preserves hour boundaries and unknown values',()=>{
@@ -300,14 +367,18 @@ test('HUD uses separate colored readings in all modes and cache timer expires wi
   assert.equal(f.timers.size,1);f.ctx.displayCornerHud(button,'01:02:03',fresh);assert.equal(f.timers.size,0);
 });
 test('watch HUD forwards cache timestamp and uses the same two-pixel viewport-safe position',()=>{
-  const button={style:{},isConnected:true},layer={appendChild(b){b.parentNode=this;}};
+  const button={style:{},classList:{toggle(){}},isConnected:true},
+    layer={appendChild(b){b.parentNode=this;}};
   let reading,rect={width:100,height:100,left:1150,top:20,right:1250,bottom:120};
   const ctx=vm.createContext({watchHud:null,document:{body:layer},innerWidth:1200,innerHeight:800,
+    hudPosition:()=> 'top-left',
     createCornerHud:()=>button,hudWantsTime:()=>true,hudWantsSpeed:()=>true,
     hudPlaybackStarted:()=>true,readWatchClock:()=>({time:'01:02:03',state:{ready:true,playerState:1}}),bandwidth:{start(){},read:()=>({available:true,
       bandwidthKbps:12340,stale:true,sampledAt:10000})},
     hudSpeedReading:(kbps,stale,sampledAt)=>({kbps,stale,sampledAt}),
     displayCornerHud:(b,t,s)=>{reading=s;},clearTimeout(){}});
+  vm.runInContext(section('  function positionCornerHud(button,rect,playerLocal=false){',
+    '  const HUD_MODES='),ctx);
   vm.runInContext(section('    function refreshWatchHud(player){','    function refreshSheet(){'),ctx);
   ctx.refreshWatchHud({getBoundingClientRect:()=>rect});
   assert.equal(button.style.left,'1152px');assert.equal(button.style.top,'22px');
