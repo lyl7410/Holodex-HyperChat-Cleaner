@@ -4143,8 +4143,8 @@
     stopNativeCollector();
   }
 
-  // Fixed overlay portals let each multiview video show its own clock/speed
-  // without touching cross-origin frames or the existing edge gestures.
+  // Player-scoped HUDs show each multiview clock/speed without covering
+  // Holodex navigation, and without touching cross-origin frames or gestures.
   const hudCells=new Map();
   let hudBusy=false;
   function hudSessionStop(cell){
