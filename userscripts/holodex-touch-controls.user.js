@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.36
-// @description  角标大小70%～180%可调、四角位置可选，保留独立紧凑背景与自动保存。
+// @version      0.6.37
+// @description  修复 YouTube 播放画面中间右键统计面板失效，新增右键诊断；保留四角与角标大小设置。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -75,21 +75,44 @@
     return {x:r.left+r.width/2,y:r.top+r.height/2,center:true,element};
   }
   function desktopVideoTarget(target,player){
-    if(player.contains(target))return true;
-    // New embedded-player controls can live in a body-level sibling portal.
-    // Only accept this known portal for the current movie_player, never a
-    // generic outside element; the geometric and control exclusions still run.
-    return player.id==='movie_player'&&!!target?.closest?.('#player-controls,.ytPlayerControlsContainerHost');
+    if(!target||!player)return false;
+    if(player.contains?.(target))return true;
+    // YouTube can render a full-bleed/theater click layer as a sibling of
+    // #movie_player. Accept only a known common player shell, not arbitrary
+    // elements elsewhere on the watch page; coordinates/controls are checked
+    // separately below.
+    const shells=['#player-container','#player-container-outer',
+      '#full-bleed-container','#player-theater-container',
+      'ytd-player','ytm-player'];
+    for(const selector of shells){
+      const shell=player.closest?.(selector);
+      if(shell&&shell.contains?.(target))return true;
+    }
+    // Some 2026 UI controls are portaled to body instead of residing in
+    // #movie_player. They are eligible only when the pointer is over the video.
+    return player.id==='movie_player'&&!!target.closest?.(
+      '#player-controls,.ytPlayerControlsContainerHost');
+  }
+  function desktopContextCheck(event,player){
+    if(touchZonesAllowed())return {point:null,reason:'当前被判定为触摸设备'};
+    if(event.button!==2)return {point:null,reason:'不是鼠标右键'};
+    if(event.ctrlKey||event.altKey||event.shiftKey||event.metaKey)
+      return {point:null,reason:'按住了修饰键（保留浏览器或扩展快捷键）'};
+    if(!player)return {point:null,reason:'未识别当前 YouTube 播放器'};
+    if(!desktopMountAllowed())return {point:null,reason:'当前全屏播放器不允许挂载面板'};
+    if(event.target?.closest?.(DESKTOP_EXCLUDE))
+      return {point:null,reason:'右键目标是播放控件或其他交互元素'};
+    const r=player.getBoundingClientRect();
+    if(!(r.width>0&&r.height>0))return {point:null,reason:'播放器没有有效可见尺寸'};
+    const x=(event.clientX-r.left)/r.width,y=(event.clientY-r.top)/r.height;
+    if(x<1/6||x>5/6||y<0||y>1)
+      return {point:null,reason:'右键不在播放器中间 2/3 的区域'};
+    if(!desktopVideoTarget(event.target,player))
+      return {point:null,reason:'右键目标不属于当前播放画面（可能是新的 YouTube 浮层）'};
+    return {point:{x:event.clientX,y:event.clientY},reason:'符合右键呼出条件'};
   }
   function desktopContextPoint(event,player){
-    if(touchZonesAllowed()||event.button!==2||event.ctrlKey||event.altKey||
-       event.shiftKey||event.metaKey||!player||!desktopMountAllowed()||
-       event.target?.closest?.(DESKTOP_EXCLUDE)||!desktopVideoTarget(event.target,player))return null;
-    const r=player.getBoundingClientRect();
-    if(!(r.width>0&&r.height>0))return null;
-    const x=(event.clientX-r.left)/r.width,y=(event.clientY-r.top)/r.height;
-    return x>=1/6&&x<=5/6&&y>=0&&y<=1?
-      {x:event.clientX,y:event.clientY}:null;
+    return desktopContextCheck(event,player).point;
   }
   function desktopPanelCoordinates(anchor,width,height,viewportWidth,viewportHeight){
     const gap=8,offset=10;
@@ -1221,7 +1244,6 @@
     const supported=()=>/^\/(?:watch(?:\/|$)|live\/|shorts\/)/.test(location.pathname);
     const p=()=>{
       const primary=page.document.querySelector('#movie_player.html5-video-player');
-      if(!/\/shorts\//.test(location.pathname)&&primary)return primary;
       const candidates=[...page.document.querySelectorAll('.html5-video-player')];
       if(!candidates.length)return primary||null;
       const inViewport=el=>{
@@ -1231,6 +1253,11 @@
           r.top<h*.92&&r.bottom>h*.08&&r.left<w*.95&&r.right>w*.05;
       };
       const visible=candidates.filter(inViewport);
+      // An old hidden #movie_player can survive YouTube SPA navigation.
+      // Prefer a visible live player, preserving the primary player on a
+      // normal watch page when it is actually within the viewport.
+      if(!/\/shorts\//.test(location.pathname)&&primary&&inViewport(primary))
+        return primary;
       return visible.find(el=>{
         try{return el.getPlayerState?.()===1;}catch{return false;}
       })||visible[0]||primary||null;
@@ -1849,11 +1876,30 @@
       refreshWatchHud(player);
     }
     installDesktopDismiss(()=>{if(sheet&&!sheet.hidden)close();});
-    document.addEventListener('contextmenu',event=>{
-      const point=desktopContextPoint(event,supported()?p():null);
-      if(!point)return;
-      event.preventDefault();event.stopPropagation();open(point);
-    },{capture:true});
+    let lastRightClick={time:0,reason:'尚未尝试右键',target:'—',path:location.pathname};
+    const handleWatchRightClick=event=>{
+      if(event.button!==2)return;
+      const target=event.target;
+      const player=supported()?p():null;
+      const result=desktopContextCheck(event,player);
+      lastRightClick={time:Date.now(),reason:result.reason,
+        target:target?.tagName||'—',path:location.pathname};
+      if(!result.point)return;
+      // Capture at window BEFORE YouTube's document/player listeners. A
+      // document-only listener can be skipped by their stopPropagation().
+      event.preventDefault();event.stopPropagation();
+      try{
+        open(result.point);
+        lastRightClick.reason=sheet?.hidden===false?'统计面板已打开':'未能打开统计面板';
+      }catch(error){
+        lastRightClick.reason='面板异常：'+String(error?.message||error).slice(0,120);
+        console.warn('[HMTC] YouTube 右键面板打开失败',error);
+      }
+    };
+    window.addEventListener('contextmenu',handleWatchRightClick,{capture:true});
+    // Document is only a fallback; a successfully handled event is stopped
+    // during window capture, so this cannot open the panel twice.
+    document.addEventListener('contextmenu',handleWatchRightClick,{capture:true});
     document.addEventListener('hmtc:corner-hud-change',refresh);
     document.addEventListener('hmtc:corner-hud-position',refresh);
     document.addEventListener('hmtc:corner-hud-size',()=>{
@@ -1864,6 +1910,15 @@
       refresh();
     });
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
+    GM_registerMenuCommand('YouTube：右键呼出诊断',()=>{
+      const when=lastRightClick.time?new Date(lastRightClick.time).toLocaleTimeString():'没有收到右键事件';
+      alert(['YouTube 右键呼出诊断 · v0.6.37',
+        '最近事件：'+when,'结果：'+lastRightClick.reason,
+        '元素：'+lastRightClick.target,'路径：'+lastRightClick.path,
+        '当前播放器：'+(p()?'已识别':'未识别'),
+        '面板：'+(sheet?.hidden===false?'已打开':'未打开'),
+        '提示：在视频画面中间 2/3 区域右键，避免播放器按钮或进度条'].join('\n'));
+    });
     GM_registerMenuCommand('YouTube：选择播放信息角落',chooseHudPosition);
     GM_registerMenuCommand('YouTube：调节播放信息大小',chooseHudSize);
     GM_registerMenuCommand('YouTube：画质接口诊断',async()=>{
@@ -2270,7 +2325,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.36', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.37', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -4648,8 +4703,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.36 说明',()=>
-      alert('v0.6.36：时间和速度可在70%～180%范围调节大小，四角位置和缩放分别保存。'));
+    GM_registerMenuCommand('Touch Controls v0.6.37 说明',()=>
+      alert('v0.6.37：恢复 YouTube 播放画面中央右键呼出统计，增加右键诊断；大小与位置设置保留。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
