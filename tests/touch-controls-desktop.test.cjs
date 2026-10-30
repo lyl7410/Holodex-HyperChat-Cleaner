@@ -102,6 +102,73 @@ test('actual mouse entry overrides incorrect coarse reports without cancelling i
   assert.ok(classes.has('hmtc-mouse-input'));assert.equal(changes,1);
   listeners.get('pointerdown')({pointerType:'mouse'});assert.equal(changes,1);
 });
+test('v0.6.41 removes legacy Holodex diagnostics but preserves autoplay troubleshooting',()=>{
+  assert.doesNotMatch(source,/GM_registerMenuCommand\('诊断视频类型／时长／延迟'/);
+  assert.doesNotMatch(source,/GM_registerMenuCommand\('诊断多视图右键面板'/);
+  assert.match(source,/GM_registerMenuCommand\('诊断多视图自动播放状态',diagnoseAutoPlay\)/);
+  assert.match(source,/GM_registerMenuCommand\('选择视频查看统计（PC／触屏）'/);
+  assert.match(source,/GM_registerMenuCommand\('播放信息：调整显示大小',chooseHudSize\)/);
+  assert.match(source,/window\.addEventListener\('contextmenu',handleWatchRightClick,\{capture:true\}\)/);
+});
+test('v0.6.40 removes obsolete debug menus without disabling live controls',()=>{
+  for(const name of [
+    'YouTube：画质接口诊断','YouTube：连接速度诊断',
+    'YouTube：显示／隐藏手势区（调试）','显示/隐藏边缘触控区域（调试）'
+  ])assert.ok(!source.includes(name),'obsolete menu: '+name);
+  assert.ok(!source.includes('hmtc-yt-debug'));
+  assert.ok(!source.includes('hmtc-debug'));
+  for(const name of [
+    'YouTube：打开快捷控制面板','YouTube：启用／禁用透明触控区',
+    '播放信息：调整显示大小','诊断多视图自动播放状态'
+  ])assert.ok(source.includes(name),'required control: '+name);
+  assert.ok(source.includes('function appendStaticPanelMarkup(root,markup)'));
+  assert.ok(source.includes("window.addEventListener('contextmenu',handleWatchRightClick,{capture:true})"));
+});
+test('YouTube Trusted Types: static panels render with innerHTML prohibited',()=>{
+  // Simulate a YouTube CSP that throws on every innerHTML assignment.
+  assert.doesNotMatch(source,/\.innerHTML\s*=/);
+  const create=tag=>({tagName:tag.toUpperCase(),children:[],attrs:{},
+    setAttribute(k,v){this.attrs[k]=v;},
+    appendChild(el){this.children.push(el);},
+    set innerHTML(value){throw new TypeError('TrustedHTML required');}});
+  const ctx=vm.createContext({document:{createElement:create,createTextNode:t=>({text:t})}});
+  vm.runInContext(section('  function appendStaticPanelMarkup(root,markup){','  const DESKTOP_TAG='),ctx);
+  const cases=[
+    ['appendStaticPanelMarkup(sheet,[','youtube'],
+    ['appendStaticPanelMarkup(sheet,[','holodex'],
+    ['appendStaticPanelMarkup(settings,[','settings']
+  ];
+  let cursor=0;
+  const walked=node=>[node,...(node.children||[]).flatMap(walked)];
+  for(const [prefix,name] of cases){
+    const start=source.indexOf(prefix,cursor);
+    assert.ok(start>=0,'missing '+name+' static template');
+    const close=source.indexOf("].join(''));",start);
+    assert.ok(close>start,'unterminated '+name+' template');
+    const expression='['+source.slice(start+prefix.length,close)+"].join('')";
+    const markup=vm.runInNewContext(expression);
+    const root=create('section');
+    assert.doesNotThrow(()=>ctx.appendStaticPanelMarkup(root,markup),name);
+    assert.ok(walked(root).length>40,name+' hierarchy missing');
+    if(name==='youtube'){
+      for(const key of ['time','resolution','speed','buffer','slider','hudSize'])
+        assert.ok(walked(root).some(el=>el.attrs?.['data-id']===key),'YouTube '+key);
+    }
+    if(name==='holodex')assert.ok(walked(root).some(el=>el.attrs?.['data-field']==='speed'));
+    if(name==='settings')assert.ok(walked(root).some(el=>el.attrs?.['data-control']==='autoEnabled'));
+    cursor=close+11;
+  }
+  const toastPrefix='appendStaticPanelMarkup(volumeToast,';
+  const a=source.indexOf(toastPrefix);const b=source.indexOf(');',a);
+  assert.ok(a>=0&&b>a);
+  const toast=vm.runInNewContext(source.slice(a+toastPrefix.length,b));
+  const toastRoot=create('div');
+  assert.doesNotThrow(()=>ctx.appendStaticPanelMarkup(toastRoot,toast));
+  assert.ok(walked(toastRoot).some(el=>el.attrs?.class==='hmtc-toast-number'));
+  assert.throws(()=>ctx.appendStaticPanelMarkup(create('div'),'<div onclick="evil()">x</div>'),
+    /Unsafe static panel attribute/);
+});
+
 test('YouTube panel opens with no full-screen mouse blocker and closes cleanly',()=>{
   for(const touch of [false,true]){
     const ctx=vm.createContext({supported:()=>true,p:()=>({}),makePanel(){},
@@ -533,6 +600,61 @@ test('central right-click covers full height, exact two-thirds width, no other m
   assert.equal(ctx.desktopContextPoint(contextEvent(300,200,{target:{closest:()=>({})}}),p),null);
   ctx.touchZonesAllowed=()=>true;assert.equal(ctx.desktopContextPoint(contextEvent(),p),null);
 });
+test('new YouTube full-bleed player shell opens stats while unrelated page areas remain native',()=>{
+  const {ctx}=desktopEnv(),player=testPlayer(),shell={};
+  player.id='movie_player';
+  player.contains=()=>false;
+  player.closest=s=>s==='#full-bleed-container'?shell:null;
+  shell.contains=t=>t.type==='overlay';
+  const overlay={type:'overlay',closest:()=>null};
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.desktopContextCheck(
+    contextEvent(300,200,{target:overlay}),player).point)),{x:300,y:200});
+  const unrelated={type:'comments',closest:()=>null};
+  assert.equal(ctx.desktopContextCheck(contextEvent(300,200,{target:unrelated}),player).point,null);
+  assert.match(ctx.desktopContextCheck(contextEvent(300,200,{target:unrelated}),player).reason,/不属于当前播放画面/);
+  const ui={type:'overlay',closest:selector=>selector.includes('button,a,input')?{}:null};
+  assert.equal(ctx.desktopContextPoint(contextEvent(300,200,{target:ui}),player),null);
+});
+test('right-click diagnostics return a reason for modifier, player, region and native controls',()=>{
+  const {ctx}=desktopEnv(),player=testPlayer();
+  assert.match(ctx.desktopContextCheck(contextEvent(300,200,{ctrlKey:true}),player).reason,/修饰键/);
+  assert.match(ctx.desktopContextCheck(contextEvent(300,200),null).reason,/未识别/);
+  assert.match(ctx.desktopContextCheck(contextEvent(10,200),player).reason,/中间/);
+  const control={closest:()=>({})};
+  assert.match(ctx.desktopContextCheck(contextEvent(300,200,{target:control}),player).reason,/交互元素/);
+  assert.equal(ctx.desktopContextCheck(contextEvent(300,200),player).reason,'符合右键呼出条件');
+});
+test('v0.6.39 removes temporary right-click diagnostics but retains live error logging',()=>{
+  assert.doesNotMatch(source,/lastRightClick|YouTube：右键呼出诊断/);
+  assert.match(source,/window\.addEventListener\('contextmenu',handleWatchRightClick,\{capture:true\}\)/);
+  assert.match(source,/console\.warn\('\[HMTC\] YouTube 右键面板打开失败'/);
+  assert.match(source,/function appendStaticPanelMarkup\(root,markup\)/);
+  assert.match(source,/GM_registerMenuCommand\('诊断多视图自动播放状态'/);
+});
+test('YouTube window capture opens once and stops only eligible right-click events',()=>{
+  const {ctx,document}=desktopEnv(),winHandlers={};
+  ctx.window={addEventListener:(type,callback,options)=>{
+    assert.equal(type,'contextmenu');
+    assert.equal(options.capture,true);
+    winHandlers[type]=callback;
+  }};
+  let opened=0,point;
+  const player=testPlayer();
+  Object.assign(ctx,{supported:()=>true,p:()=>player,open:p=>{opened++;point=p;ctx.sheet.hidden=false;},
+    sheet:{hidden:true},Date,location:{pathname:'/watch'}});
+  vm.runInContext(section('    const handleWatchRightClick=',"    document.addEventListener('hmtc:corner-hud-change'"),ctx);
+  const valid=contextEvent();winHandlers.contextmenu(valid);
+  assert.equal(valid.prevented,true);assert.equal(valid.stopped,true);
+  assert.equal(opened,1);assert.equal(ctx.sheet.hidden,false);
+  assert.equal(point.x,300);
+  const excluded=contextEvent(300,200,{target:{closest:()=>({})}});
+  winHandlers.contextmenu(excluded);assert.equal(opened,1);assert.equal(excluded.prevented,undefined);
+  const outside=contextEvent(10);
+  winHandlers.contextmenu(outside);assert.equal(opened,1);assert.equal(outside.prevented,undefined);
+  const withModifier=contextEvent(300,200,{shiftKey:true});
+  winHandlers.contextmenu(withModifier);assert.equal(opened,1);assert.equal(withModifier.prevented,undefined);
+});
+
 test('compact panel placement avoids all viewport edges and stays fixed when pointer moves',()=>{
   const {ctx,fire}=desktopEnv();
   for(const a of [{x:0,y:0},{x:999,y:0},{x:0,y:799},{x:999,y:799}]){

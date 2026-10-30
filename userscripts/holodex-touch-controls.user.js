@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.36
-// @description  角标大小70%～180%可调、四角位置可选，保留独立紧凑背景与自动保存。
+// @version      0.6.41
+// @description  清理 Holodex 旧视频与右键诊断菜单，保留自动播放诊断、快捷统计与 TrustedHTML 兼容。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -58,6 +58,41 @@
   // Shared and persisted by YouTube and Holodex. Tapping the HUD cycles
   // time → native speed → both → compact (off). The compact control can
   // restore the display without opening the settings sheet.
+  // These are script-owned STATIC UI templates, not arbitrary HTML or user data.
+  // Construct DOM elements without assigning TrustedHTML-protected innerHTML.
+  function appendStaticPanelMarkup(root,markup){
+    const stack=[root],voidTags=new Set(['input','br','hr','img','meta','link']);
+    const tokens=String(markup).match(/<[^>]*>|[^<]+/g)||[];
+    for(const token of tokens){
+      if(token[0]!=='<'){
+        stack[stack.length-1].appendChild(document.createTextNode(token));
+        continue;
+      }
+      const closing=/^<\s*\/\s*([a-z][\w-]*)\s*>$/i.exec(token);
+      if(closing){
+        if(stack.length===1||stack[stack.length-1].tagName.toLowerCase()!==closing[1].toLowerCase())
+          throw new Error('Unexpected closing static panel tag: '+closing[1]);
+        stack.pop();continue;
+      }
+      const opening=/^<([a-z][\w-]*)([\s\S]*?)\s*>$/i.exec(token);
+      if(!opening)throw new Error('Invalid static panel markup');
+      const tag=opening[1].toLowerCase(),el=document.createElement(tag);
+      const attrs=opening[2].replace(/\/\s*$/,'');
+      const attr=/\s+([a-z_:][\w:.-]*)(?:="([^"]*)")?/gi;
+      let end=0,m;
+      while((m=attr.exec(attrs))){
+        if(attrs.slice(end,m.index).trim())throw new Error('Invalid static panel attribute');
+        if(/^on/i.test(m[1])||['srcdoc','formaction'].includes(m[1].toLowerCase()))
+          throw new Error('Unsafe static panel attribute');
+        el.setAttribute(m[1],m[2]??'');
+        end=attr.lastIndex;
+      }
+      if(attrs.slice(end).trim())throw new Error('Unparsed static panel attribute');
+      stack[stack.length-1].appendChild(el);
+      if(!voidTags.has(tag))stack.push(el);
+    }
+    if(stack.length!==1)throw new Error('Unclosed static panel markup');
+  }
   const DESKTOP_TAG='hmtc-desktop-panel-v1';
   const DESKTOP_EXCLUDE='button,a,input,select,textarea,[contenteditable]:not([contenteditable="false"]),'+
     '[role="button"],[role="slider"],[role="dialog"],.ytp-chrome-top,.ytp-chrome-bottom,.ytp-popup,'+
@@ -75,21 +110,44 @@
     return {x:r.left+r.width/2,y:r.top+r.height/2,center:true,element};
   }
   function desktopVideoTarget(target,player){
-    if(player.contains(target))return true;
-    // New embedded-player controls can live in a body-level sibling portal.
-    // Only accept this known portal for the current movie_player, never a
-    // generic outside element; the geometric and control exclusions still run.
-    return player.id==='movie_player'&&!!target?.closest?.('#player-controls,.ytPlayerControlsContainerHost');
+    if(!target||!player)return false;
+    if(player.contains?.(target))return true;
+    // YouTube can render a full-bleed/theater click layer as a sibling of
+    // #movie_player. Accept only a known common player shell, not arbitrary
+    // elements elsewhere on the watch page; coordinates/controls are checked
+    // separately below.
+    const shells=['#player-container','#player-container-outer',
+      '#full-bleed-container','#player-theater-container',
+      'ytd-player','ytm-player'];
+    for(const selector of shells){
+      const shell=player.closest?.(selector);
+      if(shell&&shell.contains?.(target))return true;
+    }
+    // Some 2026 UI controls are portaled to body instead of residing in
+    // #movie_player. They are eligible only when the pointer is over the video.
+    return player.id==='movie_player'&&!!target.closest?.(
+      '#player-controls,.ytPlayerControlsContainerHost');
+  }
+  function desktopContextCheck(event,player){
+    if(touchZonesAllowed())return {point:null,reason:'当前被判定为触摸设备'};
+    if(event.button!==2)return {point:null,reason:'不是鼠标右键'};
+    if(event.ctrlKey||event.altKey||event.shiftKey||event.metaKey)
+      return {point:null,reason:'按住了修饰键（保留浏览器或扩展快捷键）'};
+    if(!player)return {point:null,reason:'未识别当前 YouTube 播放器'};
+    if(!desktopMountAllowed())return {point:null,reason:'当前全屏播放器不允许挂载面板'};
+    if(event.target?.closest?.(DESKTOP_EXCLUDE))
+      return {point:null,reason:'右键目标是播放控件或其他交互元素'};
+    const r=player.getBoundingClientRect();
+    if(!(r.width>0&&r.height>0))return {point:null,reason:'播放器没有有效可见尺寸'};
+    const x=(event.clientX-r.left)/r.width,y=(event.clientY-r.top)/r.height;
+    if(x<1/6||x>5/6||y<0||y>1)
+      return {point:null,reason:'右键不在播放器中间 2/3 的区域'};
+    if(!desktopVideoTarget(event.target,player))
+      return {point:null,reason:'右键目标不属于当前播放画面（可能是新的 YouTube 浮层）'};
+    return {point:{x:event.clientX,y:event.clientY},reason:'符合右键呼出条件'};
   }
   function desktopContextPoint(event,player){
-    if(touchZonesAllowed()||event.button!==2||event.ctrlKey||event.altKey||
-       event.shiftKey||event.metaKey||!player||!desktopMountAllowed()||
-       event.target?.closest?.(DESKTOP_EXCLUDE)||!desktopVideoTarget(event.target,player))return null;
-    const r=player.getBoundingClientRect();
-    if(!(r.width>0&&r.height>0))return null;
-    const x=(event.clientX-r.left)/r.width,y=(event.clientY-r.top)/r.height;
-    return x>=1/6&&x<=5/6&&y>=0&&y<=1?
-      {x:event.clientX,y:event.clientY}:null;
+    return desktopContextCheck(event,player).point;
   }
   function desktopPanelCoordinates(anchor,width,height,viewportWidth,viewportHeight){
     const gap=8,offset=10;
@@ -1221,7 +1279,6 @@
     const supported=()=>/^\/(?:watch(?:\/|$)|live\/|shorts\/)/.test(location.pathname);
     const p=()=>{
       const primary=page.document.querySelector('#movie_player.html5-video-player');
-      if(!/\/shorts\//.test(location.pathname)&&primary)return primary;
       const candidates=[...page.document.querySelectorAll('.html5-video-player')];
       if(!candidates.length)return primary||null;
       const inViewport=el=>{
@@ -1231,6 +1288,11 @@
           r.top<h*.92&&r.bottom>h*.08&&r.left<w*.95&&r.right>w*.05;
       };
       const visible=candidates.filter(inViewport);
+      // An old hidden #movie_player can survive YouTube SPA navigation.
+      // Prefer a visible live player, preserving the primary player on a
+      // normal watch page when it is actually within the viewport.
+      if(!/\/shorts\//.test(location.pathname)&&primary&&inViewport(primary))
+        return primary;
       return visible.find(el=>{
         try{return el.getPlayerState?.()===1;}catch{return false;}
       })||visible[0]||primary||null;
@@ -1276,8 +1338,6 @@
       '.hmtc-yt-left{touch-action:pan-y!important}',
       '.hmtc-yt-right{touch-action:none!important}',
       'html.hmtc-yt-quality-mode .hmtc-yt-edge{pointer-events:none!important}',
-      'html.hmtc-yt-debug .hmtc-yt-left{background:#328bff33!important;outline:1px dashed #82c5ff}',
-      'html.hmtc-yt-debug .hmtc-yt-right{background:#40cfa533!important;outline:1px dashed #82f5da}',
       '#hmtc-yt-backdrop{position:fixed;inset:0;z-index:2147482990;background:transparent}',
       '#hmtc-yt-backdrop[hidden],#hmtc-yt-panel[hidden],#hmtc-yt-toast[hidden]{display:none!important}',
       '#hmtc-yt-panel{position:fixed;bottom:calc(8px + env(safe-area-inset-bottom,0px));',
@@ -1610,7 +1670,7 @@
       bindPanelRightClose(sheet,close);
       sheet.hidden=true;sheet.setAttribute('role','dialog');
       sheet.setAttribute('aria-label','YouTube 视频音量、倍速、画质和统计');
-      sheet.innerHTML=[
+      appendStaticPanelMarkup(sheet,[
         '<div class="head"><strong data-id="title">YouTube</strong>',
         '<button data-action="close" aria-label="关闭面板">✕</button></div>',
         '<div class="hmtc-live-status" data-hmtc-latency-metric data-kind="unknown">',
@@ -1656,7 +1716,7 @@
         '<input type="range" data-id="sense" min="0.4" max="2.5" step="0.1">',
         '<strong data-id="senseText">1.0×</strong></div>',
         '</details>'
-      ].join('');
+      ].join(''));
       document.body.appendChild(sheet);
       const hudSelect=sheet.querySelector('[data-id="hudPosition"]');
       hudSelect.value=hudPosition();
@@ -1849,11 +1909,16 @@
       refreshWatchHud(player);
     }
     installDesktopDismiss(()=>{if(sheet&&!sheet.hidden)close();});
-    document.addEventListener('contextmenu',event=>{
+    const handleWatchRightClick=event=>{
+      if(event.button!==2)return;
       const point=desktopContextPoint(event,supported()?p():null);
       if(!point)return;
-      event.preventDefault();event.stopPropagation();open(point);
-    },{capture:true});
+      event.preventDefault();event.stopPropagation();
+      try{open(point);}
+      catch(error){console.warn('[HMTC] YouTube 右键面板打开失败',error);}
+    };
+    window.addEventListener('contextmenu',handleWatchRightClick,{capture:true});
+    document.addEventListener('contextmenu',handleWatchRightClick,{capture:true});
     document.addEventListener('hmtc:corner-hud-change',refresh);
     document.addEventListener('hmtc:corner-hud-position',refresh);
     document.addEventListener('hmtc:corner-hud-size',()=>{
@@ -1866,37 +1931,12 @@
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
     GM_registerMenuCommand('YouTube：选择播放信息角落',chooseHudPosition);
     GM_registerMenuCommand('YouTube：调节播放信息大小',chooseHudSize);
-    GM_registerMenuCommand('YouTube：画质接口诊断',async()=>{
-      const c=await controls.qualityOptions();
-      alert(['YouTube 画质诊断 · v0.6.8','可用方式：'+c.method,
-        '真实档位：'+(c.enumerated?'已读取':'未公开'),
-        '当前报告：'+(c.selected||'未知'),
-        '档位：'+(c.choices.map(x=>x.label).join('、')||'无'),
-        c.reason||'切换后需核对播放器反馈'].join('\n'));
-    });
-    GM_registerMenuCommand('YouTube：连接速度诊断',()=>{
-      const info=bandwidth.diagnose();
-      alert([
-        '连接速度诊断 · v0.6.5',
-        '播放器：'+(info.playerReady?'已识别':'未识别'),
-        '原生统计接口：'+(info.methods.join('、')||'未开放'),
-        '原版统计面板：'+(info.nativePanelFound?'已发现':'未发现'),
-        '统计采集：'+(info.monitoring?'开启':'未开启'),
-        '当前读取：'+(info.available?
-          (info.bandwidthKbps/1000).toFixed(2)+' Mbps':'无数值'),
-        '数据来源：'+(info.source||'—'),
-        info.available?'':('原因：'+(info.reason||'YouTube 未返回连接速度'))
-      ].filter(Boolean).join('\n'));
-    });
     GM_registerMenuCommand('YouTube：启用／禁用透明触控区',()=>{
       const next=!setting(enabledKey,true);GM_setValue(enabledKey,next);refresh();
       alert('YouTube 边缘触控区已'+(next?'启用':'关闭'));
     });
     GM_registerMenuCommand('YouTube：打开触控设置',()=>{
       open();sheet?.querySelector('.hmtc-yt-preferences')?.setAttribute('open','');
-    });
-    GM_registerMenuCommand('YouTube：显示／隐藏手势区（调试）',()=>{
-      document.documentElement.classList.toggle('hmtc-yt-debug');
     });
     setInterval(refresh,600);
     // Keep the transparent overlay aligned while the player scrolls,
@@ -2270,9 +2310,8 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.36', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.41', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
-  const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
   const STATS_MODE_KEY='hmtc_stats_trigger_v1';
   const AUTO_ENABLED_KEY='hmtc_autoplay_enabled_v1';
@@ -2563,8 +2602,6 @@
   .mv-frame.hmtc-native-menu .hmtc-edge{pointer-events:none!important}
   .hmtc-edge--left{left:0;touch-action:pan-y;cursor:pointer}
   .hmtc-edge--right{right:0;touch-action:none;cursor:ns-resize}
-  html.hmtc-debug .hmtc-edge--left{background:#37aaff33;outline:1px dashed #73c9ff}
-  html.hmtc-debug .hmtc-edge--right{background:#48d9ac33;outline:1px dashed #70e7be}
   #hmtc-volume-toast{position:fixed;z-index:2147482999;pointer-events:none;
     display:flex;flex-direction:column;gap:8px;min-width:110px;
     padding:12px 14px;border-radius:14px;color:#f7fbff;text-align:center;
@@ -3584,9 +3621,9 @@
     if(!volumeToast?.isConnected){
       volumeToast=document.createElement('div');
       volumeToast.id='hmtc-volume-toast';
-      volumeToast.innerHTML='<span class="hmtc-toast-label">音量 VOL</span>'+
+      appendStaticPanelMarkup(volumeToast,'<span class="hmtc-toast-label">音量 VOL</span>'+
         '<strong class="hmtc-toast-number">—</strong>'+
-        '<div class="hmtc-toast-track"><div class="hmtc-toast-fill"></div></div>';
+        '<div class="hmtc-toast-track"><div class="hmtc-toast-fill"></div></div>');
       document.body.appendChild(volumeToast);
     }
     const rect=frame.getBoundingClientRect();
@@ -3805,7 +3842,7 @@
     bindPanelRightClose(sheet,closeSheet);
     sheet.setAttribute('role','dialog');
     sheet.setAttribute('aria-label','YouTube 当前视频控制和详细统计');
-    sheet.innerHTML=[
+    appendStaticPanelMarkup(sheet,[
       '<div class="hmtc-dismiss-zone" data-action="dismissHeader" title="轻点任意统计数据收起">',
       '<div class="head" data-action="dismissHeader" title="轻点标题收起">',
       '<div class="title" data-field="title">YouTube</div>',
@@ -3847,7 +3884,7 @@
       '<button type="button" data-action="native">YouTube 原版统计</button>',
       '<button type="button" data-action="settings" aria-label="触控设置">⚙ 设置</button></div>',
       '<div class="note" data-field="note" hidden></div>'
-    ].join('');
+    ].join(''));
     document.body.appendChild(sheet);
     const slider=sheet.querySelector('[data-field="slider"]');
     slider.addEventListener('input',()=>{
@@ -3923,7 +3960,7 @@
     bindPanelRightClose(settings,closeSettings);
     settings.setAttribute('role','dialog');
     settings.setAttribute('aria-label','Holodex 触控手势设置');
-    settings.innerHTML=[
+    appendStaticPanelMarkup(settings,[
       '<div class="head"><span class="title">⚙ 触控手势设置</span>',
       '<button type="button" data-action="close" aria-label="关闭设置">✕</button></div>',
       '<div class="setting"><label>音量滑动灵敏度：<b data-value="sensitivity">1.0×</b></label>',
@@ -3975,7 +4012,7 @@
       '<div class="setting-summary" style="margin-top:16px">',
       '安卓触控区域左右各宽 36%，最大 112px，纵向覆盖 11%–89%。',
       '可从油猴菜单显示边界或关闭边缘手势。</div>'
-    ].join('');
+    ].join(''));
     document.body.appendChild(settings);
     settings.querySelector('[data-action="close"]').addEventListener('click',closeSettings);
     const slider=settings.querySelector('[data-control="sensitivity"]');
@@ -4541,50 +4578,6 @@
     setInterval(()=>{
       if(isMulti()&&!document.hidden)for(const row of rowMap.values())configureDesktopFrame(row);
     },1800);
-    GM_registerMenuCommand('诊断视频类型／时长／延迟',async()=>{
-      const selected=active&&rowMap.get(active.layoutId+':'+active.videoId);
-      const rows=selected?[selected]:[...rowMap.values()].slice(0,12);
-      if(!rows.length)return alert('请先打开多视图视频。');
-      const reasons={'not-live':'已识别为录像，没有直播延迟','media-type-unknown':'当前直播／录像状态未确认',
-        'no-latency-api':'未开放直播延迟读取接口','latency-field-absent':'可用接口未返回明确的延迟字段',
-        'unrecognized-latency-units':'返回了延迟字段或文字，但单位无法确认','latency-value-invalid':'有明确单位的延迟字段，但值为空、无效或为负数','available':'已读取实际延迟'};
-      const typeReasons={'player-not-live':'播放器明确标记为非直播','past-broadcast':'直播结束标记',
-        'broadcast-details':'正在直播标记','player-live':'播放器明确标记直播','player-is-live':'播放器直播状态接口',
-        'player-live-class':'当前播放器直播界面','visible-player-live-badge':'当前播放器直播徽标',
-        'infinite-media':'直播媒体流','vod-details':'普通点播元数据','holodex-past':'Holodex录像状态',
-        'holodex-live':'Holodex直播状态','historic-live-flag-only':'只有历史直播标记，当前状态未确认',
-        'reported-live-state':'播放器类型返回值','unknown':'缺少判断依据'};
-      const durationSources={'media':'视频媒体','player-api':'播放器接口','video-details':'视频元数据','holodex-api':'Holodex接口'};
-      const reports=await Promise.all(rows.map(async row=>{
-        try{
-          const [clock,data]=await Promise.all([readMultiviewClock(row),nativeRequest(row,'statsDiagnostics',2200)]);
-          const d=data.latencyDiagnostics||{};
-          return [(row.title||row.videoId).slice(0,60),
-            '类型：'+playbackKindLabel(clock)+'；依据：'+(typeReasons[clock.liveReason]||clock.liveReason||'缺少判断依据'),
-            '播放时间：'+playbackTimeText(clock)+'；总时长来源：'+(durationSources[clock.durationSource]||'未读到'),
-            '延迟：'+(data.liveLatencySeconds!=null?data.liveLatencySeconds+' s':data.latencyReason)+'；'+(reasons[d.reasonCode]||'诊断未返回'),
-            'getLiveLatency：'+(d.getter?.supported?d.getter.status:'不存在'),
-            '原版统计：'+(d.nativePanelVisible===true?'开启':d.nativePanelVisible===false?'关闭':'状态不可读'),
-            ...(d.sources||[]).map(x=>x.method+'：'+(!x.available?'不存在':x.error||
-              (x.latencySeconds!=null?'延迟 '+x.latencySeconds+' s':'没有可解析延迟')+(x.fields?.length?'；字段 '+x.fields.join(','):'；无延迟字段'))+
-              (x.values||[]).map(v=>'\n  '+v.field+'：类型 '+v.type+'；原值 '+v.preview).join(''))
-          ].join('\n');
-        }catch(error){return (row.title||row.videoId)+'：'+String(error?.message||error);}
-      }));
-      alert('数据诊断 · v0.6.30\n'+reports.join('\n\n'));
-    });
-    GM_registerMenuCommand('诊断多视图右键面板',async()=>{
-      const rows=[...rowMap.values()];
-      if(!rows.length)return alert('尚未识别多视图视频，请刷新页面后重试。');
-      const reports=await Promise.all(rows.map(async row=>{
-        try{
-          const d=await nativeRequest(row,'desktopPanelStatus',1800);
-          return (row.title||row.videoId).slice(0,36)+'：iframe '+d.version+
-            '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
-        }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
-      }));
-      alert('右键面板诊断 · v0.6.30\n'+reports.join('\n'));
-    });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
     GM_registerMenuCommand('诊断多视图自动播放状态',diagnoseAutoPlay);
@@ -4623,7 +4616,6 @@
     });
     {
       makeSheet();
-      document.documentElement.classList.toggle('hmtc-debug',!!get(DEBUG_KEY,false));
       GM_registerMenuCommand('启用/禁用透明边缘手势',()=>{
         const next=!get(EDGE_KEY,true);
         set(EDGE_KEY,next);
@@ -4632,11 +4624,6 @@
         alert('触摸手势已'+(next?'启用':'禁用')+'；播放统计仍可通过脚本菜单查看。');
       });
       GM_registerMenuCommand('触控手势设置（灵敏度／长按）',openSettings);
-      GM_registerMenuCommand('显示/隐藏边缘触控区域（调试）',()=>{
-        const next=!get(DEBUG_KEY,false);
-        set(DEBUG_KEY,next);
-        document.documentElement.classList.toggle('hmtc-debug',next);
-      });
       GM_registerMenuCommand('选择视频查看统计（PC／触屏）',()=>{
         const rows=[...rowMap.values()];
         if(!rows.length)return alert('当前没有已识别的 YouTube 视频格子。');
@@ -4648,8 +4635,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.36 说明',()=>
-      alert('v0.6.36：时间和速度可在70%～180%范围调节大小，四角位置和缩放分别保存。'));
+    GM_registerMenuCommand('Touch Controls v0.6.41 说明',()=>
+      alert('v0.6.41：移除 Holodex 旧视频类型／延迟与右键面板诊断菜单；保留自动播放故障诊断。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
