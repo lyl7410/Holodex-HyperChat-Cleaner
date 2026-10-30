@@ -533,6 +533,54 @@ test('central right-click covers full height, exact two-thirds width, no other m
   assert.equal(ctx.desktopContextPoint(contextEvent(300,200,{target:{closest:()=>({})}}),p),null);
   ctx.touchZonesAllowed=()=>true;assert.equal(ctx.desktopContextPoint(contextEvent(),p),null);
 });
+test('new YouTube full-bleed player shell opens stats while unrelated page areas remain native',()=>{
+  const {ctx}=desktopEnv(),player=testPlayer(),shell={};
+  player.id='movie_player';
+  player.contains=()=>false;
+  player.closest=s=>s==='#full-bleed-container'?shell:null;
+  shell.contains=t=>t.type==='overlay';
+  const overlay={type:'overlay',closest:()=>null};
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.desktopContextCheck(
+    contextEvent(300,200,{target:overlay}),player).point)),{x:300,y:200});
+  const unrelated={type:'comments',closest:()=>null};
+  assert.equal(ctx.desktopContextCheck(contextEvent(300,200,{target:unrelated}),player).point,null);
+  assert.match(ctx.desktopContextCheck(contextEvent(300,200,{target:unrelated}),player).reason,/不属于当前播放画面/);
+  const ui={type:'overlay',closest:selector=>selector.includes('button,a,input')?{}:null};
+  assert.equal(ctx.desktopContextPoint(contextEvent(300,200,{target:ui}),player),null);
+});
+test('right-click diagnostics return a reason for modifier, player, region and native controls',()=>{
+  const {ctx}=desktopEnv(),player=testPlayer();
+  assert.match(ctx.desktopContextCheck(contextEvent(300,200,{ctrlKey:true}),player).reason,/修饰键/);
+  assert.match(ctx.desktopContextCheck(contextEvent(300,200),null).reason,/未识别/);
+  assert.match(ctx.desktopContextCheck(contextEvent(10,200),player).reason,/中间/);
+  const control={closest:()=>({})};
+  assert.match(ctx.desktopContextCheck(contextEvent(300,200,{target:control}),player).reason,/交互元素/);
+  assert.equal(ctx.desktopContextCheck(contextEvent(300,200),player).reason,'符合右键呼出条件');
+});
+test('YouTube window capture opens once and stops only eligible right-click events',()=>{
+  const {ctx,document}=desktopEnv(),winHandlers={};
+  ctx.window={addEventListener:(type,callback,options)=>{
+    assert.equal(type,'contextmenu');
+    assert.equal(options.capture,true);
+    winHandlers[type]=callback;
+  }};
+  let opened=0,point;
+  const player=testPlayer();
+  Object.assign(ctx,{supported:()=>true,p:()=>player,open:p=>{opened++;point=p;ctx.sheet.hidden=false;},
+    sheet:{hidden:true},Date,location:{pathname:'/watch'}});
+  vm.runInContext(section('    let lastRightClick=',"    document.addEventListener('hmtc:corner-hud-change'"),ctx);
+  const valid=contextEvent();winHandlers.contextmenu(valid);
+  assert.equal(valid.prevented,true);assert.equal(valid.stopped,true);
+  assert.equal(opened,1);assert.equal(ctx.sheet.hidden,false);
+  assert.equal(point.x,300);
+  const excluded=contextEvent(300,200,{target:{closest:()=>({})}});
+  winHandlers.contextmenu(excluded);assert.equal(opened,1);assert.equal(excluded.prevented,undefined);
+  const outside=contextEvent(10);
+  winHandlers.contextmenu(outside);assert.equal(opened,1);assert.equal(outside.prevented,undefined);
+  const withModifier=contextEvent(300,200,{shiftKey:true});
+  winHandlers.contextmenu(withModifier);assert.equal(opened,1);assert.equal(withModifier.prevented,undefined);
+});
+
 test('compact panel placement avoids all viewport edges and stays fixed when pointer moves',()=>{
   const {ctx,fire}=desktopEnv();
   for(const a of [{x:0,y:0},{x:999,y:0},{x:0,y:799},{x:999,y:799}]){
