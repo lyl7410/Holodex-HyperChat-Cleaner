@@ -602,6 +602,13 @@ test('right-click diagnostics return a reason for modifier, player, region and n
   assert.match(ctx.desktopContextCheck(contextEvent(300,200,{target:control}),player).reason,/交互元素/);
   assert.equal(ctx.desktopContextCheck(contextEvent(300,200),player).reason,'符合右键呼出条件');
 });
+test('v0.6.39 removes temporary right-click diagnostics but retains live error logging',()=>{
+  assert.doesNotMatch(source,/lastRightClick|YouTube：右键呼出诊断/);
+  assert.match(source,/window\.addEventListener\('contextmenu',handleWatchRightClick,\{capture:true\}\)/);
+  assert.match(source,/console\.warn\('\[HMTC\] YouTube 右键面板打开失败'/);
+  assert.match(source,/function appendStaticPanelMarkup\(root,markup\)/);
+  assert.match(source,/GM_registerMenuCommand\('诊断多视图自动播放状态'/);
+});
 test('YouTube window capture opens once and stops only eligible right-click events',()=>{
   const {ctx,document}=desktopEnv(),winHandlers={};
   ctx.window={addEventListener:(type,callback,options)=>{
@@ -613,7 +620,7 @@ test('YouTube window capture opens once and stops only eligible right-click even
   const player=testPlayer();
   Object.assign(ctx,{supported:()=>true,p:()=>player,open:p=>{opened++;point=p;ctx.sheet.hidden=false;},
     sheet:{hidden:true},Date,location:{pathname:'/watch'}});
-  vm.runInContext(section('    let lastRightClick=',"    document.addEventListener('hmtc:corner-hud-change'"),ctx);
+  vm.runInContext(section('    const handleWatchRightClick=',"    document.addEventListener('hmtc:corner-hud-change'"),ctx);
   const valid=contextEvent();winHandlers.contextmenu(valid);
   assert.equal(valid.prevented,true);assert.equal(valid.stopped,true);
   assert.equal(opened,1);assert.equal(ctx.sheet.hidden,false);
