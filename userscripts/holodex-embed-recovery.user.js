@@ -2,7 +2,7 @@
 // @name         Holodex Multiview YouTube Embed Recovery
 // @name:zh-CN   Holodex 多视图播放器恢复（中文升级版）
 // @namespace    Nep
-// @version      0.2.1
+// @version      0.2.2
 // @author       Nep; 中文升级维护
 // @description  有限重试恢复卡死或持续缓冲的播放器，保留音量、静音及原始嵌入参数。
 // @match        https://holodex.net/*
@@ -233,7 +233,7 @@
     const fields = {
       edgeReuse: {
         label: 'Edge 播放器复用模式（修改后刷新生效）',
-        help: 'Edge 默认开启；其他浏览器默认关闭。蓝色刷新和自动恢复会复用当前播放器，避免销毁 iframe。成功不弹提示；失败只提示，不退回重建。\n黄色返回和垃圾桶保留网站原生清空、删除行为，可能再次触发其他格中断。添加视频和布局调整也可能触发网站原生重建，不在本版修复范围。\n请先关闭 Touch Controls 的智能自动播放，只启用一份新版 Recovery。此模式是兼容绕过，Holodex 实际效果仍需验证。'
+        help: 'Edge 默认开启；其他浏览器默认关闭。蓝色刷新和自动恢复会复用当前播放器，避免销毁 iframe。重新加载后仍没有播放进度，会自动补救一次：先准备视频，等播放器报告待播就绪，再自动尝试播放。成功不弹提示；失败只提示，不退回重建。\n黄色返回和垃圾桶保留网站原生清空、删除行为，可能再次触发其他格中断。添加视频和布局调整也可能触发网站原生重建，不在本版修复范围。\n请先关闭 Touch Controls 的智能自动播放，只启用一份新版 Recovery。此模式是兼容绕过，Holodex 实际效果仍需验证。'
       },
       autoplay: {
         label: '恢复后自动尝试播放',
@@ -253,7 +253,7 @@
       },
       readyAttempts: {
         label: '恢复结果的最多检查次数', min: 1, max: 16, integer: true,
-        help: '默认：8 次；可设置 1～16 次整数。Edge复用模式检查同一个播放器是否恢复播放且进度推进；其他模式检查新播放器是否就绪。\n这不是“重新加载视频的次数”。检查会逐渐放慢，默认 8 次约等待最多 20 秒；浏览器后台调度变慢时可能更久。\n加载慢、经常提示等待超时，可改为 10～12 次。调小会更早放弃这轮等待，但不一定能更快播放。'
+        help: '默认：8 次；可设置 1～16 次整数。Edge复用模式中，接口未就绪时每半秒重新查找一次，默认最多约4秒；重新加载、补救准备、补救播放三个阶段分别按本项限制检查次数。其他模式检查新播放器是否就绪。\n这不是“重新加载视频的次数”。每阶段检查会逐渐放慢，默认每阶段最多约20秒；若走完整个补救流程，合计最多约60秒，接口等待另计。浏览器后台调度变慢时可能更久。补救只执行一次，不会循环准备或反复播放。\n加载慢、经常提示等待超时，可改为10～12次；设为1通常不足以确认持续进度。用户暂停、调音量或换视频会取消余下操作。'
       },
       maxRecoveries: {
         label: '同一格连续恢复的最多次数', min: 1, max: 8, integer: true,
@@ -485,9 +485,31 @@
   function reuseAlive(job) {
     try {
       return alive(job) && cells.get(job.vm) === job.state && job.state.job === job
-        && job.state.revision === job.revision && playerOf(job.vm) === job.oldPlayer
-        && job.oldFrame.isConnected && job.oldPlayer.getIframe?.() === job.oldFrame;
+        && job.state.revision === job.revision && findCell(job.oldFrame) === job.vm
+        && job.oldFrame.isConnected && job.vm.$el.querySelector('iframe') === job.oldFrame
+        && (job.phase === 'acquire' || (job.vm.ytPlayer === job.primaryRef
+          && job.vm.$refs?.player?.player === job.secondaryRef
+          && job.oldPlayer.getIframe?.() === job.oldFrame));
     } catch { return false; }
+  }
+  function reuseFailure(job, message) {
+    finish(job); notice(message);
+  }
+  function scheduleReuse(job) {
+    job.timer = later(() => pollReuse(job), Math.min(500 * 2 ** (job.polls - 1), 4000));
+  }
+  function beginCueRescue(job) {
+    if (!reuseAlive(job)) { finish(job); return; }
+    const p = job.oldPlayer;
+    if (typeof p.cueVideoById !== 'function' || typeof p.playVideo !== 'function') {
+      reuseFailure(job, '重新加载未恢复，且当前格缺少准备视频或播放接口；没有销毁重建。请手动播放或刷新整页。'); return;
+    }
+    // 每个恢复任务至多补救一次；不新增预算、不释放互斥、不重新获取播放器。
+    job.phase = 'cue'; job.polls = 0; job.playTime = null; job.phaseStarted = mono();
+    try {
+      p.cueVideoById(job.videoId);
+      job.timer = later(() => pollReuse(job), 500);
+    } catch { reuseFailure(job, '准备视频补救调用失败；没有销毁重建。请手动播放或刷新整页。'); }
   }
   function pollReuse(job) {
     if (!reuseAlive(job)) { finish(job); return; }
@@ -500,54 +522,101 @@
       if (job.audioApplied && (Math.abs(volume - job.expectedVolume) > 0.5 || muted !== job.audio.muted)) {
         cancelForUser(job.vm); return;
       }
-      if (state === 2 && job.audioApplied && mono() - job.started >= 2000) { cancelForUser(job.vm); return; }
+      if (state === 2 && job.audioApplied && mono() - job.phaseStarted >= 2000) {
+        cancelForUser(job.vm);
+        if (job.phase === 'play') notice('准备视频后自动播放仍处于暂停，已停止补救；请手动点击播放。没有销毁重建。');
+        return;
+      }
       if (Number.isFinite(state) && Number.isFinite(volume) && typeof muted === 'boolean') {
         if (!job.audioApplied) {
           job.expectedVolume = Math.round(job.audio.volume * 100);
           applyAudio(job.vm, p, job.audio);
           job.audioApplied = true;
         }
-        if (state === 1 && Number.isFinite(time)) {
+        if (job.phase === 'cue' && state === 5) {
+          // 以官方待播状态确认准备完成，不凭封面 DOM 或 API 返回就认定就绪。
+          if (!job.shouldPlay) {
+            finish(job); notice('已复用当前播放器准备视频，请手动点击播放。'); return;
+          }
+          job.phase = 'play'; job.polls = 0; job.playTime = null; job.phaseStarted = mono();
+          try { p.playVideo(); }
+          catch { reuseFailure(job, '准备视频后自动播放调用失败；请手动点击播放。没有销毁重建。'); return; }
+          job.timer = later(() => pollReuse(job), 500);
+          return;
+        }
+        if (job.phase !== 'cue' && state === 1 && Number.isFinite(time)) {
           if (job.playTime === null) job.playTime = time;
           else if (time - job.playTime >= 0.2) {
             job.progressed = true; finish(job); return;
           }
         } else job.playTime = null;
-        if (!job.shouldPlay && state === 5) {
-          finish(job); notice('已复用当前播放器准备视频，请手动点击播放。'); return;
-        }
       }
     } catch { /* 同一播放器加载时可能短暂不可读；只在本次预算内等待。 */ }
     if (job.polls >= config.readyAttempts) {
-      finish(job); notice('复用后未确认持续播放；本次已停止等待，没有销毁重建。可手动点击播放，或稍后重试。'); return;
+      if (job.phase === 'load' && job.shouldPlay) { beginCueRescue(job); return; }
+      reuseFailure(job, job.phase === 'cue'
+        ? '准备视频后仍未就绪，已停止本轮补救；没有销毁重建。请手动播放或刷新整页。'
+        : '自动补救后未确认持续播放，已停止本轮等待；没有销毁重建。浏览器可能阻止自动播放，请手动点击播放；仍无效时刷新整页。');
+      return;
     }
-    job.timer = later(() => pollReuse(job), Math.min(500 * 2 ** (job.polls - 1), 4000));
+    scheduleReuse(job);
   }
-  function startReuse(vm, frame, data, state, manual) {
-    const p = playerOf(vm), shouldPlay = manual || config.autoplay;
-    const method = shouldPlay ? 'loadVideoById' : 'cueVideoById';
-    if (!p || typeof p[method] !== 'function' || typeof p.getIframe !== 'function'
-      || p.getIframe() !== frame || !['getPlayerState', 'getCurrentTime', 'getVolume', 'isMuted', 'setVolume', 'mute', 'unMute'].every(k => typeof p[k] === 'function')) {
-      notice('当前格缺少安全复用接口，已跳过；没有退回销毁重建。'); return;
+  function acquireReuse(job) {
+    if (!reuseAlive(job)) { finish(job); return; }
+    job.acquirePolls++;
+    const vm = job.vm, frame = job.oldFrame, method = job.shouldPlay ? 'loadVideoById' : 'cueVideoById';
+    const required = ['getIframe', 'getPlayerState', 'getCurrentTime', 'getVolume', 'isMuted', 'setVolume', 'mute', 'unMute', method];
+    let p, cueCandidate, detail = '播放器引用为空';
+    for (const candidate of [vm.ytPlayer, vm.$refs?.player?.player]) {
+      if (!candidate) continue;
+      try {
+        const missing = required.filter(k => typeof candidate[k] !== 'function');
+        if (missing.length) {
+          detail = '缺少 ' + missing.join('、');
+          if (method === 'loadVideoById' && missing.length === 1 && missing[0] === method
+            && typeof candidate.cueVideoById === 'function' && typeof candidate.playVideo === 'function'
+            && candidate.getIframe() === frame && Number.isFinite(candidate.getPlayerState())) cueCandidate = candidate;
+          continue;
+        }
+        if (candidate.getIframe() !== frame) { detail = '播放器与当前嵌入框不匹配'; continue; }
+        if (!Number.isFinite(candidate.getPlayerState())) { detail = '播放器状态尚未就绪'; continue; }
+        p = candidate; break;
+      } catch { detail = '无法安全访问播放器接口'; }
+    }
+    if (!p && cueCandidate && job.acquirePolls >= config.readyAttempts) p = cueCandidate;
+    if (!p) {
+      if (job.acquirePolls >= config.readyAttempts) {
+        reuseFailure(job, '当前格缺少安全复用接口（' + detail + '），有限等待后仍不可用；没有销毁重建。');
+      } else job.timer = later(() => acquireReuse(job), 500);
+      return;
     }
     let audio;
     try {
       const volume = p.getVolume(), muted = p.isMuted();
       audio = Number.isFinite(volume) && volume >= 0 && volume <= 100 && typeof muted === 'boolean'
-        ? { volume: volume / 100, muted } : { volume: data.volume, muted: data.muted };
-    } catch { audio = { volume: data.volume, muted: data.muted }; }
-    if (!validAudio(audio)) { notice('无法安全读取当前格音量，已跳过复用。'); return; }
-    const job = { vm, state, videoId: data.videoId, audio, reuse: true, revision: state.revision,
-      oldPlayer: p, oldFrame: frame, polls: 0, timer: null, playTime: null,
-      started: mono(), shouldPlay, audioApplied: false, guardedFirstPlay: vm.firstPlay === true };
-    state.job = job; jobs.add(job);
+        ? { volume: volume / 100, muted } : job.audio;
+    } catch { audio = job.audio; }
+    if (!validAudio(audio)) { reuseFailure(job, '无法安全读取当前格音量，已跳过复用。'); return; }
+    Object.assign(job, { audio, oldPlayer: p, primaryRef: vm.ytPlayer, secondaryRef: vm.$refs?.player?.player,
+      phase: job.shouldPlay ? 'load' : 'cue', phaseStarted: mono(), guardedFirstPlay: vm.firstPlay === true });
     if (job.guardedFirstPlay) vm.firstPlay = false;
+    // load 接口有限等待后仍缺失，但完整 cue/play 接口可用时，直接进入同一补救流程。
+    if (job.shouldPlay && typeof p.loadVideoById !== 'function') { beginCueRescue(job); return; }
     try {
-      p[method](data.videoId);
+      p[method](job.videoId);
       job.timer = later(() => pollReuse(job), 500);
     } catch {
-      finish(job); notice('当前格复用调用失败；没有销毁或重建播放器。');
+      if (job.shouldPlay) beginCueRescue(job);
+      else reuseFailure(job, '当前格复用调用失败；没有销毁或重建播放器。');
     }
+  }
+  function startReuse(vm, frame, data, state, manual) {
+    const job = { vm, state, videoId: data.videoId, audio: { volume: data.volume, muted: data.muted },
+      reuse: true, revision: state.revision, oldFrame: frame, phase: 'acquire', acquirePolls: 0,
+      oldPlayer: null, polls: 0, timer: null, playTime: null, shouldPlay: manual || config.autoplay,
+      audioApplied: false, guardedFirstPlay: false };
+    state.job = job; jobs.add(job);
+    acquireReuse(job);
   }
 
   // 捕获阶段拦截站点按钮；只接受确定的 VideoCell/YouTube iframe 及按钮类名。

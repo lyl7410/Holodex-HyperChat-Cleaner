@@ -5,7 +5,8 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const { webcrypto } = require('node:crypto');
 const path = require('node:path');
-const scriptPath = process.env.HOLODEX_RECOVERY_SCRIPT || path.resolve(__dirname, '../userscripts/holodex-embed-recovery.user.js');
+const scriptPath = process.env.HOLODEX_RECOVERY_SCRIPT ||
+  path.resolve(__dirname, '../userscripts/holodex-embed-recovery.user.js');
 const SOURCE = fs.readFileSync(scriptPath, 'utf8');
 const CHANNEL = 'holodex-embed-recovery';
 const HOLODEX = 'https://holodex.net';
@@ -527,17 +528,17 @@ test('Edge静音false与音量0都保留', async () => {
   const {e,c}=edge();c.volume=0;c.mute=false;c.status();await e.clock.advance(1500);
   assert.equal(c.volume,0);assert.equal(c.mute,false);assert.ok(c.audioCalls.some(a=>a[0]==='volume'&&a[1]===0));
 });
-test('Edge缺少load接口时显示提示，绝不重建', async () => {
-  const {e,c,p}=edge();delete p.loadVideoById;c.click();await e.clock.advance(10000);
+test('Edge缺少必要观测接口时显示提示，绝不重建', async () => {
+  const {e,c,p}=edge();delete p.getCurrentTime;c.click();await e.clock.advance(10000);
   assert.equal(c.loads,0);assert.equal(c.refreshes,0);assert.equal(c.comp.timer,77);
   assert.ok(e.warnings.some(w=>String(w).includes('缺少安全复用接口')));
 });
-test('Edge调用抛错没有重建回退', async () => {
+test('Edge加载抛错改用cue补救，没有重建回退', async () => {
   const {e,c,p}=edge();p.loadVideoById=()=>{throw Error('模拟失败');};c.click();await e.clock.advance(10000);
-  assert.equal(c.refreshes,0);assert.ok(e.warnings.some(w=>String(w).includes('复用调用失败')));
+  assert.equal(c.refreshes,0);assert.equal(c.cues,1);assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,1);
 });
 test('Edge接口返回但没有进度，不能判定成功，超时不重建', async () => {
-  const {e,c}=edge({config:{readyAttempts:3}});c.progress=false;c.status();await e.clock.advance(5000);
+  const {e,c}=edge({config:{readyAttempts:3}});c.progress=false;c.status();await e.clock.advance(12000);
   assert.equal(c.loads,1);assert.equal(c.refreshes,0);
   assert.ok(e.warnings.some(w=>String(w).includes('未确认持续播放')));
   assert.ok(!e.warnings.some(w=>String(w).includes('已观察到播放进度')));
@@ -624,6 +625,145 @@ test('复用保护firstPlay避免站点首次播放静音其他格，取消时�
 test('getIframe异常显示明确提示且无重建',async()=>{
   const {e,c,p}=edge();p.getIframe=()=>{throw Error('接口异常');};c.click();await e.clock.advance(5000);
   assert.equal(c.refreshes,0);assert.equal(c.loads,0);assert.ok(e.warnings.some(w=>String(w).includes('无法安全访问')));
+});
+
+test('load有持续进度时不触发cue或额外play',async()=>{
+  const {e,c}=edge();c.click();await e.clock.advance(65000);
+  assert.equal(c.loads,1);assert.equal(c.cues,0);assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,0);
+});
+test('load无进度后cue就绪再自动play，确认进度后静默结束',async()=>{
+  const {e,c,p,other}=edge({config:{readyAttempts:3,maxRecoveries:1}});const frame=c.frame;
+  c.progress=false;c.state=3;let playedAt;
+  p.playVideo=()=>{assert.equal(c.state,5);playedAt=e.clock.now;c.state=1;c.progress=true;c.audioCalls.push(['play']);};
+  c.status();await e.clock.advance(1900);assert.equal(c.cues,0);
+  await e.clock.advance(7000);assert.equal(c.loads,1);assert.equal(c.cues,1);assert.ok(playedAt>=2500);
+  assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,1);assert.equal(c.comp.ytPlayer,p);assert.equal(c.frame,frame);
+  assert.equal(c.refreshes,0);assert.equal(c.comp.timer,77);assert.equal(c.setTimers,0);assert.deepEqual(e.intervalsCleared,[]);
+  assert.equal(other.refreshes,0);assert.deepEqual(other.audioCalls,[]);assert.deepEqual(e.warnings,[]);
+});
+test('cue等待封面未就绪前绝不调用play，准备超时只失败一次',async()=>{
+  const {e,c,p}=edge({config:{readyAttempts:3}});c.progress=false;c.state=3;
+  p.cueVideoById=()=>{c.cues++;};c.click();await e.clock.advance(65000);
+  assert.equal(c.cues,1);assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,0);assert.equal(c.refreshes,0);
+  assert.equal(e.warnings.filter(w=>String(w).includes('准备视频后仍未就绪')).length,1);
+});
+test('cue的陈旧播放状态和进度不能充当待播就绪',async()=>{
+  const {e,c,p}=edge({config:{readyAttempts:3}});c.progress=false;
+  p.cueVideoById=()=>{c.cues++;c.progress=true;c.state=1;};c.click();await e.clock.advance(12000);
+  assert.equal(c.cues,1);assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,0);
+  assert.ok(e.warnings.some(w=>String(w).includes('准备视频后仍未就绪')));
+});
+test('cue就绪play返回但无进度时停止，不循环补救或播放',async()=>{
+  const {e,c}=edge({config:{readyAttempts:3}});c.progress=false;c.click();await e.clock.advance(65000);
+  assert.equal(c.cues,1);assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,1);assert.equal(c.loads,1);
+  assert.ok(e.warnings.some(w=>String(w).includes('未确认持续播放')));
+});
+test('load异常cue自动播放也可恢复，不等待完整load检查预算',async()=>{
+  const {e,c,p}=edge({config:{readyAttempts:3}});c.progress=false;
+  p.loadVideoById=()=>{c.loads++;throw Error('load');};p.playVideo=()=>{c.progress=true;c.state=1;c.audioCalls.push(['play']);};
+  c.click();await e.clock.advance(2000);assert.equal(c.cues,1);assert.equal(c.loads,1);assert.deepEqual(e.warnings,[]);
+});
+test('补救缺少cue或play接口有具体提示且绝不重建',async()=>{
+  for(const method of ['cueVideoById','playVideo']){
+    const {e,c,p}=edge({config:{readyAttempts:3}});delete p[method];c.progress=false;c.click();await e.clock.advance(12000);
+    assert.equal(c.cues,0);assert.equal(c.refreshes,0);assert.ok(e.warnings.some(w=>String(w).includes('缺少准备视频或播放接口')));
+  }
+});
+test('cue与play分别抛错都停止且不退回重建',async()=>{
+  for(const method of ['cueVideoById','playVideo']){
+    const {e,c,p}=edge({config:{readyAttempts:3}});c.progress=false;p[method]=()=>{throw Error(method);};
+    c.click();await e.clock.advance(65000);assert.equal(c.refreshes,0);
+    assert.ok(e.warnings.some(w=>String(w).includes(method==='playVideo'?'自动播放调用失败':'准备视频补救调用失败')));
+  }
+});
+test('cue完成前用户暂停取消，封面后来就绪也不自动播放',async()=>{
+  const {e,c,p}=edge({config:{readyAttempts:3}});c.progress=false;c.state=3;
+  p.cueVideoById=()=>{c.cues++;};c.click();await e.clock.advance(3500);assert.equal(c.cues,1);
+  c.intent();c.state=5;await e.clock.advance(12000);assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,0);
+});
+test('cue期间音量或静音改变会取消，不覆盖用户音频',async()=>{
+  for(const kind of ['volume','mute']){
+    const {e,c}=edge({config:{readyAttempts:3}});c.progress=false;c.click();await e.clock.advance(2000);
+    if(kind==='volume')c.volume=0;else c.mute=true;
+    const count=c.audioCalls.length;await e.clock.advance(12000);assert.equal(c.audioCalls.length,count);
+    assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,0);
+  }
+});
+test('补救保留音量0和静音false，其他格未受操作',async()=>{
+  const {e,c,p,other}=edge({config:{readyAttempts:3}});c.volume=0;c.mute=false;c.progress=false;
+  p.playVideo=()=>{assert.equal(c.volume,0);assert.equal(c.mute,false);c.progress=true;c.state=1;};
+  c.click();await e.clock.advance(6500);assert.equal(c.cues,1);assert.equal(c.volume,0);assert.equal(c.mute,false);
+  assert.deepEqual(other.audioCalls,[]);assert.equal(other.refreshes,0);
+});
+test('补救中换视频、iframe、播放器、销毁或页面退出不再调用play',async()=>{
+  for(const mode of ['video','frame','player','destroy','pagehide']){
+    const {e,c}=edge({config:{readyAttempts:3}});c.progress=false;c.click();await e.clock.advance(2000);
+    if(mode==='video')c.comp.cellContent.id='12345678901';if(mode==='frame')c.frame.isConnected=false;
+    if(mode==='player')c.comp.ytPlayer={};if(mode==='destroy')c.comp._isDestroyed=true;if(mode==='pagehide')e.emit('pagehide');
+    await e.clock.advance(12000);assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,0,mode);
+  }
+});
+test('补救全程保持互斥，共用一次恢复预算',async()=>{
+  const {e,c}=edge({config:{readyAttempts:3,maxRecoveries:1,cooldownSeconds:0}});c.progress=false;
+  c.click();await e.clock.advance(3500);for(let i=0;i<10;i++){c.click();c.status();}
+  await e.clock.advance(12000);c.click();await e.clock.flush();assert.equal(c.loads,1);assert.equal(c.cues,1);
+});
+test('自动播放关闭时只cue待播，不自动play；手动蓝色刷新仍执行补救自动播放',async()=>{
+  const first=edge({config:{autoplay:false,readyAttempts:3}});first.c.status();await first.e.clock.advance(12000);
+  assert.equal(first.c.loads,0);assert.equal(first.c.cues,1);assert.equal(first.c.audioCalls.filter(a=>a[0]==='play').length,0);
+  const second=edge({config:{autoplay:false,readyAttempts:3}});second.c.progress=false;second.c.click();await second.e.clock.advance(12000);
+  assert.equal(second.c.loads,1);assert.equal(second.c.cues,1);assert.equal(second.c.audioCalls.filter(a=>a[0]==='play').length,1);
+});
+test('接口暂时缺失可有限重新查找，恢复后只加载一次',async()=>{
+  const {e,c,p}=edge();const load=p.loadVideoById;delete p.loadVideoById;c.click();await e.clock.advance(1000);
+  assert.equal(c.loads,0);p.loadVideoById=load;await e.clock.advance(3000);assert.equal(c.loads,1);assert.deepEqual(e.warnings,[]);
+});
+test('接口永久缺失有具体缺失方法提示且有限停止',async()=>{
+  const {e,c,p}=edge({config:{readyAttempts:3}});delete p.loadVideoById;delete p.cueVideoById;c.click();await e.clock.advance(65000);
+  assert.equal(c.loads,0);assert.equal(c.cues,0);assert.equal(c.refreshes,0);
+  assert.equal(e.warnings.filter(w=>String(w).includes('缺少 loadVideoById')).length,1);
+});
+test('接口等待中用户操作、换视频、移除或退出取消重新查找',async()=>{
+  for(const mode of ['user','video','frame','exit']){
+    const {e,c,p}=edge();const load=p.loadVideoById;delete p.loadVideoById;c.click();await e.clock.flush();
+    if(mode==='user')c.intent();if(mode==='video')c.comp.cellContent.id='12345678901';
+    if(mode==='frame')c.frame.isConnected=false;if(mode==='exit')e.emit('pagehide');p.loadVideoById=load;
+    await e.clock.advance(10000);assert.equal(c.loads,0,mode);assert.deepEqual(c.audioCalls,[],mode);
+  }
+});
+test('主引用失效可使用匹配当前iframe的现有ref，不改Vue引用',async()=>{
+  const {e,c,p}=edge();const stale={};c.comp.ytPlayer=stale;c.click();await e.clock.advance(1500);
+  assert.equal(c.loads,1);assert.equal(c.comp.ytPlayer,stale);assert.equal(c.comp.$refs.player.player,p);assert.equal(c.refreshes,0);
+});
+test('接口等待允许同一格出现就绪引用，但不使用其他iframe播放器',async()=>{
+  const {e,c,p,other}=edge();c.comp.ytPlayer=other.comp.ytPlayer;c.comp.$refs.player.player=null;
+  c.click();await e.clock.advance(500);assert.equal(c.loads,0);c.comp.ytPlayer=p;
+  await e.clock.advance(2000);assert.equal(c.loads,1);assert.deepEqual(other.audioCalls,[]);
+});
+test('cue延迟就绪只在状态5出现后play，不根据调用返回提前播放',async()=>{
+  const {e,c,p}=edge({config:{readyAttempts:3}});c.progress=false;c.state=3;
+  p.cueVideoById=()=>{c.cues++;e.clock.set(()=>c.state=5,800);};
+  p.playVideo=()=>{assert.equal(c.state,5);c.audioCalls.push(['play']);c.state=1;c.progress=true;};
+  c.click();await e.clock.advance(2900);assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,0);
+  await e.clock.advance(3000);assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,1);assert.deepEqual(e.warnings,[]);
+});
+test('默认8次load检查约20秒后才开始一次cue补救',async()=>{
+  const {e,c}=edge();c.progress=false;c.state=3;c.click();await e.clock.advance(19999);assert.equal(c.cues,0);
+  await e.clock.advance(1);assert.equal(c.cues,1);await e.clock.advance(65000);
+  assert.equal(c.cues,1);assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,1);
+});
+test('准备后自动播放被阻止时有限停止，提示手动播放而不取消静音',async()=>{
+  const {e,c,p}=edge({config:{readyAttempts:3}});c.progress=false;c.volume=100;c.mute=true;
+  p.playVideo=()=>{c.audioCalls.push(['play']);c.state=2;};c.click();await e.clock.advance(65000);
+  assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,1);assert.equal(c.mute,true);assert.equal(c.volume,100);
+  assert.ok(e.warnings.some(w=>String(w).includes('自动播放仍处于暂停')));assert.equal(c.refreshes,0);
+});
+test('load永久缺失但cue/play完整时，有限等待后直接补救自动播放',async()=>{
+  const {e,c,p}=edge({config:{readyAttempts:3}});delete p.loadVideoById;
+  p.playVideo=()=>{c.state=1;c.progress=true;c.audioCalls.push(['play']);};
+  c.click();await e.clock.advance(999);assert.equal(c.cues,0);await e.clock.advance(3000);
+  assert.equal(c.cues,1);assert.equal(c.loads,0);assert.equal(c.audioCalls.filter(a=>a[0]==='play').length,1);
+  assert.equal(c.refreshes,0);assert.deepEqual(e.warnings,[]);
 });
 
 (async () => {
