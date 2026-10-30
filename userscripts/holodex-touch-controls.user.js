@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.38
-// @description  修复 TrustedHTML 限制导致右键统计面板无法创建，同时修复 Holodex 设置及音量提示。
+// @version      0.6.39
+// @description  精简临时右键诊断入口，保留 TrustedHTML 兼容、快捷统计、四角与大小设置。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -1911,29 +1911,15 @@
       refreshWatchHud(player);
     }
     installDesktopDismiss(()=>{if(sheet&&!sheet.hidden)close();});
-    let lastRightClick={time:0,reason:'尚未尝试右键',target:'—',path:location.pathname};
     const handleWatchRightClick=event=>{
       if(event.button!==2)return;
-      const target=event.target;
-      const player=supported()?p():null;
-      const result=desktopContextCheck(event,player);
-      lastRightClick={time:Date.now(),reason:result.reason,
-        target:target?.tagName||'—',path:location.pathname};
-      if(!result.point)return;
-      // Capture at window BEFORE YouTube's document/player listeners. A
-      // document-only listener can be skipped by their stopPropagation().
+      const point=desktopContextPoint(event,supported()?p():null);
+      if(!point)return;
       event.preventDefault();event.stopPropagation();
-      try{
-        open(result.point);
-        lastRightClick.reason=sheet?.hidden===false?'统计面板已打开':'未能打开统计面板';
-      }catch(error){
-        lastRightClick.reason='面板异常：'+String(error?.message||error).slice(0,120);
-        console.warn('[HMTC] YouTube 右键面板打开失败',error);
-      }
+      try{open(point);}
+      catch(error){console.warn('[HMTC] YouTube 右键面板打开失败',error);}
     };
     window.addEventListener('contextmenu',handleWatchRightClick,{capture:true});
-    // Document is only a fallback; a successfully handled event is stopped
-    // during window capture, so this cannot open the panel twice.
     document.addEventListener('contextmenu',handleWatchRightClick,{capture:true});
     document.addEventListener('hmtc:corner-hud-change',refresh);
     document.addEventListener('hmtc:corner-hud-position',refresh);
@@ -1945,15 +1931,6 @@
       refresh();
     });
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
-    GM_registerMenuCommand('YouTube：右键呼出诊断',()=>{
-      const when=lastRightClick.time?new Date(lastRightClick.time).toLocaleTimeString():'没有收到右键事件';
-      alert(['YouTube 右键呼出诊断 · v0.6.38',
-        '最近事件：'+when,'结果：'+lastRightClick.reason,
-        '元素：'+lastRightClick.target,'路径：'+lastRightClick.path,
-        '当前播放器：'+(p()?'已识别':'未识别'),
-        '面板：'+(sheet?.hidden===false?'已打开':'未打开'),
-        '提示：在视频画面中间 2/3 区域右键，避免播放器按钮或进度条'].join('\n'));
-    });
     GM_registerMenuCommand('YouTube：选择播放信息角落',chooseHudPosition);
     GM_registerMenuCommand('YouTube：调节播放信息大小',chooseHudSize);
     GM_registerMenuCommand('YouTube：画质接口诊断',async()=>{
@@ -2360,7 +2337,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.38', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.39', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -4738,8 +4715,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.38 说明',()=>
-      alert('v0.6.38：恢复 YouTube 播放画面中央右键呼出统计，增加右键诊断；大小与位置设置保留。'));
+    GM_registerMenuCommand('Touch Controls v0.6.39 说明',()=>
+      alert('v0.6.39：移除已解决的 YouTube 右键临时诊断，保留安全兼容和统计功能。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
