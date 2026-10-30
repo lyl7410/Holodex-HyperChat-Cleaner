@@ -102,6 +102,51 @@ test('actual mouse entry overrides incorrect coarse reports without cancelling i
   assert.ok(classes.has('hmtc-mouse-input'));assert.equal(changes,1);
   listeners.get('pointerdown')({pointerType:'mouse'});assert.equal(changes,1);
 });
+test('YouTube Trusted Types: static panels render with innerHTML prohibited',()=>{
+  // Simulate a YouTube CSP that throws on every innerHTML assignment.
+  assert.doesNotMatch(source,/\.innerHTML\s*=/);
+  const create=tag=>({tagName:tag.toUpperCase(),children:[],attrs:{},
+    setAttribute(k,v){this.attrs[k]=v;},
+    appendChild(el){this.children.push(el);},
+    set innerHTML(value){throw new TypeError('TrustedHTML required');}});
+  const ctx=vm.createContext({document:{createElement:create,createTextNode:t=>({text:t})}});
+  vm.runInContext(section('  function appendStaticPanelMarkup(root,markup){','  const DESKTOP_TAG='),ctx);
+  const cases=[
+    ['appendStaticPanelMarkup(sheet,[','youtube'],
+    ['appendStaticPanelMarkup(sheet,[','holodex'],
+    ['appendStaticPanelMarkup(settings,[','settings']
+  ];
+  let cursor=0;
+  const walked=node=>[node,...(node.children||[]).flatMap(walked)];
+  for(const [prefix,name] of cases){
+    const start=source.indexOf(prefix,cursor);
+    assert.ok(start>=0,'missing '+name+' static template');
+    const close=source.indexOf("].join(''));",start);
+    assert.ok(close>start,'unterminated '+name+' template');
+    const expression='['+source.slice(start+prefix.length,close)+"].join('')";
+    const markup=vm.runInNewContext(expression);
+    const root=create('section');
+    assert.doesNotThrow(()=>ctx.appendStaticPanelMarkup(root,markup),name);
+    assert.ok(walked(root).length>40,name+' hierarchy missing');
+    if(name==='youtube'){
+      for(const key of ['time','resolution','speed','buffer','slider','hudSize'])
+        assert.ok(walked(root).some(el=>el.attrs?.['data-id']===key),'YouTube '+key);
+    }
+    if(name==='holodex')assert.ok(walked(root).some(el=>el.attrs?.['data-field']==='speed'));
+    if(name==='settings')assert.ok(walked(root).some(el=>el.attrs?.['data-control']==='autoEnabled'));
+    cursor=close+11;
+  }
+  const toastPrefix='appendStaticPanelMarkup(volumeToast,';
+  const a=source.indexOf(toastPrefix);const b=source.indexOf(');',a);
+  assert.ok(a>=0&&b>a);
+  const toast=vm.runInNewContext(source.slice(a+toastPrefix.length,b));
+  const toastRoot=create('div');
+  assert.doesNotThrow(()=>ctx.appendStaticPanelMarkup(toastRoot,toast));
+  assert.ok(walked(toastRoot).some(el=>el.attrs?.class==='hmtc-toast-number'));
+  assert.throws(()=>ctx.appendStaticPanelMarkup(create('div'),'<div onclick="evil()">x</div>'),
+    /Unsafe static panel attribute/);
+});
+
 test('YouTube panel opens with no full-screen mouse blocker and closes cleanly',()=>{
   for(const touch of [false,true]){
     const ctx=vm.createContext({supported:()=>true,p:()=>({}),makePanel(){},
