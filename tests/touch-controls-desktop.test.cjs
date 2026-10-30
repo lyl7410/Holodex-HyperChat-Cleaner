@@ -102,6 +102,20 @@ test('actual mouse entry overrides incorrect coarse reports without cancelling i
   assert.ok(classes.has('hmtc-mouse-input'));assert.equal(changes,1);
   listeners.get('pointerdown')({pointerType:'mouse'});assert.equal(changes,1);
 });
+test('v0.6.40 removes obsolete debug menus without disabling live controls',()=>{
+  for(const name of [
+    'YouTube：画质接口诊断','YouTube：连接速度诊断',
+    'YouTube：显示／隐藏手势区（调试）','显示/隐藏边缘触控区域（调试）'
+  ])assert.ok(!source.includes(name),'obsolete menu: '+name);
+  assert.ok(!source.includes('hmtc-yt-debug'));
+  assert.ok(!source.includes('hmtc-debug'));
+  for(const name of [
+    'YouTube：打开快捷控制面板','YouTube：启用／禁用透明触控区',
+    '播放信息：调整显示大小','诊断多视图自动播放状态'
+  ])assert.ok(source.includes(name),'required control: '+name);
+  assert.ok(source.includes('function appendStaticPanelMarkup(root,markup)'));
+  assert.ok(source.includes("window.addEventListener('contextmenu',handleWatchRightClick,{capture:true})"));
+});
 test('YouTube Trusted Types: static panels render with innerHTML prohibited',()=>{
   // Simulate a YouTube CSP that throws on every innerHTML assignment.
   assert.doesNotMatch(source,/\.innerHTML\s*=/);
