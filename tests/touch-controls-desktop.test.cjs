@@ -102,6 +102,14 @@ test('actual mouse entry overrides incorrect coarse reports without cancelling i
   assert.ok(classes.has('hmtc-mouse-input'));assert.equal(changes,1);
   listeners.get('pointerdown')({pointerType:'mouse'});assert.equal(changes,1);
 });
+test('v0.6.41 removes legacy Holodex diagnostics but preserves autoplay troubleshooting',()=>{
+  assert.doesNotMatch(source,/GM_registerMenuCommand\('诊断视频类型／时长／延迟'/);
+  assert.doesNotMatch(source,/GM_registerMenuCommand\('诊断多视图右键面板'/);
+  assert.match(source,/GM_registerMenuCommand\('诊断多视图自动播放状态',diagnoseAutoPlay\)/);
+  assert.match(source,/GM_registerMenuCommand\('选择视频查看统计（PC／触屏）'/);
+  assert.match(source,/GM_registerMenuCommand\('播放信息：调整显示大小',chooseHudSize\)/);
+  assert.match(source,/window\.addEventListener\('contextmenu',handleWatchRightClick,\{capture:true\}\)/);
+});
 test('v0.6.40 removes obsolete debug menus without disabling live controls',()=>{
   for(const name of [
     'YouTube：画质接口诊断','YouTube：连接速度诊断',
