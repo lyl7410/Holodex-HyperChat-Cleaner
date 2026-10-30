@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.37
-// @description  修复 YouTube 播放画面中间右键统计面板失效，新增右键诊断；保留四角与角标大小设置。
+// @version      0.6.38
+// @description  修复 TrustedHTML 限制导致右键统计面板无法创建，同时修复 Holodex 设置及音量提示。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -58,6 +58,41 @@
   // Shared and persisted by YouTube and Holodex. Tapping the HUD cycles
   // time → native speed → both → compact (off). The compact control can
   // restore the display without opening the settings sheet.
+  // These are script-owned STATIC UI templates, not arbitrary HTML or user data.
+  // Construct DOM elements without assigning TrustedHTML-protected innerHTML.
+  function appendStaticPanelMarkup(root,markup){
+    const stack=[root],voidTags=new Set(['input','br','hr','img','meta','link']);
+    const tokens=String(markup).match(/<[^>]*>|[^<]+/g)||[];
+    for(const token of tokens){
+      if(token[0]!=='<'){
+        stack[stack.length-1].appendChild(document.createTextNode(token));
+        continue;
+      }
+      const closing=/^<\s*\/\s*([a-z][\w-]*)\s*>$/i.exec(token);
+      if(closing){
+        if(stack.length===1||stack[stack.length-1].tagName.toLowerCase()!==closing[1].toLowerCase())
+          throw new Error('Unexpected closing static panel tag: '+closing[1]);
+        stack.pop();continue;
+      }
+      const opening=/^<([a-z][\w-]*)([\s\S]*?)\s*>$/i.exec(token);
+      if(!opening)throw new Error('Invalid static panel markup');
+      const tag=opening[1].toLowerCase(),el=document.createElement(tag);
+      const attrs=opening[2].replace(/\/\s*$/,'');
+      const attr=/\s+([a-z_:][\w:.-]*)(?:="([^"]*)")?/gi;
+      let end=0,m;
+      while((m=attr.exec(attrs))){
+        if(attrs.slice(end,m.index).trim())throw new Error('Invalid static panel attribute');
+        if(/^on/i.test(m[1])||['srcdoc','formaction'].includes(m[1].toLowerCase()))
+          throw new Error('Unsafe static panel attribute');
+        el.setAttribute(m[1],m[2]??'');
+        end=attr.lastIndex;
+      }
+      if(attrs.slice(end).trim())throw new Error('Unparsed static panel attribute');
+      stack[stack.length-1].appendChild(el);
+      if(!voidTags.has(tag))stack.push(el);
+    }
+    if(stack.length!==1)throw new Error('Unclosed static panel markup');
+  }
   const DESKTOP_TAG='hmtc-desktop-panel-v1';
   const DESKTOP_EXCLUDE='button,a,input,select,textarea,[contenteditable]:not([contenteditable="false"]),'+
     '[role="button"],[role="slider"],[role="dialog"],.ytp-chrome-top,.ytp-chrome-bottom,.ytp-popup,'+
@@ -1637,7 +1672,7 @@
       bindPanelRightClose(sheet,close);
       sheet.hidden=true;sheet.setAttribute('role','dialog');
       sheet.setAttribute('aria-label','YouTube 视频音量、倍速、画质和统计');
-      sheet.innerHTML=[
+      appendStaticPanelMarkup(sheet,[
         '<div class="head"><strong data-id="title">YouTube</strong>',
         '<button data-action="close" aria-label="关闭面板">✕</button></div>',
         '<div class="hmtc-live-status" data-hmtc-latency-metric data-kind="unknown">',
@@ -1683,7 +1718,7 @@
         '<input type="range" data-id="sense" min="0.4" max="2.5" step="0.1">',
         '<strong data-id="senseText">1.0×</strong></div>',
         '</details>'
-      ].join('');
+      ].join(''));
       document.body.appendChild(sheet);
       const hudSelect=sheet.querySelector('[data-id="hudPosition"]');
       hudSelect.value=hudPosition();
@@ -1912,7 +1947,7 @@
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
     GM_registerMenuCommand('YouTube：右键呼出诊断',()=>{
       const when=lastRightClick.time?new Date(lastRightClick.time).toLocaleTimeString():'没有收到右键事件';
-      alert(['YouTube 右键呼出诊断 · v0.6.37',
+      alert(['YouTube 右键呼出诊断 · v0.6.38',
         '最近事件：'+when,'结果：'+lastRightClick.reason,
         '元素：'+lastRightClick.target,'路径：'+lastRightClick.path,
         '当前播放器：'+(p()?'已识别':'未识别'),
@@ -2325,7 +2360,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.37', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.38', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
@@ -3639,9 +3674,9 @@
     if(!volumeToast?.isConnected){
       volumeToast=document.createElement('div');
       volumeToast.id='hmtc-volume-toast';
-      volumeToast.innerHTML='<span class="hmtc-toast-label">音量 VOL</span>'+
+      appendStaticPanelMarkup(volumeToast,'<span class="hmtc-toast-label">音量 VOL</span>'+
         '<strong class="hmtc-toast-number">—</strong>'+
-        '<div class="hmtc-toast-track"><div class="hmtc-toast-fill"></div></div>';
+        '<div class="hmtc-toast-track"><div class="hmtc-toast-fill"></div></div>');
       document.body.appendChild(volumeToast);
     }
     const rect=frame.getBoundingClientRect();
@@ -3860,7 +3895,7 @@
     bindPanelRightClose(sheet,closeSheet);
     sheet.setAttribute('role','dialog');
     sheet.setAttribute('aria-label','YouTube 当前视频控制和详细统计');
-    sheet.innerHTML=[
+    appendStaticPanelMarkup(sheet,[
       '<div class="hmtc-dismiss-zone" data-action="dismissHeader" title="轻点任意统计数据收起">',
       '<div class="head" data-action="dismissHeader" title="轻点标题收起">',
       '<div class="title" data-field="title">YouTube</div>',
@@ -3902,7 +3937,7 @@
       '<button type="button" data-action="native">YouTube 原版统计</button>',
       '<button type="button" data-action="settings" aria-label="触控设置">⚙ 设置</button></div>',
       '<div class="note" data-field="note" hidden></div>'
-    ].join('');
+    ].join(''));
     document.body.appendChild(sheet);
     const slider=sheet.querySelector('[data-field="slider"]');
     slider.addEventListener('input',()=>{
@@ -3978,7 +4013,7 @@
     bindPanelRightClose(settings,closeSettings);
     settings.setAttribute('role','dialog');
     settings.setAttribute('aria-label','Holodex 触控手势设置');
-    settings.innerHTML=[
+    appendStaticPanelMarkup(settings,[
       '<div class="head"><span class="title">⚙ 触控手势设置</span>',
       '<button type="button" data-action="close" aria-label="关闭设置">✕</button></div>',
       '<div class="setting"><label>音量滑动灵敏度：<b data-value="sensitivity">1.0×</b></label>',
@@ -4030,7 +4065,7 @@
       '<div class="setting-summary" style="margin-top:16px">',
       '安卓触控区域左右各宽 36%，最大 112px，纵向覆盖 11%–89%。',
       '可从油猴菜单显示边界或关闭边缘手势。</div>'
-    ].join('');
+    ].join(''));
     document.body.appendChild(settings);
     settings.querySelector('[data-action="close"]').addEventListener('click',closeSettings);
     const slider=settings.querySelector('[data-control="sensitivity"]');
@@ -4703,8 +4738,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.37 说明',()=>
-      alert('v0.6.37：恢复 YouTube 播放画面中央右键呼出统计，增加右键诊断；大小与位置设置保留。'));
+    GM_registerMenuCommand('Touch Controls v0.6.38 说明',()=>
+      alert('v0.6.38：恢复 YouTube 播放画面中央右键呼出统计，增加右键诊断；大小与位置设置保留。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
