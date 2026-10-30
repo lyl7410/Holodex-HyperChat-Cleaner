@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.40
-// @description  精简画质/测速诊断及手势区调试菜单，保留快捷统计、触控与 TrustedHTML 兼容。
+// @version      0.6.41
+// @description  清理 Holodex 旧视频与右键诊断菜单，保留自动播放诊断、快捷统计与 TrustedHTML 兼容。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -2310,7 +2310,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.40', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.41', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
   const STATS_MODE_KEY='hmtc_stats_trigger_v1';
@@ -4578,50 +4578,6 @@
     setInterval(()=>{
       if(isMulti()&&!document.hidden)for(const row of rowMap.values())configureDesktopFrame(row);
     },1800);
-    GM_registerMenuCommand('诊断视频类型／时长／延迟',async()=>{
-      const selected=active&&rowMap.get(active.layoutId+':'+active.videoId);
-      const rows=selected?[selected]:[...rowMap.values()].slice(0,12);
-      if(!rows.length)return alert('请先打开多视图视频。');
-      const reasons={'not-live':'已识别为录像，没有直播延迟','media-type-unknown':'当前直播／录像状态未确认',
-        'no-latency-api':'未开放直播延迟读取接口','latency-field-absent':'可用接口未返回明确的延迟字段',
-        'unrecognized-latency-units':'返回了延迟字段或文字，但单位无法确认','latency-value-invalid':'有明确单位的延迟字段，但值为空、无效或为负数','available':'已读取实际延迟'};
-      const typeReasons={'player-not-live':'播放器明确标记为非直播','past-broadcast':'直播结束标记',
-        'broadcast-details':'正在直播标记','player-live':'播放器明确标记直播','player-is-live':'播放器直播状态接口',
-        'player-live-class':'当前播放器直播界面','visible-player-live-badge':'当前播放器直播徽标',
-        'infinite-media':'直播媒体流','vod-details':'普通点播元数据','holodex-past':'Holodex录像状态',
-        'holodex-live':'Holodex直播状态','historic-live-flag-only':'只有历史直播标记，当前状态未确认',
-        'reported-live-state':'播放器类型返回值','unknown':'缺少判断依据'};
-      const durationSources={'media':'视频媒体','player-api':'播放器接口','video-details':'视频元数据','holodex-api':'Holodex接口'};
-      const reports=await Promise.all(rows.map(async row=>{
-        try{
-          const [clock,data]=await Promise.all([readMultiviewClock(row),nativeRequest(row,'statsDiagnostics',2200)]);
-          const d=data.latencyDiagnostics||{};
-          return [(row.title||row.videoId).slice(0,60),
-            '类型：'+playbackKindLabel(clock)+'；依据：'+(typeReasons[clock.liveReason]||clock.liveReason||'缺少判断依据'),
-            '播放时间：'+playbackTimeText(clock)+'；总时长来源：'+(durationSources[clock.durationSource]||'未读到'),
-            '延迟：'+(data.liveLatencySeconds!=null?data.liveLatencySeconds+' s':data.latencyReason)+'；'+(reasons[d.reasonCode]||'诊断未返回'),
-            'getLiveLatency：'+(d.getter?.supported?d.getter.status:'不存在'),
-            '原版统计：'+(d.nativePanelVisible===true?'开启':d.nativePanelVisible===false?'关闭':'状态不可读'),
-            ...(d.sources||[]).map(x=>x.method+'：'+(!x.available?'不存在':x.error||
-              (x.latencySeconds!=null?'延迟 '+x.latencySeconds+' s':'没有可解析延迟')+(x.fields?.length?'；字段 '+x.fields.join(','):'；无延迟字段'))+
-              (x.values||[]).map(v=>'\n  '+v.field+'：类型 '+v.type+'；原值 '+v.preview).join(''))
-          ].join('\n');
-        }catch(error){return (row.title||row.videoId)+'：'+String(error?.message||error);}
-      }));
-      alert('数据诊断 · v0.6.30\n'+reports.join('\n\n'));
-    });
-    GM_registerMenuCommand('诊断多视图右键面板',async()=>{
-      const rows=[...rowMap.values()];
-      if(!rows.length)return alert('尚未识别多视图视频，请刷新页面后重试。');
-      const reports=await Promise.all(rows.map(async row=>{
-        try{
-          const d=await nativeRequest(row,'desktopPanelStatus',1800);
-          return (row.title||row.videoId).slice(0,36)+'：iframe '+d.version+
-            '，'+(d.paired?'已配对':'未配对')+'，'+(d.enabled?'已启用':'未启用')+'，'+d.lastContext;
-        }catch(error){return (row.title||row.videoId).slice(0,36)+'：iframe 未响应或仍为旧版；'+String(error?.message||error).slice(0,100)+'；请刷新多视图并允许内嵌脚本运行';}
-      }));
-      alert('右键面板诊断 · v0.6.30\n'+reports.join('\n'));
-    });
     GM_registerMenuCommand('智能自动播放设置（PC／安卓）',openSettings);
     GM_registerMenuCommand('立即尝试播放未播放的视频',manualAutoPlay);
     GM_registerMenuCommand('诊断多视图自动播放状态',diagnoseAutoPlay);
@@ -4679,8 +4635,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.40 说明',()=>
-      alert('v0.6.40：清理画质与连接速度诊断，以及 YouTube/Holodex 手势区可视化调试菜单。'));
+    GM_registerMenuCommand('Touch Controls v0.6.41 说明',()=>
+      alert('v0.6.41：移除 Holodex 旧视频类型／延迟与右键面板诊断菜单；保留自动播放故障诊断。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
