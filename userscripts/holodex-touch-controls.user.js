@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.39
-// @description  精简临时右键诊断入口，保留 TrustedHTML 兼容、快捷统计、四角与大小设置。
+// @version      0.6.40
+// @description  精简画质/测速诊断及手势区调试菜单，保留快捷统计、触控与 TrustedHTML 兼容。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -1338,8 +1338,6 @@
       '.hmtc-yt-left{touch-action:pan-y!important}',
       '.hmtc-yt-right{touch-action:none!important}',
       'html.hmtc-yt-quality-mode .hmtc-yt-edge{pointer-events:none!important}',
-      'html.hmtc-yt-debug .hmtc-yt-left{background:#328bff33!important;outline:1px dashed #82c5ff}',
-      'html.hmtc-yt-debug .hmtc-yt-right{background:#40cfa533!important;outline:1px dashed #82f5da}',
       '#hmtc-yt-backdrop{position:fixed;inset:0;z-index:2147482990;background:transparent}',
       '#hmtc-yt-backdrop[hidden],#hmtc-yt-panel[hidden],#hmtc-yt-toast[hidden]{display:none!important}',
       '#hmtc-yt-panel{position:fixed;bottom:calc(8px + env(safe-area-inset-bottom,0px));',
@@ -1933,37 +1931,12 @@
     GM_registerMenuCommand('YouTube：打开快捷控制面板',open);
     GM_registerMenuCommand('YouTube：选择播放信息角落',chooseHudPosition);
     GM_registerMenuCommand('YouTube：调节播放信息大小',chooseHudSize);
-    GM_registerMenuCommand('YouTube：画质接口诊断',async()=>{
-      const c=await controls.qualityOptions();
-      alert(['YouTube 画质诊断 · v0.6.8','可用方式：'+c.method,
-        '真实档位：'+(c.enumerated?'已读取':'未公开'),
-        '当前报告：'+(c.selected||'未知'),
-        '档位：'+(c.choices.map(x=>x.label).join('、')||'无'),
-        c.reason||'切换后需核对播放器反馈'].join('\n'));
-    });
-    GM_registerMenuCommand('YouTube：连接速度诊断',()=>{
-      const info=bandwidth.diagnose();
-      alert([
-        '连接速度诊断 · v0.6.5',
-        '播放器：'+(info.playerReady?'已识别':'未识别'),
-        '原生统计接口：'+(info.methods.join('、')||'未开放'),
-        '原版统计面板：'+(info.nativePanelFound?'已发现':'未发现'),
-        '统计采集：'+(info.monitoring?'开启':'未开启'),
-        '当前读取：'+(info.available?
-          (info.bandwidthKbps/1000).toFixed(2)+' Mbps':'无数值'),
-        '数据来源：'+(info.source||'—'),
-        info.available?'':('原因：'+(info.reason||'YouTube 未返回连接速度'))
-      ].filter(Boolean).join('\n'));
-    });
     GM_registerMenuCommand('YouTube：启用／禁用透明触控区',()=>{
       const next=!setting(enabledKey,true);GM_setValue(enabledKey,next);refresh();
       alert('YouTube 边缘触控区已'+(next?'启用':'关闭'));
     });
     GM_registerMenuCommand('YouTube：打开触控设置',()=>{
       open();sheet?.querySelector('.hmtc-yt-preferences')?.setAttribute('open','');
-    });
-    GM_registerMenuCommand('YouTube：显示／隐藏手势区（调试）',()=>{
-      document.documentElement.classList.toggle('hmtc-yt-debug');
     });
     setInterval(refresh,600);
     // Keep the transparent overlay aligned while the player scrolls,
@@ -2337,9 +2310,8 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.39', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.40', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
-  const DEBUG_KEY='hmtc_show_edge_zones_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
   const STATS_MODE_KEY='hmtc_stats_trigger_v1';
   const AUTO_ENABLED_KEY='hmtc_autoplay_enabled_v1';
@@ -2630,8 +2602,6 @@
   .mv-frame.hmtc-native-menu .hmtc-edge{pointer-events:none!important}
   .hmtc-edge--left{left:0;touch-action:pan-y;cursor:pointer}
   .hmtc-edge--right{right:0;touch-action:none;cursor:ns-resize}
-  html.hmtc-debug .hmtc-edge--left{background:#37aaff33;outline:1px dashed #73c9ff}
-  html.hmtc-debug .hmtc-edge--right{background:#48d9ac33;outline:1px dashed #70e7be}
   #hmtc-volume-toast{position:fixed;z-index:2147482999;pointer-events:none;
     display:flex;flex-direction:column;gap:8px;min-width:110px;
     padding:12px 14px;border-radius:14px;color:#f7fbff;text-align:center;
@@ -4690,7 +4660,6 @@
     });
     {
       makeSheet();
-      document.documentElement.classList.toggle('hmtc-debug',!!get(DEBUG_KEY,false));
       GM_registerMenuCommand('启用/禁用透明边缘手势',()=>{
         const next=!get(EDGE_KEY,true);
         set(EDGE_KEY,next);
@@ -4699,11 +4668,6 @@
         alert('触摸手势已'+(next?'启用':'禁用')+'；播放统计仍可通过脚本菜单查看。');
       });
       GM_registerMenuCommand('触控手势设置（灵敏度／长按）',openSettings);
-      GM_registerMenuCommand('显示/隐藏边缘触控区域（调试）',()=>{
-        const next=!get(DEBUG_KEY,false);
-        set(DEBUG_KEY,next);
-        document.documentElement.classList.toggle('hmtc-debug',next);
-      });
       GM_registerMenuCommand('选择视频查看统计（PC／触屏）',()=>{
         const rows=[...rowMap.values()];
         if(!rows.length)return alert('当前没有已识别的 YouTube 视频格子。');
@@ -4715,8 +4679,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.39 说明',()=>
-      alert('v0.6.39：移除已解决的 YouTube 右键临时诊断，保留安全兼容和统计功能。'));
+    GM_registerMenuCommand('Touch Controls v0.6.40 说明',()=>
+      alert('v0.6.40：清理画质与连接速度诊断，以及 YouTube/Holodex 手势区可视化调试菜单。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
