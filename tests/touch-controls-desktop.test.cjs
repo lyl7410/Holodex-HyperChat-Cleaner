@@ -92,7 +92,7 @@ test('mobile portrait and landscape can both enter and exit real fullscreen',asy
   const button=buttons[0];
   assert.equal(button.id,'hmtc-multiview-fullscreen');
   assert.equal(button.hidden,false);
-  assert.equal(button.style.left,'94.00%');
+  assert.equal(button.style.left,'95.00%');
   assert.equal(button.style.top,'56.00%');
   button.handlers.click();await Promise.resolve();
   assert.equal(doc.fullscreenElement,root);
@@ -101,6 +101,7 @@ test('mobile portrait and landscape can both enter and exit real fullscreen',asy
   // In v0.6.42 portrait was blocked. v0.6.43 must allow it.
   ctx.innerWidth=450;ctx.innerHeight=1000;ctx.syncMultiviewFullscreenButton();
   assert.equal(button.hidden,false);
+  assert.ok(parseFloat(button.style.left)<95,'portrait control must stay away from screen edge');
   button.handlers.click();await Promise.resolve();assert.equal(doc.fullscreenElement,root);
   button.handlers.click();await Promise.resolve();assert.equal(doc.fullscreenElement,null);
   assert.equal(alerts.length,0);
@@ -134,7 +135,7 @@ test('fullscreen float can be dragged and its position persists',()=>{
   button.handlers.click();
   assert.equal(doc.fullscreenElement,null);
   ctx.resetMultiviewFullscreenButton();
-  assert.equal(button.style.left,'94.00%');
+  assert.equal(button.style.left,'95.00%');
   assert.equal(button.style.top,'56.00%');
 });
 test('optional landscape auto fullscreen waits for gesture and respects explicit exit',async()=>{
