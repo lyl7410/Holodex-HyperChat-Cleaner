@@ -4265,8 +4265,7 @@
     settings.querySelector('[data-control="fullscreenAuto"]').addEventListener('change',e=>{
       const checked=setLandscapeAutoFullscreen(e.target.checked,true);
       e.target.checked=checked;
-      if(checked&&landscapeNow()&&document.fullscreenElement)
-        closeSettings();
+      if(checked&&landscapeNow())closeSettings();
     });
     settings.querySelector('[data-action="resetFullscreenPosition"]').addEventListener('click',()=>{
       resetMultiviewFullscreenButton();
@@ -4807,6 +4806,12 @@
     GM_registerMenuCommand('播放信息：切换时间／速度／隐藏',cycleHudMode);
     GM_registerMenuCommand('播放信息：选择显示角落',chooseHudPosition);
     GM_registerMenuCommand('播放信息：调整显示大小',chooseHudSize);
+    GM_registerMenuCommand('横屏自动全屏：切换开关',()=>{
+      const next=setLandscapeAutoFullscreen(!fullscreenAutoEnabled(),false);
+      alert(next?
+        '横屏自动全屏已开启。旋转到横屏后，下一次触摸 Holodex 页面时自动尝试进入全屏；浏览器必须授权用户手势。':
+        '横屏自动全屏已关闭。仍可用悬浮按钮手动全屏。');
+    });
     setInterval(pollCornerHuds,2200);
     const clearOnRouteExit=()=>{
       if(isMulti())return;
