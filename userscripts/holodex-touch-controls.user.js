@@ -2375,6 +2375,7 @@
   function syncMultiviewFullscreenButton(){
     const button=multiviewFullscreenButton;
     if(!button)return;
+    if(!fullscreenDrag)placeMultiviewFullscreenButton();
     const ownFullscreen=document.fullscreenElement===document.documentElement;
     const otherFullscreen=!!document.fullscreenElement&&!ownFullscreen;
     button.hidden=!isMobileFullscreenDevice()||!isMulti()||otherFullscreen;
