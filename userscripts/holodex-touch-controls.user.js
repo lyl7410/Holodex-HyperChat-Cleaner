@@ -2341,7 +2341,10 @@
   };
   const landscapeNow=()=>innerWidth>innerHeight;
   const fullscreenAutoEnabled=()=>!!get(FULLSCREEN_AUTO_KEY,false);
-  const defaultFullscreenPosition=()=>({x:.94,y:.56});
+  const defaultFullscreenPosition=()=>({
+    // Keep a thumb-friendly 46px clearance from the right screen edge.
+    x:Math.max(.6,Math.min(.95,1-46/Math.max(innerWidth,1))),y:.56
+  });
   function fullscreenPosition(){
     const value=get(FULLSCREEN_POS_KEY,null);
     const valid=n=>typeof n==='number'&&Number.isFinite(n);
@@ -2359,8 +2362,11 @@
   function placeMultiviewFullscreenButton(){
     if(!multiviewFullscreenButton)return;
     const pos=fullscreenPosition();
-    multiviewFullscreenButton.style.left=(pos.x*100).toFixed(2)+'%';
-    multiviewFullscreenButton.style.top=(pos.y*100).toFixed(2)+'%';
+    // Preserve a tappable margin on narrow portrait screens after rotation.
+    const x=Math.max(25,Math.min(Math.max(25,innerWidth-25),pos.x*innerWidth));
+    const y=Math.max(25,Math.min(Math.max(25,innerHeight-25),pos.y*innerHeight));
+    multiviewFullscreenButton.style.left=(100*x/Math.max(1,innerWidth)).toFixed(2)+'%';
+    multiviewFullscreenButton.style.top=(100*y/Math.max(1,innerHeight)).toFixed(2)+'%';
   }
   function resetMultiviewFullscreenButton(){
     set(FULLSCREEN_POS_KEY,defaultFullscreenPosition());
@@ -2801,7 +2807,7 @@
   /* Thumb-friendly floating control on both mobile orientations.
      Drag freely to adjust its saved location; the site does not own chrome. */
   #hmtc-multiview-fullscreen{position:fixed!important;
-    top:56%;left:94%;transform:translate(-50%,-50%)!important;
+    top:56%;left:92%;transform:translate(-50%,-50%)!important;
     z-index:2147482850!important;
     display:grid!important;place-items:center!important;
     width:48px!important;height:48px!important;
