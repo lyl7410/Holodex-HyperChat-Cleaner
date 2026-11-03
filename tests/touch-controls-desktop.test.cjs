@@ -48,7 +48,9 @@ test('PC initialization registers statistics; selection opens the correct video 
     GM_registerMenuCommand:(name,fn)=>menus.set(name,fn),
     watchTouchZonePolicy:fn=>{policyChange=fn;},touchZonesAllowed:()=>false,
     cycleHudMode:noop,pollCornerHuds:noop,clearHudCells:noop,openSettings:noop,
-    manualAutoPlay:noop,diagnoseAutoPlay:noop,makeSheet:noop,installDesktopDismiss:noop,get:(_k,d)=>d,DEBUG_KEY:'debug',
+    manualAutoPlay:noop,diagnoseAutoPlay:noop,makeSheet:noop,installDesktopDismiss:noop,
+    installMultiviewFullscreenButton:noop,syncMultiviewFullscreenButton:noop,
+    get:(_k,d)=>d,DEBUG_KEY:'debug',
     installBridge:noop,isMulti:()=>true,setInterval:noop,refresh:noop,
     rowMap:new Map(rows.map(r=>[r.layoutId+':'+r.videoId,r])),
     openSheet:r=>opened.push(r),alert:noop,prompt:()=> '2'
@@ -63,6 +65,78 @@ test('PC initialization registers statistics; selection opens the correct video 
   ctx.rowMap.clear();select();assert.equal(opened.length,2);
   policyChange();assert.equal(removed,1);assert.equal(ctx.backdrop.hidden,true);
 });
+test('Android landscape full-screen button enters and exits with a direct user gesture',async()=>{
+  const registered=new Map(),buttons=[],alerts=[];
+  const add=(key,fn)=>registered.set(key,fn);
+  const root={requestFullscreen(options){
+    assert.equal(options.navigationUI,'hide');
+    doc.fullscreenElement=root;
+    registered.get('doc:fullscreenchange')?.();
+    return Promise.resolve();
+  }};
+  const doc={documentElement:root,fullscreenElement:null,
+    body:{appendChild(button){buttons.push(button);button.isConnected=true;}},
+    createElement:tag=>({tagName:tag.toUpperCase(),hidden:false,attrs:{},handlers:{},
+      addEventListener(name,fn){this.handlers[name]=fn;},
+      setAttribute(name,value){this.attrs[name]=value;}}),
+    exitFullscreen(){doc.fullscreenElement=null;registered.get('doc:fullscreenchange')?.();return Promise.resolve();},
+    addEventListener:(name,fn)=>add('doc:'+name,fn)
+  };
+  const loc={pathname:'/multiview/'},ctx=vm.createContext({
+    document:doc,window:{addEventListener:(name,fn)=>add('window:'+name,fn),
+      matchMedia:()=>({matches:false})},
+    navigator:{userAgent:'Mozilla/5.0 (Linux; Android 17)'},
+    location:loc,innerWidth:1000,innerHeight:450,alert:msg=>alerts.push(msg),
+    console:{warn(){}}
+  });
+  vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
+  ctx.installMultiviewFullscreenButton();
+  const button=buttons[0];
+  assert.equal(button.id,'hmtc-multiview-fullscreen');
+  assert.equal(button.hidden,false);
+  assert.equal(button.textContent,'⛶');
+  button.handlers.click();
+  assert.equal(doc.fullscreenElement,root);
+  assert.equal(button.textContent,'⤢');
+  assert.equal(button.attrs['aria-pressed'],'true');
+  button.handlers.click();
+  assert.equal(doc.fullscreenElement,null);
+  assert.equal(button.textContent,'⛶');
+  assert.equal(button.attrs['aria-pressed'],'false');
+  assert.equal(alerts.length,0);
+  // Portrait must hide entry but fullscreen always retains an exit control.
+  ctx.innerWidth=450;ctx.innerHeight=1000;ctx.syncMultiviewFullscreenButton();
+  assert.equal(button.hidden,true);
+  doc.fullscreenElement=root;ctx.syncMultiviewFullscreenButton();
+  assert.equal(button.hidden,false);
+  doc.fullscreenElement=null;
+  loc.pathname='/favorites';ctx.syncMultiviewFullscreenButton();
+  assert.equal(button.hidden,true);
+  assert.equal(buttons.length,1,'button is installed once');
+  ctx.installMultiviewFullscreenButton();
+  assert.equal(buttons.length,1);
+});
+test('desktop and unsupported browser retain native chrome without fake fullscreen',()=>{
+  const buttons=[],messages=[],doc={fullscreenElement:null,
+    documentElement:{},body:{appendChild(b){b.isConnected=true;buttons.push(b);}},
+    createElement:()=>({handlers:{},addEventListener(n,fn){this.handlers[n]=fn;},
+      setAttribute(){}}),
+    addEventListener(){},exitFullscreen(){}
+  };
+  const ctx=vm.createContext({document:doc,window:{addEventListener(){},matchMedia:()=>({matches:false})},
+    navigator:{userAgent:'Mozilla/5.0 (Windows NT 10.0)'},location:{pathname:'/multiview/'},
+    innerWidth:1100,innerHeight:500,alert:msg=>messages.push(msg),console:{warn(){}}});
+  vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
+  ctx.installMultiviewFullscreenButton();
+  assert.equal(buttons[0].hidden,true);
+  ctx.toggleMultiviewFullscreen();
+  assert.equal(messages.length,1);
+  assert.match(messages[0],/不支持网页全屏/);
+  assert.match(source,/root.requestFullscreen\(\{navigationUI:'hide'\}\)/);
+  assert.match(source,/#hmtc-multiview-fullscreen\[hidden\]\{display:none!important\}/);
+  assert.match(source,/data-action="landscapeFullscreen"/);
+});
+
 test('actual zone handlers pass idle right-click and desktop mouse through, retaining touch tap/hold',()=>{
   const zones=[];let opened=0,allowed=true;
   const frame={querySelector:()=>null,appendChild:z=>zones.push(z),getBoundingClientRect:()=>({height:300})};
