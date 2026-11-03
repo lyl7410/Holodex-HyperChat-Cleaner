@@ -107,6 +107,9 @@ test('Android landscape full-screen button enters and exits with a direct user g
   // Portrait must hide entry but fullscreen always retains an exit control.
   ctx.innerWidth=450;ctx.innerHeight=1000;ctx.syncMultiviewFullscreenButton();
   assert.equal(button.hidden,true);
+  ctx.toggleMultiviewFullscreen();
+  assert.match(alerts[0],/先把手机旋转到横屏/);
+  assert.equal(doc.fullscreenElement,null);
   doc.fullscreenElement=root;ctx.syncMultiviewFullscreenButton();
   assert.equal(button.hidden,false);
   doc.fullscreenElement=null;
