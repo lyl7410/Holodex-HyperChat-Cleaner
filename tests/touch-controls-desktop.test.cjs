@@ -129,6 +129,12 @@ test('desktop and unsupported browser retain native chrome without fake fullscre
   vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
   ctx.installMultiviewFullscreenButton();
   assert.equal(buttons[0].hidden,true);
+  // Touch laptops (coarse + fine pointers) should not get the mobile badge.
+  ctx.window.matchMedia=q=>({matches:q==='(pointer:coarse)'||q==='(any-pointer:fine)'});
+  assert.equal(ctx.isMobileFullscreenDevice(),false);
+  // Mobile browsers that hide their mobile UA in desktop-site mode remain eligible.
+  ctx.window.matchMedia=q=>({matches:q==='(pointer:coarse)'});
+  assert.equal(ctx.isMobileFullscreenDevice(),true);
   ctx.toggleMultiviewFullscreen();
   assert.equal(messages.length,1);
   assert.match(messages[0],/不支持网页全屏/);
