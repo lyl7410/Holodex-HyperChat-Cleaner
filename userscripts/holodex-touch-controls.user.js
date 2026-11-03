@@ -2331,8 +2331,10 @@
   // USER-initiated Fullscreen API call can request hiding them.
   const isMobileFullscreenDevice=()=>{
     const ua=navigator.userAgent||'';
-    return /Android|iPhone|iPad|iPod/i.test(ua)||
-      !!window.matchMedia?.('(any-pointer:coarse)')?.matches;
+    const touchOnly=!!window.matchMedia?.('(pointer:coarse)')?.matches&&
+      !window.matchMedia?.('(any-pointer:fine)')?.matches;
+    // A touch-enabled laptop with a normal mouse should stay desktop-like.
+    return /Android|iPhone|iPad|iPod/i.test(ua)||touchOnly;
   };
   let multiviewFullscreenButton=null;
   function syncMultiviewFullscreenButton(){
