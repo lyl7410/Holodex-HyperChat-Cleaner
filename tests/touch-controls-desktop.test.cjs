@@ -65,7 +65,7 @@ test('PC initialization registers statistics; selection opens the correct video 
   ctx.rowMap.clear();select();assert.equal(opened.length,2);
   policyChange();assert.equal(removed,1);assert.equal(ctx.backdrop.hidden,true);
 });
-test('mobile portrait and landscape can both enter and exit real fullscreen',()=>{
+test('mobile portrait and landscape can both enter and exit real fullscreen',async()=>{
   const listeners=new Map(),buttons=[],alerts=[],saved=new Map();
   const add=(key,fn)=>listeners.set(key,fn);
   const root={requestFullscreen(opts){
@@ -94,15 +94,15 @@ test('mobile portrait and landscape can both enter and exit real fullscreen',()=
   assert.equal(button.hidden,false);
   assert.equal(button.style.left,'94.00%');
   assert.equal(button.style.top,'56.00%');
-  button.handlers.click();
+  button.handlers.click();await Promise.resolve();
   assert.equal(doc.fullscreenElement,root);
   assert.equal(button.textContent,'⤢');
-  button.handlers.click();assert.equal(doc.fullscreenElement,null);
+  button.handlers.click();await Promise.resolve();assert.equal(doc.fullscreenElement,null);
   // In v0.6.42 portrait was blocked. v0.6.43 must allow it.
   ctx.innerWidth=450;ctx.innerHeight=1000;ctx.syncMultiviewFullscreenButton();
   assert.equal(button.hidden,false);
-  button.handlers.click();assert.equal(doc.fullscreenElement,root);
-  button.handlers.click();assert.equal(doc.fullscreenElement,null);
+  button.handlers.click();await Promise.resolve();assert.equal(doc.fullscreenElement,root);
+  button.handlers.click();await Promise.resolve();assert.equal(doc.fullscreenElement,null);
   assert.equal(alerts.length,0);
   loc.pathname='/favorites';ctx.syncMultiviewFullscreenButton();
   assert.equal(button.hidden,true);
@@ -137,7 +137,7 @@ test('fullscreen float can be dragged and its position persists',()=>{
   assert.equal(button.style.left,'94.00%');
   assert.equal(button.style.top,'56.00%');
 });
-test('optional landscape auto fullscreen waits for gesture and respects explicit exit',()=>{
+test('optional landscape auto fullscreen waits for gesture and respects explicit exit',async()=>{
   const events=new Map(),saved=new Map(),root={requestFullscreen(){
     doc.fullscreenElement=root;events.get('fullscreenchange')?.();return Promise.resolve();
   }},doc={documentElement:root,fullscreenElement:null,
@@ -160,7 +160,7 @@ test('optional landscape auto fullscreen waits for gesture and respects explicit
   // Rotation alone is not guaranteed a user gesture.
   assert.equal(doc.fullscreenElement,null);
   const touch={type:'pointerup',pointerType:'touch',target:{closest:()=>null}};
-  events.get('pointerup')(touch);
+  events.get('pointerup')(touch);await Promise.resolve();
   assert.equal(doc.fullscreenElement,root);
   ctx.toggleMultiviewFullscreen();
   assert.equal(doc.fullscreenElement,null);
@@ -168,7 +168,7 @@ test('optional landscape auto fullscreen waits for gesture and respects explicit
   assert.equal(doc.fullscreenElement,null,'manual exit must not immediately undo itself');
   ctx.innerWidth=450;ctx.innerHeight=1000;ctx.reconcileLandscapeFullscreen();
   ctx.innerWidth=1000;ctx.innerHeight=500;ctx.reconcileLandscapeFullscreen();
-  events.get('pointerup')(touch);
+  events.get('pointerup')(touch);await Promise.resolve();
   assert.equal(doc.fullscreenElement,root,'new rotation re-arms the auto feature');
   assert.equal(ctx.fullscreenAutoEnabled(),true);
   ctx.setLandscapeAutoFullscreen(false,false);
