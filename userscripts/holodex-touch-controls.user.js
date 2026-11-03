@@ -2359,6 +2359,10 @@
       return;
     }
     if(document.fullscreenElement)return;
+    if(!isMobileFullscreenDevice()||innerWidth<=innerHeight){
+      alert('请先把手机旋转到横屏，再使用 Holodex 全屏按钮。');
+      return;
+    }
     if(typeof root.requestFullscreen!=='function'){
       alert('当前浏览器不支持网页全屏，请在 Vivaldi 设置中关闭「滚动时始终显示工具栏」。');
       return;
@@ -4116,7 +4120,9 @@
       setHudPosition(e.target.value);
     });
     settings.querySelector('[data-control="hudSize"]').addEventListener('input',e=>setHudSize(e.target.value));
-    settings.querySelector('[data-action="landscapeFullscreen"]').addEventListener('click',()=>{
+    const fullscreenSettingsButton=settings.querySelector('[data-action="landscapeFullscreen"]');
+    fullscreenSettingsButton.hidden=!isMobileFullscreenDevice();
+    fullscreenSettingsButton.addEventListener('click',()=>{
       closeSettings();toggleMultiviewFullscreen();
     });
     settings.querySelector('[data-control="statsMode"]').addEventListener('change',e=>{
