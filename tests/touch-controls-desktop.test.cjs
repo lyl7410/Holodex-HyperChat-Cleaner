@@ -65,87 +65,140 @@ test('PC initialization registers statistics; selection opens the correct video 
   ctx.rowMap.clear();select();assert.equal(opened.length,2);
   policyChange();assert.equal(removed,1);assert.equal(ctx.backdrop.hidden,true);
 });
-test('Android landscape full-screen button enters and exits with a direct user gesture',async()=>{
-  const registered=new Map(),buttons=[],alerts=[];
-  const add=(key,fn)=>registered.set(key,fn);
-  const root={requestFullscreen(options){
-    assert.equal(options.navigationUI,'hide');
-    doc.fullscreenElement=root;
-    registered.get('doc:fullscreenchange')?.();
+test('mobile portrait and landscape can both enter and exit real fullscreen',()=>{
+  const listeners=new Map(),buttons=[],alerts=[],saved=new Map();
+  const add=(key,fn)=>listeners.set(key,fn);
+  const root={requestFullscreen(opts){
+    assert.equal(opts.navigationUI,'hide');
+    doc.fullscreenElement=root;listeners.get('doc:fullscreenchange')?.();
     return Promise.resolve();
   }};
   const doc={documentElement:root,fullscreenElement:null,
     body:{appendChild(button){buttons.push(button);button.isConnected=true;}},
-    createElement:tag=>({tagName:tag.toUpperCase(),hidden:false,attrs:{},handlers:{},
-      addEventListener(name,fn){this.handlers[name]=fn;},
-      setAttribute(name,value){this.attrs[name]=value;}}),
-    exitFullscreen(){doc.fullscreenElement=null;registered.get('doc:fullscreenchange')?.();return Promise.resolve();},
+    createElement:tag=>({tagName:tag.toUpperCase(),style:{},hidden:false,attrs:{},handlers:{},
+      addEventListener(n,fn){this.handlers[n]=fn;},
+      setAttribute(n,v){this.attrs[n]=v;}}),
+    exitFullscreen(){doc.fullscreenElement=null;listeners.get('doc:fullscreenchange')?.();return Promise.resolve();},
     addEventListener:(name,fn)=>add('doc:'+name,fn)
   };
   const loc={pathname:'/multiview/'},ctx=vm.createContext({
-    document:doc,window:{addEventListener:(name,fn)=>add('window:'+name,fn),
-      matchMedia:()=>({matches:false})},
-    navigator:{userAgent:'Mozilla/5.0 (Linux; Android 17)'},
-    location:loc,innerWidth:1000,innerHeight:450,alert:msg=>alerts.push(msg),
-    console:{warn(){}}
+    document:doc,window:{addEventListener:(name,fn)=>add('window:'+name,fn),matchMedia:()=>({matches:false})},
+    navigator:{userAgent:'Mozilla/5.0 (Linux; Android 17)'},location:loc,Date,
+    get:(k,d)=>saved.has(k)?saved.get(k):d,set:(k,v)=>saved.set(k,v),
+    innerWidth:1000,innerHeight:450,alert:msg=>alerts.push(msg),console:{warn(){}}
   });
   vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
   ctx.installMultiviewFullscreenButton();
   const button=buttons[0];
   assert.equal(button.id,'hmtc-multiview-fullscreen');
   assert.equal(button.hidden,false);
-  assert.equal(button.textContent,'⛶');
+  assert.equal(button.style.left,'94.00%');
+  assert.equal(button.style.top,'56.00%');
   button.handlers.click();
   assert.equal(doc.fullscreenElement,root);
   assert.equal(button.textContent,'⤢');
-  assert.equal(button.attrs['aria-pressed'],'true');
-  button.handlers.click();
-  assert.equal(doc.fullscreenElement,null);
-  assert.equal(button.textContent,'⛶');
-  assert.equal(button.attrs['aria-pressed'],'false');
-  assert.equal(alerts.length,0);
-  // Portrait must hide entry but fullscreen always retains an exit control.
+  button.handlers.click();assert.equal(doc.fullscreenElement,null);
+  // In v0.6.42 portrait was blocked. v0.6.43 must allow it.
   ctx.innerWidth=450;ctx.innerHeight=1000;ctx.syncMultiviewFullscreenButton();
-  assert.equal(button.hidden,true);
-  ctx.toggleMultiviewFullscreen();
-  assert.match(alerts[0],/先把手机旋转到横屏/);
-  assert.equal(doc.fullscreenElement,null);
-  doc.fullscreenElement=root;ctx.syncMultiviewFullscreenButton();
   assert.equal(button.hidden,false);
-  doc.fullscreenElement=null;
+  button.handlers.click();assert.equal(doc.fullscreenElement,root);
+  button.handlers.click();assert.equal(doc.fullscreenElement,null);
+  assert.equal(alerts.length,0);
   loc.pathname='/favorites';ctx.syncMultiviewFullscreenButton();
   assert.equal(button.hidden,true);
-  assert.equal(buttons.length,1,'button is installed once');
   ctx.installMultiviewFullscreenButton();
-  assert.equal(buttons.length,1);
+  assert.equal(buttons.length,1,'button installed once');
 });
-test('desktop and unsupported browser retain native chrome without fake fullscreen',()=>{
-  const buttons=[],messages=[],doc={fullscreenElement:null,
+test('fullscreen float can be dragged and its position persists',()=>{
+  const saved=new Map(),buttons=[];
+  const doc={documentElement:{requestFullscreen:()=>Promise.resolve()},fullscreenElement:null,
+    body:{appendChild(button){button.isConnected=true;buttons.push(button);}},
+    createElement:()=>({style:{},handlers:{},setAttribute(){},
+      addEventListener(n,fn){this.handlers[n]=fn;},setPointerCapture(){}}),
+    addEventListener(){}};
+  const ctx=vm.createContext({document:doc,window:{matchMedia:()=>({matches:false}),addEventListener(){}},
+    navigator:{userAgent:'Android'},location:{pathname:'/multiview/'},
+    get:(k,d)=>saved.has(k)?saved.get(k):d,set:(k,v)=>saved.set(k,v),
+    innerWidth:1000,innerHeight:500,Date,console:{warn(){}},alert(){}});
+  vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
+  ctx.installMultiviewFullscreenButton();
+  const button=buttons[0];
+  const down={button:0,pointerId:1,clientX:940,clientY:280};
+  button.handlers.pointerdown(down);
+  button.handlers.pointermove({pointerId:1,clientX:710,clientY:310,preventDefault(){}});
+  button.handlers.pointerup({pointerId:1,clientX:710,clientY:310});
+  assert.equal(button.style.left,'71.00%');
+  assert.equal(button.style.top,'62.00%');
+  assert.ok(saved.has('hmtc_fullscreen_button_position_v1'));
+  // A click generated by a drag must never toggle fullscreen.
+  button.handlers.click();
+  assert.equal(doc.fullscreenElement,null);
+  ctx.resetMultiviewFullscreenButton();
+  assert.equal(button.style.left,'94.00%');
+  assert.equal(button.style.top,'56.00%');
+});
+test('optional landscape auto fullscreen waits for gesture and respects explicit exit',()=>{
+  const events=new Map(),saved=new Map(),root={requestFullscreen(){
+    doc.fullscreenElement=root;events.get('fullscreenchange')?.();return Promise.resolve();
+  }},doc={documentElement:root,fullscreenElement:null,
+    body:{appendChild(b){b.isConnected=true;}},
+    createElement:()=>({style:{},handlers:{},setAttribute(){},
+      addEventListener(n,fn){this.handlers[n]=fn;}}),
+    exitFullscreen(){doc.fullscreenElement=null;events.get('fullscreenchange')?.();return Promise.resolve();},
+    addEventListener:(n,fn)=>events.set(n,fn)};
+  const ctx=vm.createContext({document:doc,window:{matchMedia:()=>({matches:false}),addEventListener(){}},
+    navigator:{userAgent:'Android',userActivation:{isActive:false}},
+    location:{pathname:'/multiview/'},innerWidth:450,innerHeight:1000,
+    get:(k,d)=>saved.has(k)?saved.get(k):d,set:(k,v)=>saved.set(k,v),
+    Date,console:{warn(){}},alert(){}});
+  vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
+  ctx.installMultiviewFullscreenButton();
+  assert.equal(ctx.setLandscapeAutoFullscreen(true,false),true);
+  assert.equal(doc.fullscreenElement,null);
+  ctx.innerWidth=1000;ctx.innerHeight=500;
+  ctx.reconcileLandscapeFullscreen();
+  // Rotation alone is not guaranteed a user gesture.
+  assert.equal(doc.fullscreenElement,null);
+  const touch={type:'pointerup',pointerType:'touch',target:{closest:()=>null}};
+  events.get('pointerup')(touch);
+  assert.equal(doc.fullscreenElement,root);
+  ctx.toggleMultiviewFullscreen();
+  assert.equal(doc.fullscreenElement,null);
+  events.get('pointerup')(touch);
+  assert.equal(doc.fullscreenElement,null,'manual exit must not immediately undo itself');
+  ctx.innerWidth=450;ctx.innerHeight=1000;ctx.reconcileLandscapeFullscreen();
+  ctx.innerWidth=1000;ctx.innerHeight=500;ctx.reconcileLandscapeFullscreen();
+  events.get('pointerup')(touch);
+  assert.equal(doc.fullscreenElement,root,'new rotation re-arms the auto feature');
+  assert.equal(ctx.fullscreenAutoEnabled(),true);
+  ctx.setLandscapeAutoFullscreen(false,false);
+  assert.equal(ctx.fullscreenAutoEnabled(),false);
+});
+test('desktop/hybrid pointer is excluded and missing Fullscreen API is handled',()=>{
+  const buttons=[],messages=[],saved=new Map(),doc={fullscreenElement:null,
     documentElement:{},body:{appendChild(b){b.isConnected=true;buttons.push(b);}},
-    createElement:()=>({handlers:{},addEventListener(n,fn){this.handlers[n]=fn;},
+    createElement:()=>({style:{},handlers:{},addEventListener(n,fn){this.handlers[n]=fn;},
       setAttribute(){}}),
     addEventListener(){},exitFullscreen(){}
   };
   const ctx=vm.createContext({document:doc,window:{addEventListener(){},matchMedia:()=>({matches:false})},
     navigator:{userAgent:'Mozilla/5.0 (Windows NT 10.0)'},location:{pathname:'/multiview/'},
+    get:(k,d)=>saved.has(k)?saved.get(k):d,set:(k,v)=>saved.set(k,v),Date,
     innerWidth:1100,innerHeight:500,alert:msg=>messages.push(msg),console:{warn(){}}});
   vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
   ctx.installMultiviewFullscreenButton();
   assert.equal(buttons[0].hidden,true);
-  // Touch laptops (coarse + fine pointers) should not get the mobile badge.
   ctx.window.matchMedia=q=>({matches:q==='(pointer:coarse)'||q==='(any-pointer:fine)'});
   assert.equal(ctx.isMobileFullscreenDevice(),false);
-  // Mobile browsers that hide their mobile UA in desktop-site mode remain eligible.
   ctx.window.matchMedia=q=>({matches:q==='(pointer:coarse)'});
   assert.equal(ctx.isMobileFullscreenDevice(),true);
   ctx.toggleMultiviewFullscreen();
-  assert.equal(messages.length,1);
-  assert.match(messages[0],/不支持网页全屏/);
+  assert.match(messages[0],/浏览器不支持网页全屏/);
   assert.match(source,/root.requestFullscreen\(\{navigationUI:'hide'\}\)/);
-  assert.match(source,/#hmtc-multiview-fullscreen\[hidden\]\{display:none!important\}/);
-  assert.match(source,/data-action="landscapeFullscreen"/);
+  assert.match(source,/data-control="fullscreenAuto"/);
+  assert.match(source,/data-action="resetFullscreenPosition"/);
+  assert.match(source,/width:48px!important;height:48px!important/);
 });
-
 test('actual zone handlers pass idle right-click and desktop mouse through, retaining touch tap/hold',()=>{
   const zones=[];let opened=0,allowed=true;
   const frame={querySelector:()=>null,appendChild:z=>zones.push(z),getBoundingClientRect:()=>({height:300})};
