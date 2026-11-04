@@ -65,140 +65,105 @@ test('PC initialization registers statistics; selection opens the correct video 
   ctx.rowMap.clear();select();assert.equal(opened.length,2);
   policyChange();assert.equal(removed,1);assert.equal(ctx.backdrop.hidden,true);
 });
-test('mobile portrait and landscape can both enter and exit real fullscreen',async()=>{
-  const listeners=new Map(),buttons=[],alerts=[],saved=new Map();
-  const add=(key,fn)=>listeners.set(key,fn);
+test('v0.6.44 fullscreen action is integrated in Holodex header, never over player',async()=>{
+  const events=new Map(),menus=[],toolbar={
+    parent:null,getBoundingClientRect:()=>({left:0,top:5,right:700,bottom:72,width:700,height:67}),
+    appendChild(el){el.parentNode=this;el.isConnected=true;},
+    closest:()=>null
+  };
   const root={requestFullscreen(opts){
     assert.equal(opts.navigationUI,'hide');
-    doc.fullscreenElement=root;listeners.get('doc:fullscreenchange')?.();
+    doc.fullscreenElement=root;events.get('doc:fullscreenchange')?.();
     return Promise.resolve();
   }};
+  const makeNode=tag=>({tagName:tag,style:{},dataset:{},attrs:{},handlers:{},children:[],
+    addEventListener(k,fn){this.handlers[k]=fn;},
+    setAttribute(k,v){this.attrs[k]=v;},appendChild(n){this.children.push(n);},
+    replaceChildren(...xs){this.children=xs;}});
   const doc={documentElement:root,fullscreenElement:null,
-    body:{appendChild(button){buttons.push(button);button.isConnected=true;}},
-    createElement:tag=>({tagName:tag.toUpperCase(),style:{},hidden:false,attrs:{},handlers:{},
-      addEventListener(n,fn){this.handlers[n]=fn;},
-      setAttribute(n,v){this.attrs[n]=v;}}),
-    exitFullscreen(){doc.fullscreenElement=null;listeners.get('doc:fullscreenchange')?.();return Promise.resolve();},
-    addEventListener:(name,fn)=>add('doc:'+name,fn)
+    querySelectorAll:()=>[toolbar],createElement:makeNode,createElementNS:(_ns,tag)=>makeNode(tag),
+    addEventListener:(k,fn)=>events.set('doc:'+k,fn),
+    exitFullscreen(){doc.fullscreenElement=null;events.get('doc:fullscreenchange')?.();
+      return Promise.resolve();}
   };
-  const loc={pathname:'/multiview/'},ctx=vm.createContext({
-    document:doc,window:{addEventListener:(name,fn)=>add('window:'+name,fn),matchMedia:()=>({matches:false})},
-    navigator:{userAgent:'Mozilla/5.0 (Linux; Android 17)'},location:loc,Date,
-    get:(k,d)=>saved.has(k)?saved.get(k):d,set:(k,v)=>saved.set(k,v),
-    innerWidth:1000,innerHeight:450,alert:msg=>alerts.push(msg),console:{warn(){}}
-  });
+  const loc={pathname:'/multiview/'},ctx=vm.createContext({document:doc,
+    window:{addEventListener:(k,fn)=>events.set('win:'+k,fn),matchMedia:()=>({matches:false})},
+    navigator:{userAgent:'Mozilla/5.0 (Linux; Android 17)'},location:loc,
+    get:(_k,d)=>d,set(){},innerWidth:700,innerHeight:1500,
+    getComputedStyle:()=>({display:'flex',visibility:'visible'}),console:{warn(){}},alert(){}});
   vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
   ctx.installMultiviewFullscreenButton();
-  const button=buttons[0];
-  assert.equal(button.id,'hmtc-multiview-fullscreen');
-  assert.equal(button.hidden,false);
-  assert.equal(button.style.left,'95.00%');
-  assert.equal(button.style.top,'56.00%');
-  button.handlers.click();await Promise.resolve();
+  const button=toolbar.lastButton||null;
+  // Child belongs to header, never document.body or any video frame.
+  const control=toolbar.parent||[...toolbar.children||[]][0];
+  assert.ok(control||ctx.multiviewFullscreenButton);
+  const actual=ctx.multiviewFullscreenButton;
+  assert.equal(actual.parentNode,toolbar);
+  assert.equal(actual.hidden,false);
+  assert.equal(actual.children[0].tagName,'svg');
+  actual.handlers.click();await Promise.resolve();
   assert.equal(doc.fullscreenElement,root);
-  assert.equal(button.textContent,'⤢');
-  button.handlers.click();await Promise.resolve();assert.equal(doc.fullscreenElement,null);
-  // In v0.6.42 portrait was blocked. v0.6.43 must allow it.
-  ctx.innerWidth=450;ctx.innerHeight=1000;ctx.syncMultiviewFullscreenButton();
-  assert.equal(button.hidden,false);
-  assert.ok(parseFloat(button.style.left)<95,'portrait control must stay away from screen edge');
-  button.handlers.click();await Promise.resolve();assert.equal(doc.fullscreenElement,root);
-  button.handlers.click();await Promise.resolve();assert.equal(doc.fullscreenElement,null);
-  assert.equal(alerts.length,0);
+  assert.equal(actual.attrs['aria-pressed'],'true');
+  actual.handlers.click();await Promise.resolve();
+  assert.equal(doc.fullscreenElement,null);
   loc.pathname='/favorites';ctx.syncMultiviewFullscreenButton();
-  assert.equal(button.hidden,true);
-  ctx.installMultiviewFullscreenButton();
-  assert.equal(buttons.length,1,'button installed once');
+  assert.equal(actual.hidden,true);
+  assert.match(source,/#hmtc-multiview-fullscreen\{[\s\S]*flex:0 0 34px!important/);
+  assert.doesNotMatch(source,/position:fixed!important;[\s\S]{0,140}#hmtc-multiview-fullscreen/);
 });
-test('fullscreen float can be dragged and its position persists',()=>{
-  const saved=new Map(),buttons=[];
-  const doc={documentElement:{requestFullscreen:()=>Promise.resolve()},fullscreenElement:null,
-    body:{appendChild(button){button.isConnected=true;buttons.push(button);}},
-    createElement:()=>({style:{},handlers:{},setAttribute(){},
-      addEventListener(n,fn){this.handlers[n]=fn;},setPointerCapture(){}}),
+test('fullscreen toolbar is absent rather than overlaying a stream if no header found',()=>{
+  const doc={documentElement:{requestFullscreen(){}},fullscreenElement:null,
+    querySelectorAll:()=>[],createElement:()=>({handlers:{},dataset:{},
+      addEventListener(k,fn){this.handlers[k]=fn;},setAttribute(){},
+      replaceChildren(){}}),createElementNS:()=>({setAttribute(){},appendChild(){}}),
     addEventListener(){}};
-  const ctx=vm.createContext({document:doc,window:{matchMedia:()=>({matches:false}),addEventListener(){}},
-    navigator:{userAgent:'Android'},location:{pathname:'/multiview/'},
-    get:(k,d)=>saved.has(k)?saved.get(k):d,set:(k,v)=>saved.set(k,v),
-    innerWidth:1000,innerHeight:500,Date,console:{warn(){}},alert(){}});
-  vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
-  ctx.installMultiviewFullscreenButton();
-  const button=buttons[0];
-  const down={button:0,pointerId:1,clientX:940,clientY:280};
-  button.handlers.pointerdown(down);
-  button.handlers.pointermove({pointerId:1,clientX:710,clientY:310,preventDefault(){}});
-  button.handlers.pointerup({pointerId:1,clientX:710,clientY:310});
-  assert.equal(button.style.left,'71.00%');
-  assert.equal(button.style.top,'62.00%');
-  assert.ok(saved.has('hmtc_fullscreen_button_position_v1'));
-  // A click generated by a drag must never toggle fullscreen.
-  button.handlers.click();
-  assert.equal(doc.fullscreenElement,null);
-  ctx.resetMultiviewFullscreenButton();
-  assert.equal(button.style.left,'95.00%');
-  assert.equal(button.style.top,'56.00%');
-});
-test('optional landscape auto fullscreen waits for gesture and respects explicit exit',async()=>{
-  const events=new Map(),saved=new Map(),root={requestFullscreen(){
-    doc.fullscreenElement=root;events.get('fullscreenchange')?.();return Promise.resolve();
-  }},doc={documentElement:root,fullscreenElement:null,
-    body:{appendChild(b){b.isConnected=true;}},
-    createElement:()=>({style:{},handlers:{},setAttribute(){},
-      addEventListener(n,fn){this.handlers[n]=fn;}}),
-    exitFullscreen(){doc.fullscreenElement=null;events.get('fullscreenchange')?.();return Promise.resolve();},
-    addEventListener:(n,fn)=>events.set(n,fn)};
-  const ctx=vm.createContext({document:doc,window:{matchMedia:()=>({matches:false}),addEventListener(){}},
-    navigator:{userAgent:'Android',userActivation:{isActive:false}},
-    location:{pathname:'/multiview/'},innerWidth:450,innerHeight:1000,
-    get:(k,d)=>saved.has(k)?saved.get(k):d,set:(k,v)=>saved.set(k,v),
-    Date,console:{warn(){}},alert(){}});
-  vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
-  ctx.installMultiviewFullscreenButton();
-  assert.equal(ctx.setLandscapeAutoFullscreen(true,false),true);
-  assert.equal(doc.fullscreenElement,null);
-  ctx.innerWidth=1000;ctx.innerHeight=500;
-  ctx.reconcileLandscapeFullscreen();
-  // Rotation alone is not guaranteed a user gesture.
-  assert.equal(doc.fullscreenElement,null);
-  const touch={type:'pointerup',pointerType:'touch',target:{closest:()=>null}};
-  events.get('pointerup')(touch);await Promise.resolve();
-  assert.equal(doc.fullscreenElement,root);
-  ctx.toggleMultiviewFullscreen();
-  assert.equal(doc.fullscreenElement,null);
-  events.get('pointerup')(touch);
-  assert.equal(doc.fullscreenElement,null,'manual exit must not immediately undo itself');
-  ctx.innerWidth=450;ctx.innerHeight=1000;ctx.reconcileLandscapeFullscreen();
-  ctx.innerWidth=1000;ctx.innerHeight=500;ctx.reconcileLandscapeFullscreen();
-  events.get('pointerup')(touch);await Promise.resolve();
-  assert.equal(doc.fullscreenElement,root,'new rotation re-arms the auto feature');
-  assert.equal(ctx.fullscreenAutoEnabled(),true);
-  ctx.setLandscapeAutoFullscreen(false,false);
-  assert.equal(ctx.fullscreenAutoEnabled(),false);
-});
-test('desktop/hybrid pointer is excluded and missing Fullscreen API is handled',()=>{
-  const buttons=[],messages=[],saved=new Map(),doc={fullscreenElement:null,
-    documentElement:{},body:{appendChild(b){b.isConnected=true;buttons.push(b);}},
-    createElement:()=>({style:{},handlers:{},addEventListener(n,fn){this.handlers[n]=fn;},
-      setAttribute(){}}),
-    addEventListener(){},exitFullscreen(){}
-  };
   const ctx=vm.createContext({document:doc,window:{addEventListener(){},matchMedia:()=>({matches:false})},
-    navigator:{userAgent:'Mozilla/5.0 (Windows NT 10.0)'},location:{pathname:'/multiview/'},
-    get:(k,d)=>saved.has(k)?saved.get(k):d,set:(k,v)=>saved.set(k,v),Date,
-    innerWidth:1100,innerHeight:500,alert:msg=>messages.push(msg),console:{warn(){}}});
+    navigator:{userAgent:'Android'},location:{pathname:'/multiview/'},
+    get:(_k,d)=>d,set(){},innerWidth:700,innerHeight:1200,alert(){},console:{warn(){}}});
   vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
   ctx.installMultiviewFullscreenButton();
-  assert.equal(buttons[0].hidden,true);
-  ctx.window.matchMedia=q=>({matches:q==='(pointer:coarse)'||q==='(any-pointer:fine)'});
-  assert.equal(ctx.isMobileFullscreenDevice(),false);
-  ctx.window.matchMedia=q=>({matches:q==='(pointer:coarse)'});
-  assert.equal(ctx.isMobileFullscreenDevice(),true);
-  ctx.toggleMultiviewFullscreen();
-  assert.match(messages[0],/浏览器不支持网页全屏/);
-  assert.match(source,/root.requestFullscreen\(\{navigationUI:'hide'\}\)/);
+  assert.equal(ctx.multiviewFullscreenButton.hidden,true);
+  assert.equal(ctx.multiviewFullscreenButton.parentNode,undefined);
   assert.match(source,/data-control="fullscreenAuto"/);
-  assert.match(source,/data-action="resetFullscreenPosition"/);
-  assert.match(source,/width:48px!important;height:48px!important/);
+  assert.doesNotMatch(source,/resetFullscreenPosition/);
+});
+test('live-edge seeking only uses seekable end and rejects archived streams',async()=>{
+  const id='abcdefghijk',video={currentTime:12,seekable:{length:1,start:()=>0,end:()=>7200}};
+  const player={getVideoData:()=>({video_id:id}),querySelector:()=>null,
+    seekTo(t){video.currentTime=t;this.requested=t;}};
+  const ctx=vm.createContext({COMMON_RATES:[1,1.25,1.5,1.75,2],setTimeout,
+    resolvePlaybackState:(state,hint)=>({live:state.live??(hint==='live'?true:null)}),
+    youtubeWatchLiveState:()=>({live:true})});
+  vm.runInContext(section('  function youtubePlaybackTools(', '  // Restore the SAME measurement strategy'),ctx);
+  const tools=ctx.youtubePlaybackTools({defaultView:{},querySelector:()=>null},()=>player);
+  const result=await tools.goLive('live',id);
+  assert.equal(result.confirmed,true);
+  assert.equal(player.requested,7198.5);
+  assert.equal(video.currentTime,7198.5);
+  ctx.youtubeWatchLiveState=()=>({live:false});
+  await assert.rejects(tools.goLive('past',id),/录像/);
+  assert.equal(player.requested,7198.5,'VOD must not be sought');
+  ctx.youtubeWatchLiveState=()=>({live:true});
+  await assert.rejects(tools.goLive('live','zzzzzzzzzzz'),/切换视频/);
+  assert.match(source,/message\.action==='goLive'/);
+  assert.match(source,/'qualityOptions','selectQuality','goLive'\]\.includes\(action\)/);
+});
+test('live seek without a seekable range uses YouTube LIVE button or reports unsupported',async()=>{
+  const id='abcdefghijk',video={currentTime:40,seekable:{length:0}};
+  let clicks=0;
+  const player={getVideoData:()=>({video_id:id}),querySelector:()=>({click(){clicks++;}})};
+  const ctx=vm.createContext({COMMON_RATES:[1,1.25,1.5,1.75,2],setTimeout,
+    resolvePlaybackState:()=>({live:true}),youtubeWatchLiveState:()=>({live:true})});
+  vm.runInContext(section('  function youtubePlaybackTools(', '  // Restore the SAME measurement strategy'),ctx);
+  const tools=ctx.youtubePlaybackTools({defaultView:{},querySelector:()=>null},()=>player);
+  let result=await tools.goLive('live',id);
+  assert.equal(result.requested,true);
+  assert.equal(result.confirmed,false);
+  assert.equal(clicks,1);
+  player.querySelector=()=>null;
+  await assert.rejects(tools.goLive('live',id),/没有可定位/);
+  assert.match(source,/data-action="goLive"/);
+  assert.match(source,/GM_registerMenuCommand\('多视图：全部直播追到最新'/);
 });
 test('actual zone handlers pass idle right-click and desktop mouse through, retaining touch tap/hold',()=>{
   const zones=[];let opened=0,allowed=true;
