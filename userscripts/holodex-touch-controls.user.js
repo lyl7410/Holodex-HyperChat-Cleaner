@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.45
-// @description  停止修改 Holodex 工具栏，修正视频角落误触统计，保留全屏设置与直播追新。
+// @version      0.6.46
+// @description  直播追新改为点击延迟栏内的放大红色「直播」标签，不再额外占据控制面板一行；保留原有校验。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -1228,8 +1228,18 @@
   function renderMediaKind(panel,state){
     const badge=panel?.querySelector('[data-hmtc-media-kind]');
     if(!badge)return;
+    // Holodex reuses its existing red LIVE label as the jump control.
+    // The YouTube watch-panel badge remains a noninteractive span.
     const goLiveButton=panel?.querySelector('[data-action="goLive"]');
-    if(goLiveButton)goLiveButton.hidden=state?.live!==true;
+    if(goLiveButton){
+      const isLive=state?.live===true;
+      goLiveButton.disabled=!isLive||goLiveButton.dataset.pending==='1';
+      const hint=isLive?'直播中，点击追到最新直播进度':
+        state?.live===false?'当前为录像，不能追新':'尚未确认直播状态，不能追新';
+      goLiveButton.title=hint;
+      goLiveButton.setAttribute('aria-label',hint);
+      goLiveButton.setAttribute('aria-disabled',goLiveButton.disabled?'true':'false');
+    }
     badge.textContent=playbackKindLabel(state);
     badge.dataset.kind=state?.live===true?'live':state?.live===false?'vod':'unknown';
     const compact=!!panel._hmtcCompact;
@@ -2349,7 +2359,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.45', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.46', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
   const STATS_MODE_KEY='hmtc_stats_trigger_v1';
@@ -2759,10 +2769,30 @@
 
   GM_addStyle(`
   /* No full-screen overlay: controls remain in settings/menu only. */
-  #hmtc-sheet button.hmtc-go-live{display:block;width:100%;margin:0 0 8px;
-    min-height:35px;border:1px solid #7bc7a66b;border-radius:9px;
-    background:rgba(23,87,69,.65);color:#caffdf;font:700 13px system-ui}
-  #hmtc-sheet button.hmtc-go-live[hidden]{display:none!important}
+  /* LIVE in the existing latency row doubles as the jump-to-live control.
+     A 40px hit target and larger red type, but no extra panel row. */
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump{
+    flex:none;display:inline-flex;align-items:center;justify-content:center;
+    min-height:40px!important;min-width:74px!important;
+    padding:7px 11px!important;margin:0!important;
+    font:800 17px/1.18 system-ui,sans-serif!important;
+    border-radius:10px!important;border:1px solid #ff98986b!important;
+    background:rgba(145,37,48,.23)!important;color:#ffb0b0!important;
+    white-space:nowrap;touch-action:manipulation;
+    -webkit-tap-highlight-color:transparent}
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump[data-kind="live"]::before{
+    font-size:10px;margin-right:5px;color:#ff6565}
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump[data-kind="live"]:active{
+    background:rgba(195,46,64,.48)!important}
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump:focus-visible{
+    outline:2px solid #ffb9b9;outline-offset:2px}
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump:not([data-kind="live"]){
+    border:0!important;background:transparent!important;
+    color:#d4e3ed!important;font-size:13px!important;
+    min-height:30px!important;min-width:0!important;padding:0 4px!important;
+    cursor:default!important}
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump:disabled{
+    cursor:default!important}
   /* Invisible zones occupy twice the v0.3.1 width, and are 78% tall. */
   .hmtc-edge{position:absolute;z-index:45;top:max(64px,20%);bottom:max(54px,18%);height:auto;width:36%;
     min-width:min(46px,46%);max-width:min(112px,46%);background:transparent;
@@ -4028,7 +4058,8 @@
       '<div class="title" data-field="title">YouTube</div>',
       '<button type="button" data-action="close" aria-label="关闭">✕</button></div>',
       '<div class="hmtc-live-status" data-hmtc-latency-metric data-kind="unknown">',
-      '<span class="hmtc-media-kind" data-hmtc-media-kind>待确认</span>',
+      '<button type="button" class="hmtc-media-kind hmtc-live-jump" data-hmtc-media-kind',
+      ' data-action="goLive" aria-label="尚未确认直播状态，不能追新" disabled>待确认</button>',
       '<span data-hmtc-latency-label>视频状态</span><strong data-field="latency" data-hmtc-latency-value>识别中</strong></div>',
       '<div class="net"><div class="sub">连接速度</div>',
       '<div><span class="speed" data-field="speed">—</span><span class="unit">Mbps</span>',
@@ -4040,7 +4071,6 @@
       '<div class="metric"><label>分辨率</label><strong data-field="resolution">—</strong></div>',
       '</div></div>',
       '<div class="hmtc-play-controls">',
-      '<button type="button" data-action="goLive" class="hmtc-go-live" hidden>● 追到最新直播</button>',
       '<div class="hmtc-play-row"><label>播放速度</label></div>',
       '<div class="hmtc-rate-presets" role="group" aria-label="常用播放速度">',
       '<button type="button" data-action="ratePreset" data-rate="1">1×</button>',
@@ -4084,12 +4114,25 @@
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
       if(!row)return;
       if(action==='goLive'){
+        // Clicks must come from the currently confirmed live badge only.
+        // The iframe independently checks real live state and video identity.
+        if(btn.dataset.kind!=='live'||btn.disabled||btn.dataset.pending==='1')return;
+        btn.dataset.pending='1';
         btn.disabled=true;
+        btn.setAttribute('aria-disabled','true');
         try{
           const result=await nativeRequest(row,'goLive',3500);
-          field('note',result.message||'已请求直播追新');stats();
-        }catch(error){field('note','直播追新失败：'+error.message);}
-        finally{btn.disabled=false;}
+          if(active?.layoutId===row.layoutId&&active?.videoId===row.videoId){
+            field('note',result.message||'已请求直播追新');stats();
+          }
+        }catch(error){
+          if(active?.layoutId===row.layoutId&&active?.videoId===row.videoId)
+            field('note','直播追新失败：'+error.message);
+        }finally{
+          delete btn.dataset.pending;
+          btn.disabled=btn.dataset.kind!=='live';
+          btn.setAttribute('aria-disabled',btn.disabled?'true':'false');
+        }
         return;
       }
       if(action==='qualityPreset'){
@@ -4851,8 +4894,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.45 说明',()=>
-      alert('v0.6.45：取消全屏按钮的工具栏注入，避免干扰多视图布局；边缘统计触控区避开顶部播放器按钮。'));
+    GM_registerMenuCommand('Touch Controls v0.6.46 说明',()=>
+      alert('v0.6.46：点击延迟栏内放大的红色「直播」标签即可追最新；不再单独占用控制面板一行。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
