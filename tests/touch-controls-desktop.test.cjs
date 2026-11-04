@@ -65,66 +65,57 @@ test('PC initialization registers statistics; selection opens the correct video 
   ctx.rowMap.clear();select();assert.equal(opened.length,2);
   policyChange();assert.equal(removed,1);assert.equal(ctx.backdrop.hidden,true);
 });
-test('v0.6.44 fullscreen action is integrated in Holodex header, never over player',async()=>{
-  const events=new Map(),menus=[],toolbar={
-    parent:null,getBoundingClientRect:()=>({left:0,top:5,right:700,bottom:72,width:700,height:67}),
-    appendChild(el){el.parentNode=this;el.isConnected=true;this.button=el;},
-    closest:()=>null
+test('v0.6.45 no longer mutates Vue toolbar or covers native video controls',async()=>{
+  const listeners=new Map(),ui={textContent:'',attrs:{},
+    setAttribute(k,v){this.attrs[k]=v;}};
+  let uiLookupCount=0,created=0,appended=0;
+  const doc={
+    documentElement:{requestFullscreen(){
+      doc.fullscreenElement=doc.documentElement;
+      listeners.get('doc:fullscreenchange')?.();return Promise.resolve();
+    }},
+    fullscreenElement:null,
+    querySelector:sel=>{uiLookupCount++;return sel.includes('landscapeFullscreen')?ui:null;},
+    createElement(){created++;throw Error('Unexpected DOM insertion');},
+    body:{appendChild(){appended++;throw Error('Unexpected overlay');}},
+    addEventListener:(name,cb)=>listeners.set('doc:'+name,cb),
+    exitFullscreen(){doc.fullscreenElement=null;listeners.get('doc:fullscreenchange')?.();return Promise.resolve();}
   };
-  const root={requestFullscreen(opts){
-    assert.equal(opts.navigationUI,'hide');
-    doc.fullscreenElement=root;events.get('doc:fullscreenchange')?.();
-    return Promise.resolve();
-  }};
-  const makeNode=tag=>({tagName:tag,style:{},dataset:{},attrs:{},handlers:{},children:[],
-    addEventListener(k,fn){this.handlers[k]=fn;},
-    setAttribute(k,v){this.attrs[k]=v;},appendChild(n){this.children.push(n);},
-    replaceChildren(...xs){this.children=xs;}});
-  const doc={documentElement:root,fullscreenElement:null,
-    querySelectorAll:()=>[toolbar],createElement:makeNode,createElementNS:(_ns,tag)=>makeNode(tag),
-    addEventListener:(k,fn)=>events.set('doc:'+k,fn),
-    exitFullscreen(){doc.fullscreenElement=null;events.get('doc:fullscreenchange')?.();
-      return Promise.resolve();}
-  };
-  const loc={pathname:'/multiview/'},ctx=vm.createContext({document:doc,
-    window:{addEventListener:(k,fn)=>events.set('win:'+k,fn),matchMedia:()=>({matches:false})},
-    navigator:{userAgent:'Mozilla/5.0 (Linux; Android 17)'},location:loc,
-    get:(_k,d)=>d,set(){},innerWidth:700,innerHeight:1500,
-    getComputedStyle:()=>({display:'flex',visibility:'visible'}),console:{warn(){}},alert(){}});
+  const ctx=vm.createContext({document:doc,
+    window:{addEventListener:(name,cb)=>listeners.set('win:'+name,cb),matchMedia:()=>({matches:false})},
+    navigator:{userAgent:'Mozilla/5.0 (Linux; Android 17)'},location:{pathname:'/multiview/'},
+    get:(_key,def)=>def,set(){},innerWidth:713,innerHeight:1536,
+    console:{warn(){}},alert(){}});
   vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
   ctx.installMultiviewFullscreenButton();
-  // Child belongs to header, never document.body or any video frame.
-  const actual=toolbar.button;
-  assert.ok(actual);
-  assert.equal(actual.parentNode,toolbar);
-  assert.equal(actual.hidden,false);
-  assert.equal(actual.children[0].tagName,'svg');
-  actual.handlers.click();await Promise.resolve();
-  assert.equal(doc.fullscreenElement,root);
-  assert.equal(actual.attrs['aria-pressed'],'true');
-  actual.handlers.click();await Promise.resolve();
+  assert.equal(created,0);
+  assert.equal(appended,0);
+  ctx.toggleMultiviewFullscreen();await Promise.resolve();
+  assert.equal(doc.fullscreenElement,doc.documentElement);
+  assert.equal(ui.textContent,'退出网页全屏');
+  ctx.toggleMultiviewFullscreen();await Promise.resolve();
   assert.equal(doc.fullscreenElement,null);
-  loc.pathname='/favorites';ctx.syncMultiviewFullscreenButton();
-  assert.equal(actual.hidden,true);
-  assert.match(source,/#hmtc-multiview-fullscreen\{[\s\S]*flex:0 0 34px!important/);
-  assert.doesNotMatch(source,/position:fixed!important;[\s\S]{0,140}#hmtc-multiview-fullscreen/);
-});
-test('fullscreen toolbar is absent rather than overlaying a stream if no header found',()=>{
-  const doc={documentElement:{requestFullscreen(){}},fullscreenElement:null,
-    querySelectorAll:()=>[],createElement:()=>({handlers:{},dataset:{},
-      addEventListener(k,fn){this.handlers[k]=fn;},setAttribute(){},
-      replaceChildren(){}}),createElementNS:()=>({setAttribute(){},appendChild(){}}),
-    addEventListener(){}};
-  let hiddenButton=null;
-  const ctx=vm.createContext({document:doc,window:{addEventListener(){},matchMedia:()=>({matches:false})},
-    navigator:{userAgent:'Android'},location:{pathname:'/multiview/'},
-    get:(_k,d)=>d,set(){},innerWidth:700,innerHeight:1200,alert(){},console:{warn(){}}});
-  vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
+  assert.equal(ui.textContent,'进入网页全屏');
   ctx.installMultiviewFullscreenButton();
-  assert.equal(vm.runInContext('multiviewFullscreenButton.hidden',ctx),true);
-  assert.equal(vm.runInContext('multiviewFullscreenButton.parentNode',ctx),undefined);
-  assert.match(source,/data-control="fullscreenAuto"/);
-  assert.doesNotMatch(source,/resetFullscreenPosition/);
+  assert.equal(created,0,'repeated init must not mutate page layout');
+  assert.ok(uiLookupCount>0);
+  assert.ok(source.includes("GM_registerMenuCommand('手动进入／退出 Holodex 全屏',toggleMultiviewFullscreen)"));
+  assert.ok(source.includes('data-action="landscapeFullscreen"'));
+  assert.ok(!source.includes('toolbar.appendChild(button)'));
+  assert.ok(!source.includes('function multiviewToolbar()'));
+  assert.ok(!source.includes('#hmtc-multiview-fullscreen{'));
+});
+test('v0.6.45 keeps stats touch zones away from native player top/bottom controls',()=>{
+  assert.match(source, /top:max\(64px,20%\);bottom:max\(54px,18%\);height:auto;width:36%/);
+  // 300px player: the first 64px and last 54px cannot open stats
+  // through the transparent edge zones. This is a CSS-boundary check.
+  const height=300,top=Math.max(64,.2*height),bottom=Math.max(54,.18*height);
+  assert.equal(top,64);
+  assert.equal(bottom,54);
+  assert.ok(30<top&&height-30>height-bottom);
+  assert.match(source,/zone\.addEventListener\('touchend',event=>/);
+  assert.match(source,/function appendStaticPanelMarkup\(root,markup\)/);
+  assert.match(source,/GM_registerMenuCommand\('多视图：全部直播追到最新'/);
 });
 test('live-edge seeking only uses seekable end and rejects archived streams',async()=>{
   const id='abcdefghijk',video={currentTime:12,seekable:{length:1,start:()=>0,end:()=>7200}};
