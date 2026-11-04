@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.44
-// @description  Holodex 全屏入口整合顶部工具栏避免遮挡直播；新增逐路直播追最新及全部直播追新功能。
+// @version      0.6.45
+// @description  停止修改 Holodex 工具栏，修正视频角落误触统计，保留全屏设置与直播追新。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -2349,7 +2349,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.44', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.45', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
   const STATS_MODE_KEY='hmtc_stats_trigger_v1';
@@ -2381,52 +2381,15 @@
   let autoFullscreenPending=isMulti()&&landscapeNow()&&fullscreenAutoEnabled();
   let autoFullscreenSuppressed=false,fullscreenRequestBusy=false,fullscreenWasOurs=false;
   let lastFullscreenLandscape=landscapeNow(),lastFullscreenMulti=isMulti();
-  function multiviewToolbar(){
-    // Prefer Vuetify's actual toolbar content container. Append as a flex
-    // sibling: no fixed overlay, no hit area covering YouTube video frames.
-    const nodes=document.querySelectorAll?.(
-      '.v-toolbar__content,.v-app-bar__content,header .v-toolbar,.v-toolbar,header')||[];
-    for(const el of nodes){
-      if(el.closest?.('.mv-frame,.mv-cell,#hmtc-sheet,#hmtc-settings'))continue;
-      const r=el.getBoundingClientRect?.();
-      if(!r||r.width<180||r.height<30||r.height>170||r.bottom<0||
-         r.top>Math.min(200,innerHeight*.34))continue;
-      const style=typeof getComputedStyle==='function'?getComputedStyle(el):null;
-      if(style&&(style.display==='none'||style.visibility==='hidden'))continue;
-      return el;
-    }
-    return null;
-  }
-  function fullscreenIcon(button,active){
-    if(button.dataset.fullscreenState===(active?'on':'off'))return;
-    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
-    svg.setAttribute('viewBox','0 0 24 24');
-    svg.setAttribute('width','20');svg.setAttribute('height','20');
-    svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');
-    svg.setAttribute('stroke-width','2');
-    svg.setAttribute('stroke-linecap','round');
-    svg.setAttribute('stroke-linejoin','round');
-    const path=document.createElementNS('http://www.w3.org/2000/svg','path');
-    path.setAttribute('d',active?
-      'M9 3v6H3 M15 3v6h6 M3 15h6v6 M21 15h-6v6':
-      'M8 3H3v5 M16 3h5v5 M3 16v5h5 M21 16v5h-5');
-    svg.appendChild(path);button.replaceChildren(svg);
-    button.dataset.fullscreenState=active?'on':'off';
-  }
+  // Do not inject controls into the framework-owned Holodex toolbar.
+  // Do not place a substitute floating button over videos either.
+  // Manual fullscreen stays available from the settings and script menu.
   function syncMultiviewFullscreenButton(){
-    const button=multiviewFullscreenButton;
+    const button=document.querySelector?.('#hmtc-settings [data-action="landscapeFullscreen"]');
     if(!button)return;
-    const mobile=isMobileFullscreenDevice(),multi=isMulti();
-    const toolbar=mobile&&multi?multiviewToolbar():null;
-    // Do not replace the missing toolbar with a large video-covering bubble.
-    if(toolbar&&button.parentNode!==toolbar)toolbar.appendChild(button);
     const own=document.fullscreenElement===document.documentElement;
-    button.hidden=!toolbar||!mobile||!multi||
-      (!!document.fullscreenElement&&!own);
-    const label=own?'退出 Holodex 全屏':'进入 Holodex 网页全屏';
-    button.title=label;button.setAttribute('aria-label',label);
+    button.textContent=own?'退出网页全屏':'进入网页全屏';
     button.setAttribute('aria-pressed',own?'true':'false');
-    fullscreenIcon(button,own);
   }
   function requestMultiviewFullscreen(silent=false){
     if(!isMulti()||!isMobileFullscreenDevice()||
@@ -2509,22 +2472,17 @@
     if(event.target?.closest?.('#hmtc-multiview-fullscreen,#hmtc-settings'))return;
     requestMultiviewFullscreen(true);
   }
+  let fullscreenListenersInstalled=false;
   function installMultiviewFullscreenButton(){
-    if(multiviewFullscreenButton?.isConnected)return;
-    const button=multiviewFullscreenButton||document.createElement('button');
-    button.type='button';button.id='hmtc-multiview-fullscreen';
-    if(!multiviewFullscreenButton){
-      button.addEventListener('click',toggleMultiviewFullscreen);
-      window.addEventListener('resize',reconcileLandscapeFullscreen,{passive:true});
-      window.addEventListener('orientationchange',reconcileLandscapeFullscreen,{passive:true});
-      window.addEventListener('popstate',reconcileLandscapeFullscreen,{passive:true});
-      window.addEventListener('hashchange',reconcileLandscapeFullscreen,{passive:true});
-      document.addEventListener('fullscreenchange',onMultiviewFullscreenChange);
-      document.addEventListener('pointerup',onFullscreenAutoGesture,{capture:true,passive:true});
-      document.addEventListener('click',onFullscreenAutoGesture,{capture:true,passive:true});
-    }
-    multiviewFullscreenButton=button;
-    syncMultiviewFullscreenButton();
+    if(fullscreenListenersInstalled)return;
+    fullscreenListenersInstalled=true;
+    window.addEventListener('resize',reconcileLandscapeFullscreen,{passive:true});
+    window.addEventListener('orientationchange',reconcileLandscapeFullscreen,{passive:true});
+    window.addEventListener('popstate',reconcileLandscapeFullscreen,{passive:true});
+    window.addEventListener('hashchange',reconcileLandscapeFullscreen,{passive:true});
+    document.addEventListener('fullscreenchange',onMultiviewFullscreenChange);
+    document.addEventListener('pointerup',onFullscreenAutoGesture,{capture:true,passive:true});
+    document.addEventListener('click',onFullscreenAutoGesture,{capture:true,passive:true});
   }
   const token='hmtc-'+(crypto.randomUUID?.()||String(Date.now())+Math.random());
   const clamp=n=>Math.max(0,Math.min(100,Math.round(Number(n)||0)));
@@ -2793,28 +2751,13 @@
   let hintTimer=null,statsInterval=null;
 
   GM_addStyle(`
-  /* Header-integrated fullscreen action: never floats over a video. */
-  #hmtc-multiview-fullscreen{
-    flex:0 0 34px!important;display:inline-flex!important;
-    align-items:center!important;justify-content:center!important;
-    width:34px!important;height:34px!important;
-    min-width:34px!important;min-height:34px!important;
-    margin:0 4px!important;padding:0!important;
-    border:0!important;border-radius:9px!important;
-    background:transparent!important;color:inherit!important;
-    box-shadow:none!important;opacity:.78!important;
-    cursor:pointer!important;touch-action:manipulation!important;
-    -webkit-tap-highlight-color:transparent!important}
-  #hmtc-multiview-fullscreen[hidden]{display:none!important}
-  #hmtc-multiview-fullscreen:focus-visible,
-  #hmtc-multiview-fullscreen:active{
-    outline:1px solid currentColor!important;opacity:1!important}
+  /* No full-screen overlay: controls remain in settings/menu only. */
   #hmtc-sheet button.hmtc-go-live{display:block;width:100%;margin:0 0 8px;
     min-height:35px;border:1px solid #7bc7a66b;border-radius:9px;
     background:rgba(23,87,69,.65);color:#caffdf;font:700 13px system-ui}
   #hmtc-sheet button.hmtc-go-live[hidden]{display:none!important}
   /* Invisible zones occupy twice the v0.3.1 width, and are 78% tall. */
-  .hmtc-edge{position:absolute;z-index:45;top:11%;height:78%;width:36%;
+  .hmtc-edge{position:absolute;z-index:45;top:max(64px,20%);bottom:max(54px,18%);height:auto;width:36%;
     min-width:min(46px,46%);max-width:min(112px,46%);background:transparent;
     box-sizing:border-box;-webkit-user-select:none;user-select:none;
     -webkit-tap-highlight-color:transparent;overscroll-behavior:contain}
@@ -4226,7 +4169,7 @@
       '<label class="hmtc-toggle"><input type="checkbox" data-control="fullscreenAuto">',
       '<span>横屏自动全屏（下一次触摸自动尝试）</span></label>',
       '<button type="button" data-action="landscapeFullscreen" style="width:100%;margin:6px 0">进入／退出网页全屏</button>',
-      '<div class="setting-summary">全屏图标位于 Holodex 顶部工具栏，不再遮挡直播。横竖屏都可手动全屏；自动模式可能需下一次触摸才生效。</div></div>',
+      '<div class="setting-summary">已移除不可靠的顶部工具栏注入和视频悬浮按钮。横竖屏均可在此进入全屏；自动模式可能需要下一次触摸。</div></div>',
       '<div class="setting"><label for="hmtc-stats-mode">打开统计的触控方式</label>',
       '<select id="hmtc-stats-mode" data-control="statsMode">',
       '<option value="tap">左侧轻点（默认）</option>',
@@ -4823,11 +4766,12 @@
     GM_registerMenuCommand('播放信息：调整显示大小',chooseHudSize);
     GM_registerMenuCommand('多视图：全部直播追到最新',()=>jumpAllLiveStreams()
       .catch(error=>alert('追新失败：'+error.message)));
+    GM_registerMenuCommand('手动进入／退出 Holodex 全屏',toggleMultiviewFullscreen);
     GM_registerMenuCommand('横屏自动全屏：切换开关',()=>{
       const next=setLandscapeAutoFullscreen(!fullscreenAutoEnabled(),false);
       alert(next?
         '横屏自动全屏已开启。旋转到横屏后，下一次触摸 Holodex 页面时自动尝试进入全屏；浏览器必须授权用户手势。':
-        '横屏自动全屏已关闭。仍可用顶部工具栏按钮手动全屏。');
+        '横屏自动全屏已关闭。仍可用设置面板或油猴菜单手动全屏。');
     });
     setInterval(pollCornerHuds,2200);
     const clearOnRouteExit=()=>{
@@ -4900,8 +4844,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.44 说明',()=>
-      alert('v0.6.44：全屏按钮整合至顶部工具栏，不再遮挡视频；逐路直播与全部直播支持追到最新。'));
+    GM_registerMenuCommand('Touch Controls v0.6.45 说明',()=>
+      alert('v0.6.45：取消全屏按钮的工具栏注入，避免干扰多视图布局；边缘统计触控区避开顶部播放器按钮。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
