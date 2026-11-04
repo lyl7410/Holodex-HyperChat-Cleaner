@@ -60,7 +60,7 @@ Recovery 为可选独立脚本；已有同名 Recovery 的用户请覆盖升级�
 
 最近更新：**v0.6.29** 修复部分安卓 YouTube iframe 缺少原生统计可见性接口，导致 Holodex 连接速度采集无法启动的问题；增加对原生 Mbps 文本、不同统计字段的兼容读取，仍只显示真实 YouTube 返回的网速。保留 v0.6.28 的紧凑时间和橙色角标。详见 [安装、设置与历史说明](docs/touch-controls.md)。
 
-### Quick Add 通用版 v0.3.0（PC / Android）
+### Quick Add 通用版 v0.3.1（PC / Android）
 
 1. **PC**：在 YouTube 视频网页右下角点击半透明 **＋H**；鼠标悬停显示文字。也可使用 `Alt+Shift+H` 快速添加，`Alt+Shift+N` 新建接收分屏，或 **Shift＋点击** ＋H。
 2. **Android**：保留触摸显示 ＋H、闲置 4.5 秒隐藏的原有操作，不需要重新安装第二个脚本。
@@ -113,6 +113,8 @@ node tests/holodex-embed-recovery.test.cjs
 测试仅使用 Node.js 内置模块。模拟结果不替代真实浏览器验证。
 
 ## 版本记录
+
+- **2026-11-04 — Quick Add v0.3.1**：修复手机 YouTube SPA 切换视频后仍被前一条视频“已排队”状态锁住的问题。提交请求完成后立即释放发送锁，按视频独立等待 Holodex 确认；视频 A 等待接收期间仍可连续添加视频 B、C，旧视频 ACK 不再覆盖当前页面按钮。保留原有跨标签接收与去重逻辑。
 
 - **2026-10-30 — Embed Recovery v0.2.2**：增加接口有限重新查找，以及load失败后自动cue、待播就绪后自动play的单次补救；保留音量、静音和用户取消优先级。93项模拟通过，真实Edge效果待实测。
 
