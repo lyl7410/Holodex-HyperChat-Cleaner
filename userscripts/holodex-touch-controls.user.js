@@ -906,7 +906,43 @@
         message:menu.submenu?'已展开真实 YouTube 画质选项，请选择清晰度':
           '已打开 YouTube 设置，请选择画质 / Quality'};
     }
-    return {snapshot,setRate,qualityOptions,setQuality,openQualityMenu,video,getPlayer};
+    // Only seek live streams, using the end of their seekable range rather than
+    // video.duration, which can describe a sliding DVR window.
+    async function goLive(statusHint,expectedVideoId){
+      const p=getPlayer(),v=video();
+      if(!p||!v)throw Error('YouTube 播放器尚未就绪');
+      let id='';try{id=String(p.getVideoData?.()?.video_id||'');}catch{}
+      if(expectedVideoId&&id&&expectedVideoId!==id)
+        throw Error('播放器正在切换视频，已取消追新');
+      const live=resolvePlaybackState(
+        youtubeWatchLiveState(pageDoc,getPlayer,video,pageDoc.defaultView),statusHint).live;
+      if(live!==true)throw Error(live===false?
+        '当前为录像，不支持追到最新直播':'尚未确认当前视频正在直播');
+      let start=NaN,end=NaN;
+      try{
+        const ranges=v.seekable;
+        if(ranges?.length){const i=ranges.length-1;
+          start=Number(ranges.start(i));end=Number(ranges.end(i));}
+      }catch{}
+      if(!Number.isFinite(end)||end<=0){
+        const badge=p.querySelector?.('.ytp-live-badge');
+        if(typeof badge?.click!=='function')throw Error('当前直播没有可定位的进度范围');
+        badge.click();
+        return {requested:true,confirmed:false,method:'live-badge',
+          message:'已请求 YouTube LIVE 按钮，未能确认最终位置'};
+      }
+      const target=Math.max(Number.isFinite(start)?start:0,end-1.5);
+      if(!Number.isFinite(target)||target<0)throw Error('直播进度范围异常');
+      if(typeof p.seekTo==='function')p.seekTo(target,true);
+      else v.currentTime=target;
+      await new Promise(resolve=>setTimeout(resolve,220));
+      const after=Number(v.currentTime);
+      const confirmed=Number.isFinite(after)&&Math.abs(after-target)<=8;
+      return {requested:true,confirmed,method:'seekable-edge',target,
+        message:confirmed?'已追到最新可用直播进度':
+          '已请求追到最新直播进度，等待播放器确认'};
+    }
+    return {snapshot,setRate,qualityOptions,setQuality,openQualityMenu,goLive,video,getPlayer};
   }
 
 
@@ -1192,6 +1228,8 @@
   function renderMediaKind(panel,state){
     const badge=panel?.querySelector('[data-hmtc-media-kind]');
     if(!badge)return;
+    const goLiveButton=panel?.querySelector('[data-action="goLive"]');
+    if(goLiveButton)goLiveButton.hidden=state?.live!==true;
     badge.textContent=playbackKindLabel(state);
     badge.dataset.kind=state?.live===true?'live':state?.live===false?'vod':'unknown';
     const compact=!!panel._hmtcCompact;
@@ -2279,7 +2317,7 @@
         catch(err){respond({ok:false,error:String(err?.message||err).slice(0,120)});}
         return;
       }
-      if(['playbackClock','playbackInfo','playbackRate','qualityMenu','qualityOptions','selectQuality'].includes(message.action)){
+      if(['playbackClock','playbackInfo','playbackRate','qualityMenu','qualityOptions','selectQuality','goLive'].includes(message.action)){
         try{
           if(!player())throw Error('YouTube 播放器尚未就绪');
           let info;
@@ -2290,6 +2328,7 @@
           if(message.action==='qualityMenu')info=await controls.openQualityMenu();
           if(message.action==='qualityOptions')info=await controls.qualityOptions();
           if(message.action==='selectQuality')info=await controls.setQuality(message.quality);
+          if(message.action==='goLive')info=await controls.goLive(message.status,videoId);
           respond({ok:true,data:info});
         }catch(error){
           respond({ok:false,error:String(error?.message||error).slice(0,150)});
@@ -3662,6 +3701,17 @@
         '需要浏览器许可或在页面内直接操作播放器。');
     }).catch(error=>alert('播放诊断未完成：'+error.message));
   }
+  async function jumpAllLiveStreams(){
+    if(!isMulti())return alert('请先进入 Holodex 多视图页面。');
+    const live=[...rowMap.values()].filter(row=>row.status==='live');
+    if(!live.length)return alert('当前没有标记为正在直播的视频；录像不会被跳转。');
+    const results=await Promise.allSettled(live.map(row=>nativeRequest(row,'goLive',3500)));
+    const successful=results.filter(r=>r.status==='fulfilled'&&r.value?.requested).length;
+    const confirmed=results.filter(r=>r.status==='fulfilled'&&r.value?.confirmed).length;
+    alert('直播追新：请求 '+live.length+' 路，已发送 '+successful+
+      ' 路，其中确认 '+confirmed+' 路'+(successful<live.length?
+      '；失败 '+(live.length-successful)+' 路':'')+'。录像不变。');
+  }
   function manualAutoPlay(){
     if(!isMulti())return alert('请先进入 Holodex 多视图页面。');
     if(!installed)return alert('多视图播放器尚未就绪，请刷新页面再试。');
@@ -3693,7 +3743,7 @@
   function nativeRequest(row,action,timeout=1800,extra={}) {
     if(!['stats','nativeToggle','monitorStart','monitorStop','desktopPanelStatus','statsDiagnostics',
           'playbackClock','playbackInfo','playbackRate','qualityMenu',
-          'qualityOptions','selectQuality'].includes(action))
+          'qualityOptions','selectQuality','goLive'].includes(action))
       return Promise.reject(new Error('不支持的 YouTube 指令'));
     const target=nativeFrame(row);
     if(!target)return Promise.reject(new Error('未找到当前视频的 YouTube 嵌入播放器'));
@@ -4036,6 +4086,7 @@
       '<div class="metric"><label>分辨率</label><strong data-field="resolution">—</strong></div>',
       '</div></div>',
       '<div class="hmtc-play-controls">',
+      '<button type="button" data-action="goLive" class="hmtc-go-live" hidden>● 追到最新直播</button>',
       '<div class="hmtc-play-row"><label>播放速度</label></div>',
       '<div class="hmtc-rate-presets" role="group" aria-label="常用播放速度">',
       '<button type="button" data-action="ratePreset" data-rate="1">1×</button>',
@@ -4078,6 +4129,15 @@
       if(action==='settings'){openSettings();return;}
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
       if(!row)return;
+      if(action==='goLive'){
+        btn.disabled=true;
+        try{
+          const result=await nativeRequest(row,'goLive',3500);
+          field('note',result.message||'已请求直播追新');stats();
+        }catch(error){field('note','直播追新失败：'+error.message);}
+        finally{btn.disabled=false;}
+        return;
+      }
       if(action==='qualityPreset'){
         await applyHolodexQuality(row,btn);
         return;
@@ -4757,6 +4817,8 @@
     GM_registerMenuCommand('播放信息：切换时间／速度／隐藏',cycleHudMode);
     GM_registerMenuCommand('播放信息：选择显示角落',chooseHudPosition);
     GM_registerMenuCommand('播放信息：调整显示大小',chooseHudSize);
+    GM_registerMenuCommand('多视图：全部直播追到最新',()=>jumpAllLiveStreams()
+      .catch(error=>alert('追新失败：'+error.message)));
     GM_registerMenuCommand('横屏自动全屏：切换开关',()=>{
       const next=setLandscapeAutoFullscreen(!fullscreenAutoEnabled(),false);
       alert(next?
