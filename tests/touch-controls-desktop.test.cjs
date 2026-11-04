@@ -128,7 +128,8 @@ test('fullscreen toolbar is absent rather than overlaying a stream if no header 
 });
 test('live-edge seeking only uses seekable end and rejects archived streams',async()=>{
   const id='abcdefghijk',video={currentTime:12,seekable:{length:1,start:()=>0,end:()=>7200}};
-  const player={getVideoData:()=>({video_id:id}),querySelector:()=>null,
+  const player={getVideoData:()=>({video_id:id}),
+    querySelector:selector=>selector.startsWith('video')?video:null,
     seekTo(t){video.currentTime=t;this.requested=t;}};
   const ctx=vm.createContext({COMMON_RATES:[1,1.25,1.5,1.75,2],setTimeout,
     resolvePlaybackState:(state,hint)=>({live:state.live??(hint==='live'?true:null)}),
@@ -150,7 +151,8 @@ test('live-edge seeking only uses seekable end and rejects archived streams',asy
 test('live seek without a seekable range uses YouTube LIVE button or reports unsupported',async()=>{
   const id='abcdefghijk',video={currentTime:40,seekable:{length:0}};
   let clicks=0;
-  const player={getVideoData:()=>({video_id:id}),querySelector:()=>({click(){clicks++;}})};
+  const player={getVideoData:()=>({video_id:id}),querySelector:selector=>
+    selector.startsWith('video')?video:{click(){clicks++;}}};
   const ctx=vm.createContext({COMMON_RATES:[1,1.25,1.5,1.75,2],setTimeout,
     resolvePlaybackState:()=>({live:true}),youtubeWatchLiveState:()=>({live:true})});
   vm.runInContext(section('  function youtubePlaybackTools(', '  // Restore the SAME measurement strategy'),ctx);
@@ -159,7 +161,7 @@ test('live seek without a seekable range uses YouTube LIVE button or reports uns
   assert.equal(result.requested,true);
   assert.equal(result.confirmed,false);
   assert.equal(clicks,1);
-  player.querySelector=()=>null;
+  player.querySelector=selector=>selector.startsWith('video')?video:null;
   await assert.rejects(tools.goLive('live',id),/没有可定位/);
   assert.match(source,/data-action="goLive"/);
   assert.match(source,/GM_registerMenuCommand\('多视图：全部直播追到最新'/);
