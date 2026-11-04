@@ -2809,6 +2809,10 @@
   #hmtc-multiview-fullscreen:focus-visible,
   #hmtc-multiview-fullscreen:active{
     outline:1px solid currentColor!important;opacity:1!important}
+  #hmtc-sheet button.hmtc-go-live{display:block;width:100%;margin:0 0 8px;
+    min-height:35px;border:1px solid #7bc7a66b;border-radius:9px;
+    background:rgba(23,87,69,.65);color:#caffdf;font:700 13px system-ui}
+  #hmtc-sheet button.hmtc-go-live[hidden]{display:none!important}
   /* Invisible zones occupy twice the v0.3.1 width, and are 78% tall. */
   .hmtc-edge{position:absolute;z-index:45;top:11%;height:78%;width:36%;
     min-width:min(46px,46%);max-width:min(112px,46%);background:transparent;
@@ -4823,7 +4827,7 @@
       const next=setLandscapeAutoFullscreen(!fullscreenAutoEnabled(),false);
       alert(next?
         '横屏自动全屏已开启。旋转到横屏后，下一次触摸 Holodex 页面时自动尝试进入全屏；浏览器必须授权用户手势。':
-        '横屏自动全屏已关闭。仍可用悬浮按钮手动全屏。');
+        '横屏自动全屏已关闭。仍可用顶部工具栏按钮手动全屏。');
     });
     setInterval(pollCornerHuds,2200);
     const clearOnRouteExit=()=>{
