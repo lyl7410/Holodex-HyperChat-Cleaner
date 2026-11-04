@@ -2469,7 +2469,14 @@
     if(!autoFullscreenPending||autoFullscreenSuppressed||!fullscreenAutoEnabled()||
        !landscapeNow()||!isMulti()||document.fullscreenElement||fullscreenRequestBusy)return;
     if(event.type==='pointerup'&&event.pointerType==='mouse')return;
-    if(event.target?.closest?.('#hmtc-multiview-fullscreen,#hmtc-settings'))return;
+    // Never hijack taps on videos, the editor's resizers, native buttons,
+    // menus, links, inputs, or our own controls. The user can tap an empty
+    // Holodex page/header area to grant the browser's activation.
+    const busyTarget=event.target?.closest?.(
+      '.mv-frame,.mv-cell,.multiview [draggable],.hmtc-edge,'+
+      '#hmtc-settings,#hmtc-sheet,button,a,input,select,textarea,'+
+      '[role="button"],[role="menuitem"],[contenteditable="true"],.v-menu,.v-dialog');
+    if(busyTarget)return;
     requestMultiviewFullscreen(true);
   }
   let fullscreenListenersInstalled=false;
@@ -4169,7 +4176,7 @@
       '<label class="hmtc-toggle"><input type="checkbox" data-control="fullscreenAuto">',
       '<span>横屏自动全屏（下一次触摸自动尝试）</span></label>',
       '<button type="button" data-action="landscapeFullscreen" style="width:100%;margin:6px 0">进入／退出网页全屏</button>',
-      '<div class="setting-summary">已移除不可靠的顶部工具栏注入和视频悬浮按钮。横竖屏均可在此进入全屏；自动模式可能需要下一次触摸。</div></div>',
+      '<div class="setting-summary">已移除不可靠的顶部工具栏注入和视频悬浮按钮。横竖屏均可在此进入全屏；横屏自动模式需要时请点顶部空白位置，不会拦截视频控件。</div></div>',
       '<div class="setting"><label for="hmtc-stats-mode">打开统计的触控方式</label>',
       '<select id="hmtc-stats-mode" data-control="statsMode">',
       '<option value="tap">左侧轻点（默认）</option>',
@@ -4770,7 +4777,7 @@
     GM_registerMenuCommand('横屏自动全屏：切换开关',()=>{
       const next=setLandscapeAutoFullscreen(!fullscreenAutoEnabled(),false);
       alert(next?
-        '横屏自动全屏已开启。旋转到横屏后，下一次触摸 Holodex 页面时自动尝试进入全屏；浏览器必须授权用户手势。':
+        '横屏自动全屏已开启。旋转横屏后，轻触 Holodex 顶部空白区域可完成浏览器授权；不会劫持视频和布局按钮。':
         '横屏自动全屏已关闭。仍可用设置面板或油猴菜单手动全屏。');
     });
     setInterval(pollCornerHuds,2200);
