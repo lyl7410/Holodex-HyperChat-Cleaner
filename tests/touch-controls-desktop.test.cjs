@@ -68,7 +68,7 @@ test('PC initialization registers statistics; selection opens the correct video 
 test('v0.6.44 fullscreen action is integrated in Holodex header, never over player',async()=>{
   const events=new Map(),menus=[],toolbar={
     parent:null,getBoundingClientRect:()=>({left:0,top:5,right:700,bottom:72,width:700,height:67}),
-    appendChild(el){el.parentNode=this;el.isConnected=true;},
+    appendChild(el){el.parentNode=this;el.isConnected=true;this.button=el;},
     closest:()=>null
   };
   const root={requestFullscreen(opts){
@@ -93,11 +93,9 @@ test('v0.6.44 fullscreen action is integrated in Holodex header, never over play
     getComputedStyle:()=>({display:'flex',visibility:'visible'}),console:{warn(){}},alert(){}});
   vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
   ctx.installMultiviewFullscreenButton();
-  const button=toolbar.lastButton||null;
   // Child belongs to header, never document.body or any video frame.
-  const control=toolbar.parent||[...toolbar.children||[]][0];
-  assert.ok(control||ctx.multiviewFullscreenButton);
-  const actual=ctx.multiviewFullscreenButton;
+  const actual=toolbar.button;
+  assert.ok(actual);
   assert.equal(actual.parentNode,toolbar);
   assert.equal(actual.hidden,false);
   assert.equal(actual.children[0].tagName,'svg');
@@ -117,13 +115,14 @@ test('fullscreen toolbar is absent rather than overlaying a stream if no header 
       addEventListener(k,fn){this.handlers[k]=fn;},setAttribute(){},
       replaceChildren(){}}),createElementNS:()=>({setAttribute(){},appendChild(){}}),
     addEventListener(){}};
+  let hiddenButton=null;
   const ctx=vm.createContext({document:doc,window:{addEventListener(){},matchMedia:()=>({matches:false})},
     navigator:{userAgent:'Android'},location:{pathname:'/multiview/'},
     get:(_k,d)=>d,set(){},innerWidth:700,innerHeight:1200,alert(){},console:{warn(){}}});
   vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
   ctx.installMultiviewFullscreenButton();
-  assert.equal(ctx.multiviewFullscreenButton.hidden,true);
-  assert.equal(ctx.multiviewFullscreenButton.parentNode,undefined);
+  assert.equal(vm.runInContext('multiviewFullscreenButton.hidden',ctx),true);
+  assert.equal(vm.runInContext('multiviewFullscreenButton.parentNode',ctx),undefined);
   assert.match(source,/data-control="fullscreenAuto"/);
   assert.doesNotMatch(source,/resetFullscreenPosition/);
 });
