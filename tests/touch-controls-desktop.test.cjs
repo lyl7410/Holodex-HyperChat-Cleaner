@@ -117,6 +117,27 @@ test('v0.6.45 keeps stats touch zones away from native player top/bottom control
   assert.match(source,/function appendStaticPanelMarkup\(root,markup\)/);
   assert.match(source,/GM_registerMenuCommand\('多视图：全部直播追到最新'/);
 });
+test('fullscreen auto activation ignores YouTube controls, resize editor, dialogs and native buttons',()=>{
+  const fragment=section('  function onFullscreenAutoGesture(event){',
+    '  let fullscreenListenersInstalled=false;');
+  const make=new Function('requestMultiviewFullscreen','target',
+    'const autoFullscreenPending=true,autoFullscreenSuppressed=false,fullscreenRequestBusy=false;'+
+    'const document={fullscreenElement:null};'+
+    'const fullscreenAutoEnabled=()=>true,landscapeNow=()=>true,isMulti=()=>true;'+
+    fragment+
+    'return onFullscreenAutoGesture({type:"pointerup",pointerType:"touch",target});');
+  let calls=0,what='';
+  const ask=selector=>{what=selector;return /[#.[]/.test(selector)?{}:null;};
+  make(()=>{calls++},{closest:()=>({})});
+  assert.equal(calls,0,'interactive target must not trigger fullscreen');
+  assert.match(what,/\.mv-frame/);
+  assert.match(what,/\.mv-cell/);
+  assert.match(what,/button,a,input/);
+  assert.match(what,/\[role="button"\]/);
+  assert.match(what,/\.v-dialog/);
+  make(()=>{calls++},{closest:()=>null});
+  assert.equal(calls,1,'background tap should still permit auto fullscreen');
+});
 test('live-edge seeking only uses seekable end and rejects archived streams',async()=>{
   const id='abcdefghijk',video={currentTime:12,seekable:{length:1,start:()=>0,end:()=>7200}};
   const player={getVideoData:()=>({video_id:id}),
