@@ -992,6 +992,57 @@ test('latency diagnostics distinguish absent APIs, ambiguous units, recordings a
   ctx=frameStatsContext({},null);assert.equal(ctx.readStats('past',true).latencyDiagnostics.reasonCode,'not-live');
   assert.equal(ctx.readStats(undefined,true).latencyDiagnostics.reasonCode,'media-type-unknown');
 });
+test('v0.6.46 red LIVE badge is the only Holodex jump action and stays in latency row',()=>{
+  const template=section('  function makeSheet(){','  function closeSheet(');
+  const status=template.indexOf('<div class="hmtc-live-status"');
+  const badge=template.indexOf('class="hmtc-media-kind hmtc-live-jump"');
+  const control=template.indexOf('<div class="hmtc-play-controls">');
+  assert.ok(status>=0&&badge>status&&control>badge,'LIVE control must be in status row');
+  assert.equal((template.match(/data-action="goLive"/g)||[]).length,1);
+  assert.ok(template.indexOf('data-action="goLive"')<template.indexOf('<div class="hmtc-play-controls">'));
+  assert.doesNotMatch(template,/hmtc-go-live|追到最新直播<\/button>/);
+  assert.match(template,/aria-label="尚未确认直播状态，不能追新" disabled/);
+  assert.match(source,/#hmtc-sheet \.hmtc-live-status button\.hmtc-live-jump\{/);
+  assert.match(source,/min-height:40px!important;min-width:74px!important/);
+  assert.match(source,/font:800 17px\/1\.18 system-ui/);
+  assert.doesNotMatch(source,/#hmtc-sheet button\.hmtc-go-live/);
+});
+test('LIVE red badge is clickable only on confirmed live streams, not VOD or unknown',()=>{
+  const attributes={};
+  const badge={dataset:{},disabled:true,
+    setAttribute(k,v){attributes[k]=v;}};
+  const metric={dataset:{},hidden:false};
+  const label={textContent:''},value={},time={textContent:''};
+  const panel={querySelector:q=>({
+    '[data-hmtc-media-kind]':badge,'[data-action="goLive"]':badge,
+    '[data-hmtc-latency-metric]':metric,'[data-hmtc-latency-label]':label,
+    '[data-hmtc-latency-value]':value,'[data-hmtc-time-label]':time
+  })[q]||null};
+  const ctx=vm.createContext({});
+  vm.runInContext(stateHelpers,ctx);
+  ctx.renderMediaKind(panel,{live:null});
+  assert.equal(badge.disabled,true);
+  assert.equal(attributes['aria-disabled'],'true');
+  ctx.renderMediaKind(panel,{live:false});
+  assert.equal(badge.disabled,true);
+  assert.equal(badge.textContent,'录像');
+  assert.equal(metric.hidden,true);
+  ctx.renderMediaKind(panel,{live:true});
+  assert.equal(badge.disabled,false);
+  assert.equal(badge.textContent,'直播');
+  assert.equal(attributes['aria-disabled'],'false');
+  assert.match(attributes['aria-label'],/点击追到最新直播进度/);
+  // Stats may refresh during a seek; it must not re-enable pending actions.
+  badge.dataset.pending='1';
+  ctx.renderMediaKind(panel,{live:true});
+  assert.equal(badge.disabled,true);
+  delete badge.dataset.pending;
+  ctx.renderMediaKind(panel,{live:true});
+  assert.equal(badge.disabled,false);
+  assert.match(source,/if\(btn\.dataset\.kind!=='live'\|\|btn\.disabled\|\|btn\.dataset\.pending==='1'\)return/);
+  assert.match(source,/await nativeRequest\(row,'goLive',3500\)/);
+  assert.match(source,/expectedVideoId&&id&&expectedVideoId!==id/);
+});
 test('panel badge explicitly labels live, recording and unknown states',()=>{
   const badge={dataset:{}};const panel={querySelector:q=>q==='[data-hmtc-media-kind]'?badge:null};const ctx=vm.createContext({});
   vm.runInContext(stateHelpers,ctx);ctx.renderMediaKind(panel,{live:false});assert.equal(badge.textContent,'录像');assert.equal(badge.dataset.kind,'vod');
