@@ -100,28 +100,36 @@ test('off, route exit and failed in-flight requests cannot leave the auto settin
   h.ctx.location.pathname='/favorites';h.ctx.reconcileLandscapeFullscreen();
   assert.equal(h.ctx.state().pending,false);assert.match(h.status.textContent,/先进入/);
 });
-test('shortcut owns a body strip, reserves space, hides the duplicate only while mounted and cleans up on route exit',async()=>{
+test('body-owned shortcut shares the native row without adding top space and hides with the toolbar',async()=>{
   const h=harness({enabled:true,landscape:true}),bodyChildren=[],headChildren=[],classes=new Set();
-  const element=tag=>({tag,children:[],attrs:{},events:{},isConnected:false,
+  const element=tag=>({tag,children:[],attrs:{},events:{},style:{},isConnected:false,
     setAttribute(k,v){this.attrs[k]=v;},addEventListener(k,v){this.events[k]=v;},
     appendChild(e){this.children.push(e);e.isConnected=true;},
     querySelector(sel){return this.children.find(e=>e.tag===sel);}});
   h.doc.createElement=element;h.doc.body={appendChild(e){bodyChildren.push(e);e.isConnected=true;}};
   h.doc.head={appendChild(e){headChildren.push(e);e.isConnected=true;}};
   h.doc.documentElement.classList={toggle(k,on){on?classes.add(k):classes.delete(k);}};
-  const query=h.doc.querySelector;h.doc.querySelector=s=>s==='.multiview'||s==='.mv-toolbar'?{}:query(s);
+  let toolbarTop=0;
+  const group={getBoundingClientRect:()=>({left:100,width:280}),querySelector:()=>({getBoundingClientRect:()=>({left:148})})};
+  const toolbar={getBoundingClientRect:()=>({top:toolbarTop,bottom:toolbarTop+64,height:64})};
+  const query=h.doc.querySelector;h.doc.querySelector=s=>s==='.mv-toolbar .mv-toolbar-btn.justify-end'?group:s==='.mv-toolbar'?toolbar:query(s);
   h.ctx.reconcileLandscapeFullscreen();h.ctx.reconcileLandscapeFullscreen();
   assert.equal(bodyChildren.length,1);assert.equal(headChildren.length,1);
   const bar=bodyChildren[0],button=bar.querySelector('button');
-  assert.equal(button.textContent,'点此全屏');assert.equal(classes.has('hmtc-fullscreen-strip'),true);
+  assert.equal(button.attrs['aria-label'],'横屏已准备，点击全屏');assert.equal(classes.has('hmtc-fullscreen-inline'),true);
   assert.match(headChildren[0].textContent,/min-height:44px/);
-  assert.match(headChildren[0].textContent,/margin-top:var\(--hmtc-fullscreen-space\)/);
+  assert.match(headChildren[0].textContent,/padding-left:48px/);
+  assert.doesNotMatch(headChildren[0].textContent,/margin-top|100dvh|fullscreen-space/);
+  assert.equal(bar.style.left,'102px');assert.equal(bar.style.top,'10px');
   assert.match(headChildren[0].textContent,/:has\(svg path/);
   button.events.click({isTrusted:false});assert.equal(h.calls.length,0);
   button.events.click({isTrusted:true});assert.deepEqual(h.calls,['enter']);await settle();
-  assert.equal(button.textContent,'退出全屏');
+  assert.equal(button.attrs['aria-label'],'退出全屏');
+  toolbarTop=-100;h.ctx.reconcileLandscapeFullscreen();
+  assert.equal(bar.hidden,true);assert.equal(classes.has('hmtc-fullscreen-inline'),false);
+  toolbarTop=0;h.ctx.reconcileLandscapeFullscreen();assert.equal(bar.hidden,false);
   h.ctx.location.pathname='/favorites';h.ctx.reconcileLandscapeFullscreen();
-  assert.equal(bar.hidden,true);assert.equal(classes.has('hmtc-fullscreen-strip'),false);
+  assert.equal(bar.hidden,true);assert.equal(classes.has('hmtc-fullscreen-inline'),false);
 });
 test('fullscreen module never writes Vue state or replaces native toolbar children',()=>{
   assert.doesNotMatch(source.slice(start,end),/innerHTML|\.remove\(|__vue__|toolbar\.appendChild/);
