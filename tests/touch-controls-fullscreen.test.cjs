@@ -100,7 +100,30 @@ test('off, route exit and failed in-flight requests cannot leave the auto settin
   h.ctx.location.pathname='/favorites';h.ctx.reconcileLandscapeFullscreen();
   assert.equal(h.ctx.state().pending,false);assert.match(h.status.textContent,/先进入/);
 });
-test('fullscreen module contains no DOM insertion, removal, style changes or Vue state writes',()=>{
-  assert.doesNotMatch(source.slice(start,end),/appendChild|createElement|innerHTML|\.remove\(|\.style\.|__vue__/);
+test('shortcut owns a body strip, reserves space, hides the duplicate only while mounted and cleans up on route exit',async()=>{
+  const h=harness({enabled:true,landscape:true}),bodyChildren=[],headChildren=[],classes=new Set();
+  const element=tag=>({tag,children:[],attrs:{},events:{},isConnected:false,
+    setAttribute(k,v){this.attrs[k]=v;},addEventListener(k,v){this.events[k]=v;},
+    appendChild(e){this.children.push(e);e.isConnected=true;},
+    querySelector(sel){return this.children.find(e=>e.tag===sel);}});
+  h.doc.createElement=element;h.doc.body={appendChild(e){bodyChildren.push(e);e.isConnected=true;}};
+  h.doc.head={appendChild(e){headChildren.push(e);e.isConnected=true;}};
+  h.doc.documentElement.classList={toggle(k,on){on?classes.add(k):classes.delete(k);}};
+  const query=h.doc.querySelector;h.doc.querySelector=s=>s==='.multiview'||s==='.mv-toolbar'?{}:query(s);
+  h.ctx.reconcileLandscapeFullscreen();h.ctx.reconcileLandscapeFullscreen();
+  assert.equal(bodyChildren.length,1);assert.equal(headChildren.length,1);
+  const bar=bodyChildren[0],button=bar.querySelector('button');
+  assert.equal(button.textContent,'点此全屏');assert.equal(classes.has('hmtc-fullscreen-strip'),true);
+  assert.match(headChildren[0].textContent,/min-height:44px/);
+  assert.match(headChildren[0].textContent,/margin-top:var\(--hmtc-fullscreen-space\)/);
+  assert.match(headChildren[0].textContent,/:has\(svg path/);
+  button.events.click({isTrusted:false});assert.equal(h.calls.length,0);
+  button.events.click({isTrusted:true});assert.deepEqual(h.calls,['enter']);await settle();
+  assert.equal(button.textContent,'退出全屏');
+  h.ctx.location.pathname='/favorites';h.ctx.reconcileLandscapeFullscreen();
+  assert.equal(bar.hidden,true);assert.equal(classes.has('hmtc-fullscreen-strip'),false);
+});
+test('fullscreen module never writes Vue state or replaces native toolbar children',()=>{
+  assert.doesNotMatch(source.slice(start,end),/innerHTML|\.remove\(|__vue__|toolbar\.appendChild/);
   assert.match(source,/仍需触摸入口/);
 });
