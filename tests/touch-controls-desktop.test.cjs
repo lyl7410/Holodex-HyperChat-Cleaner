@@ -47,9 +47,10 @@ test('PC initialization registers statistics; selection opens the correct video 
     location:{href:'https://holodex.net/multiview'},backdrop:{hidden:false},sheet:{hidden:false},
     GM_registerMenuCommand:(name,fn)=>menus.set(name,fn),
     watchTouchZonePolicy:fn=>{policyChange=fn;},touchZonesAllowed:()=>false,
-    cycleHudMode:noop,pollCornerHuds:noop,clearHudCells:noop,openSettings:noop,
+    cycleHudMode:noop,chooseHudPosition:noop,chooseHudSize:noop,pollCornerHuds:noop,clearHudCells:noop,openSettings:noop,
     manualAutoPlay:noop,diagnoseAutoPlay:noop,makeSheet:noop,installDesktopDismiss:noop,
     installMultiviewFullscreenButton:noop,syncMultiviewFullscreenButton:noop,
+    toggleMultiviewFullscreen:noop,
     get:(_k,d)=>d,DEBUG_KEY:'debug',
     installBridge:noop,isMulti:()=>true,setInterval:noop,refresh:noop,
     rowMap:new Map(rows.map(r=>[r.layoutId+':'+r.videoId,r])),
@@ -90,10 +91,10 @@ test('v0.6.45 no longer mutates Vue toolbar or covers native video controls',asy
   ctx.installMultiviewFullscreenButton();
   assert.equal(created,0);
   assert.equal(appended,0);
-  ctx.toggleMultiviewFullscreen();await Promise.resolve();
+  ctx.toggleMultiviewFullscreen();await new Promise(setImmediate);
   assert.equal(doc.fullscreenElement,doc.documentElement);
   assert.equal(ui.textContent,'退出网页全屏');
-  ctx.toggleMultiviewFullscreen();await Promise.resolve();
+  ctx.toggleMultiviewFullscreen();await new Promise(setImmediate);
   assert.equal(doc.fullscreenElement,null);
   assert.equal(ui.textContent,'进入网页全屏');
   ctx.installMultiviewFullscreenButton();
@@ -117,26 +118,10 @@ test('v0.6.45 keeps stats touch zones away from native player top/bottom control
   assert.match(source,/function appendStaticPanelMarkup\(root,markup\)/);
   assert.match(source,/GM_registerMenuCommand\('多视图：全部直播追到最新'/);
 });
-test('fullscreen auto activation ignores YouTube controls, resize editor, dialogs and native buttons',()=>{
-  const fragment=section('  function onFullscreenAutoGesture(event){',
-    '  let fullscreenListenersInstalled=false;');
-  const make=new Function('requestMultiviewFullscreen','target',
-    'const autoFullscreenPending=true,autoFullscreenSuppressed=false,fullscreenRequestBusy=false;'+
-    'const document={fullscreenElement:null};'+
-    'const fullscreenAutoEnabled=()=>true,landscapeNow=()=>true,isMulti=()=>true;'+
-    fragment+
-    'return onFullscreenAutoGesture({type:"pointerup",pointerType:"touch",target});');
-  let calls=0,what='';
-  const ask=selector=>{what=selector;return /[#.[]/.test(selector)?{}:null;};
-  make(()=>{calls++},{closest:()=>({})});
-  assert.equal(calls,0,'interactive target must not trigger fullscreen');
-  assert.match(what,/\.mv-frame/);
-  assert.match(what,/\.mv-cell/);
-  assert.match(what,/button,a,input/);
-  assert.match(what,/\[role="button"\]/);
-  assert.match(what,/\.v-dialog/);
-  make(()=>{calls++},{closest:()=>null});
-  assert.equal(calls,1,'background tap should still permit auto fullscreen');
+test('fullscreen never treats arbitrary background/video/control taps as activation',()=>{
+  assert.doesNotMatch(source,/addEventListener\('pointerup',onFullscreen/);
+  assert.doesNotMatch(source,/onFullscreenAutoGesture/);
+  assert.match(source,/addEventListener\('click',onNativeFullscreenClick,\{capture:true\}\)/);
 });
 test('live-edge seeking only uses seekable end and rejects archived streams',async()=>{
   const id='abcdefghijk',video={currentTime:12,seekable:{length:1,start:()=>0,end:()=>7200}};
@@ -287,7 +272,7 @@ test('YouTube Trusted Types: static panels render with innerHTML prohibited',()=
 test('YouTube panel opens with no full-screen mouse blocker and closes cleanly',()=>{
   for(const touch of [false,true]){
     const ctx=vm.createContext({supported:()=>true,p:()=>({}),makePanel(){},
-      sheet:{hidden:true},backdrop:{hidden:true},touchZonesAllowed:()=>touch,desktopMountAllowed:()=>true,desktopVideoAnchor:()=>null,presentPanel(){},
+    sheet:{hidden:true,querySelector:()=>({})},hudPosition:()=> 'top-left',hudSize:()=>100,backdrop:{hidden:true},touchZonesAllowed:()=>touch,desktopMountAllowed:()=>true,desktopVideoAnchor:()=>null,presentPanel(){},
       bandwidth:{start(){},stop(){}},hudWantsSpeed:()=>false,
       refreshSheet(){},refreshQualityChoices(){}});
     const yt=source.slice(0,source.indexOf('  // Run a minimal, read-only stats bridge'));
@@ -442,14 +427,14 @@ test('HUD position setting persists and rejects invalid values',()=>{
     Event,GM_getValue:(key,fallback)=>store.has(key)?store.get(key):fallback,
     GM_setValue:(key,value)=>store.set(key,value),prompt:()=>null,alert(){}});
   vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES='),ctx);
-  assert.equal(ctx.hudPosition(),'top-left');
+  assert.equal(vm.runInContext('hudPosition()',ctx),'top-left');
   assert.equal(ctx.setHudPosition('bottom-right'),true);
-  assert.equal(ctx.hudPosition(),'bottom-right');
+  assert.equal(vm.runInContext('hudPosition()',ctx),'bottom-right');
   assert.deepEqual(events,['hmtc:corner-hud-position']);
   assert.equal(ctx.setHudPosition('middle'),false);
-  assert.equal(ctx.hudPosition(),'bottom-right');
+  assert.equal(vm.runInContext('hudPosition()',ctx),'bottom-right');
   store.set('hmtc_corner_hud_position_v1','invalid');
-  assert.equal(ctx.hudPosition(),'top-left');
+  assert.equal(vm.runInContext('hudPosition()',ctx),'top-left');
 });
 
 test('HUD size defaults to 100%, persists, clamps and dispatches live updates',()=>{

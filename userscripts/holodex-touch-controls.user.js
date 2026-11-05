@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.47
-// @description  修复多视图自动播放后快速手动暂停会被再次播放；区分用户暂停和自动播放拦截。
+// @version      0.6.48
+// @description  复用原生更多菜单进入网页全屏，明确触摸授权状态；保护快速手动暂停。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -23,8 +23,8 @@
 // @grant        GM_addValueChangeListener
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
-// @updateURL    https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js
-// @downloadURL  https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js
+// @updateURL    https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/feat/android-landscape-fullscreen-v0642/userscripts/holodex-touch-controls.user.js
+// @downloadURL  https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/feat/android-landscape-fullscreen-v0642/userscripts/holodex-touch-controls.user.js
 // ==/UserScript==
 
 (function HolodexTouchControls() {
@@ -2359,7 +2359,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.47', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.48', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
   const STATS_MODE_KEY='hmtc_stats_trigger_v1';
@@ -2376,8 +2376,8 @@
   GM_registerMenuCommand('暂停 Holodex Touch Controls',()=>{set(KEY,false);location.reload();});
   const isMulti=()=>/^\/multiview(?:\/|$)/.test(location.pathname);
   const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
-  // The Fullscreen API controls browser chrome. Keep its control in Holodex
-  // own header—not over videos. Android Back remains an alternate way to exit.
+  // Reuse the existing native More > Fullscreen item. No toolbar children or
+  // video overlays are inserted. Android Back remains an alternate exit.
   const FULLSCREEN_AUTO_KEY='hmtc_landscape_auto_fullscreen_v1';
   const isMobileFullscreenDevice=()=>{
     const ua=navigator.userAgent||'';
@@ -2387,59 +2387,81 @@
   };
   const landscapeNow=()=>innerWidth>innerHeight;
   const fullscreenAutoEnabled=()=>!!get(FULLSCREEN_AUTO_KEY,false);
-  let multiviewFullscreenButton=null;
   let autoFullscreenPending=isMulti()&&landscapeNow()&&fullscreenAutoEnabled();
   let autoFullscreenSuppressed=false,fullscreenRequestBusy=false,fullscreenWasOurs=false;
+  let fullscreenFeedback='';
   let lastFullscreenLandscape=landscapeNow(),lastFullscreenMulti=isMulti();
   // Do not inject controls into the framework-owned Holodex toolbar.
   // Do not place a substitute floating button over videos either.
   // Manual fullscreen stays available from the settings and script menu.
   function syncMultiviewFullscreenButton(){
     const button=document.querySelector?.('#hmtc-settings [data-action="landscapeFullscreen"]');
-    if(!button)return;
     const own=document.fullscreenElement===document.documentElement;
-    button.textContent=own?'退出网页全屏':'进入网页全屏';
-    button.setAttribute('aria-pressed',own?'true':'false');
+    if(button){
+      button.textContent=own?'退出网页全屏':'进入网页全屏';
+      button.setAttribute('aria-pressed',own?'true':'false');
+      button.disabled=fullscreenRequestBusy;
+    }
+    const checkbox=document.querySelector?.('#hmtc-settings [data-control="fullscreenAuto"]');
+    if(checkbox)checkbox.checked=fullscreenAutoEnabled();
+    const status=document.querySelector?.('#hmtc-settings [data-field="fullscreenState"]');
+    if(status)status.textContent=!isMulti()?'请先进入多视图页面':own?
+      '已进入网页全屏，可按安卓返回退出':fullscreenRequestBusy?'正在请求网页全屏…':
+      fullscreenFeedback||(autoFullscreenSuppressed?'已退出；本次横屏不再自动进入':
+      autoFullscreenPending?'横屏已准备：打开顶部 ⋮，轻点「全屏显示」':
+      fullscreenAutoEnabled()?'横屏准备已开启；旋转后仍需触摸全屏入口':
+      '横屏准备已关闭；横竖屏均可手动全屏');
+  }
+  function fullscreenFailed(error,silent){
+    fullscreenRequestBusy=false;
+    autoFullscreenPending=fullscreenAutoEnabled()&&!autoFullscreenSuppressed&&isMulti()&&landscapeNow();
+    fullscreenFeedback='未进入全屏：请在页面顶部 ⋮ 菜单轻点「全屏显示」，或点此处全屏按钮重试。浏览器可能限制了全屏。';
+    console.warn('[HMTC] 网页全屏失败',error);
+    syncMultiviewFullscreenButton();
+    if(!silent)alert(fullscreenFeedback);
   }
   function requestMultiviewFullscreen(silent=false){
     if(!isMulti()||!isMobileFullscreenDevice()||
        document.fullscreenElement||fullscreenRequestBusy)return false;
     const root=document.documentElement;
     if(typeof root.requestFullscreen!=='function'){
-      autoFullscreenPending=false;if(!silent)alert('浏览器不支持网页全屏。');
+      autoFullscreenPending=false;fullscreenFeedback='浏览器不支持网页全屏。';
+      syncMultiviewFullscreenButton();if(!silent)alert(fullscreenFeedback);
       return false;
     }
+    // A rotation, timer, RPC or userscript-manager command cannot create
+    // transient activation. Keep the actual request in the trusted click stack.
+    if(navigator.userActivation?.isActive===false){
+      fullscreenFailed('需要页面内的真实触摸',silent);return false;
+    }
     fullscreenRequestBusy=true;autoFullscreenPending=false;
+    fullscreenFeedback='';syncMultiviewFullscreenButton();
     try{
       const result=root.requestFullscreen({navigationUI:'hide'});
       Promise.resolve(result).then(()=>{
-        fullscreenRequestBusy=false;syncMultiviewFullscreenButton();
-      },error=>{
         fullscreenRequestBusy=false;
-        if(!silent){
-          console.warn('[HMTC] 网页全屏失败',error);
-          alert('网页全屏请求被浏览器拒绝：'+String(error?.message||error));
-        }else if(fullscreenAutoEnabled()&&!autoFullscreenSuppressed&&isMulti()&&landscapeNow())
-          autoFullscreenPending=true;
-        syncMultiviewFullscreenButton();
+        if(document.fullscreenElement===root){fullscreenFeedback='';syncMultiviewFullscreenButton();}
+        else fullscreenFailed('浏览器未确认全屏状态',silent);
+      },error=>{
+        fullscreenFailed(error,silent);
       });
       return true;
     }catch(error){
-      fullscreenRequestBusy=false;
-      if(!silent){
-        console.warn('[HMTC] 网页全屏异常',error);
-        alert('网页全屏不可用：'+String(error?.message||error));
-      }else if(fullscreenAutoEnabled()&&!autoFullscreenSuppressed&&isMulti()&&landscapeNow())
-        autoFullscreenPending=true;
+      fullscreenFailed(error,silent);
       return false;
     }
   }
   function toggleMultiviewFullscreen(){
     if(!isMulti())return;
     if(document.fullscreenElement===document.documentElement){
+      if(fullscreenRequestBusy)return;
       autoFullscreenPending=false;autoFullscreenSuppressed=true;
-      const result=document.exitFullscreen?.();
-      result?.catch?.(error=>console.warn('[HMTC] 退出全屏失败',error));
+      fullscreenFeedback='';fullscreenRequestBusy=true;syncMultiviewFullscreenButton();
+      try{
+        Promise.resolve(document.exitFullscreen()).then(()=>{
+          fullscreenRequestBusy=false;syncMultiviewFullscreenButton();
+        },error=>fullscreenFailed(error,false));
+      }catch(error){fullscreenFailed(error,false);}
       return;
     }
     if(document.fullscreenElement)return;
@@ -2447,22 +2469,25 @@
   }
   function setLandscapeAutoFullscreen(enabled,fromUserGesture=false){
     const next=!!enabled;set(FULLSCREEN_AUTO_KEY,next);
-    autoFullscreenSuppressed=false;
+    autoFullscreenSuppressed=false;fullscreenFeedback='';
     autoFullscreenPending=next&&landscapeNow()&&isMulti()&&!document.fullscreenElement;
-    if(autoFullscreenPending&&fromUserGesture)requestMultiviewFullscreen(true);
+    if(autoFullscreenPending&&fromUserGesture&&navigator.userActivation?.isActive===true)
+      requestMultiviewFullscreen(true);
+    syncMultiviewFullscreenButton();
     return next;
   }
   function reconcileLandscapeFullscreen(){
     const multi=isMulti(),landscape=landscapeNow();
     const changedToLandscape=landscape&&!lastFullscreenLandscape;
+    const changedToPortrait=!landscape&&lastFullscreenLandscape;
     const enteredMultiview=multi&&!lastFullscreenMulti;
-    if(!multi||!landscape){
+    const leftMultiview=!multi&&lastFullscreenMulti;
+    if(!multi||!landscape||!fullscreenAutoEnabled()){
       autoFullscreenPending=false;
-      if(!landscape)autoFullscreenSuppressed=false;
+      if(changedToPortrait||leftMultiview){autoFullscreenSuppressed=false;fullscreenFeedback='';}
     }else if((changedToLandscape||enteredMultiview)&&
       fullscreenAutoEnabled()&&!document.fullscreenElement){
-      autoFullscreenSuppressed=false;autoFullscreenPending=true;
-      if(navigator.userActivation?.isActive)requestMultiviewFullscreen(true);
+      autoFullscreenSuppressed=false;autoFullscreenPending=true;fullscreenFeedback='';
     }
     lastFullscreenLandscape=landscape;lastFullscreenMulti=multi;
     syncMultiviewFullscreenButton();
@@ -2473,21 +2498,26 @@
     else if(fullscreenWasOurs){
       autoFullscreenPending=false;autoFullscreenSuppressed=true;
     }
-    fullscreenWasOurs=own;syncMultiviewFullscreenButton();
+    fullscreenFeedback='';fullscreenWasOurs=own;syncMultiviewFullscreenButton();
   }
-  function onFullscreenAutoGesture(event){
-    if(!autoFullscreenPending||autoFullscreenSuppressed||!fullscreenAutoEnabled()||
-       !landscapeNow()||!isMulti()||document.fullscreenElement||fullscreenRequestBusy)return;
-    if(event.type==='pointerup'&&event.pointerType==='mouse')return;
-    // Never hijack taps on videos, the editor's resizers, native buttons,
-    // menus, links, inputs, or our own controls. The user can tap an empty
-    // Holodex page/header area to grant the browser's activation.
-    const busyTarget=event.target?.closest?.(
-      '.mv-frame,.mv-cell,.multiview [draggable],.hmtc-edge,'+
-      '#hmtc-settings,#hmtc-sheet,button,a,input,select,textarea,'+
-      '[role="button"],[role="menuitem"],[contenteditable="true"],.v-menu,.v-dialog');
-    if(busyTarget)return;
-    requestMultiviewFullscreen(true);
+  // Exact native fullscreen glyph observed on holodex.net/multiview, 2026-11-05.
+  // Match its semantic menu role + glyph, never translated text or child index.
+  const NATIVE_FULLSCREEN_PATH='M5,5H10V7H7V10H5V5M14,5H19V10H17V7H14V5M17,14H19V19H14V17H17V14M10,17V19H5V14H7V17H10Z';
+  const NATIVE_MORE_PATH='M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z';
+  function onNativeFullscreenClick(event){
+    if(!event.isTrusted||event.defaultPrevented||!isMulti()||!isMobileFullscreenDevice())return;
+    const item=event.target?.closest?.('.v-menu__content [role="menuitem"]');
+    if(!item||!Array.from(item.querySelectorAll('svg path')).some(p=>p.getAttribute('d')===NATIVE_FULLSCREEN_PATH))return;
+    if(typeof document.documentElement.requestFullscreen!=='function'||
+       (document.fullscreenElement&&document.fullscreenElement!==document.documentElement))return;
+    // Own only this native action to avoid the site's handler double-toggling.
+    // No awaiting, synthetic tap or timer may precede the fullscreen call.
+    event.preventDefault();event.stopImmediatePropagation();
+    toggleMultiviewFullscreen();
+    // Ask the native activator to close its own menu; Vue keeps DOM ownership.
+    const more=Array.from(document.querySelectorAll('.mv-toolbar button[aria-haspopup="true"]'))
+      .find(b=>Array.from(b.querySelectorAll('svg path')).some(p=>p.getAttribute('d')===NATIVE_MORE_PATH));
+    if(more?.getAttribute('aria-expanded')==='true')more.click();
   }
   let fullscreenListenersInstalled=false;
   function installMultiviewFullscreenButton(){
@@ -2498,8 +2528,7 @@
     window.addEventListener('popstate',reconcileLandscapeFullscreen,{passive:true});
     window.addEventListener('hashchange',reconcileLandscapeFullscreen,{passive:true});
     document.addEventListener('fullscreenchange',onMultiviewFullscreenChange);
-    document.addEventListener('pointerup',onFullscreenAutoGesture,{capture:true,passive:true});
-    document.addEventListener('click',onFullscreenAutoGesture,{capture:true,passive:true});
+    document.addEventListener('click',onNativeFullscreenClick,{capture:true});
   }
   const token='hmtc-'+(crypto.randomUUID?.()||String(Date.now())+Math.random());
   const clamp=n=>Math.max(0,Math.min(100,Math.round(Number(n)||0)));
@@ -3110,6 +3139,7 @@
             cancelPauseCandidate(track);
             track.playingSince=Date.now();
             track.everPlaying=true;
+            track.returned=false;
             track.blockedAt=0;
             // User pressed Play on a previously paused stream.
             unmarkManual(key);
@@ -3324,6 +3354,7 @@
           state===1?'正在播放':state===3?'正在缓冲':
           state===0?'播放已结束（不自动重播）':
           protectedPause?'受保护的手动暂停':
+          track?.pendingManualPause?'暂停保护中，等待播放器确认':
           track?.lastFailure||(
             state===-1&&track&&Date.now()-track.firstSeen<3200?
               '等待 YouTube 播放器完成初次加载':
@@ -3363,10 +3394,17 @@
 
     function autoConfigure(msg){
       const wasEnabled=autoCfg.enabled;
+      const wasRespectPause=autoCfg.respectPause;
       const muteJustEnabled=!autoCfg.muteFallback&&msg.muteFallback===true;
       agentBoot.lastRpcConfigAt=Date.now();
       for(const name of ['enabled','onReturn','respectPause','muteFallback'])
         if(typeof msg[name]==='boolean')autoCfg[name]=msg[name];
+      if(wasRespectPause&&!autoCfg.respectPause){
+        for(const [key,track] of attempts){
+          if(track.pendingManualPause||manualPauses.has(key))track.suppressed=false;
+          cancelPauseCandidate(track);
+        }
+      }
       agentBoot.lastRpcEnabled=autoCfg.enabled;
       if(!autoCfg.enabled){
         for(const track of attempts.values())restoreFirstPlay(track);
@@ -4270,9 +4308,10 @@
       '<div class="setting-summary">70%～180%，默认100%；数字、Mbps和独立背景同步缩放，立即生效。</div></div>',
       '<div class="setting"><label>沉浸全屏（横屏与竖屏）</label>',
       '<label class="hmtc-toggle"><input type="checkbox" data-control="fullscreenAuto">',
-      '<span>横屏自动全屏（下一次触摸自动尝试）</span></label>',
+      '<span>横屏全屏准备（仍需触摸入口）</span></label>',
       '<button type="button" data-action="landscapeFullscreen" style="width:100%;margin:6px 0">进入／退出网页全屏</button>',
-      '<div class="setting-summary">已移除不可靠的顶部工具栏注入和视频悬浮按钮。横竖屏均可在此进入全屏；横屏自动模式需要时请点顶部空白位置，不会拦截视频控件。</div></div>',
+      '<div class="setting-summary" data-field="fullscreenState" role="status" aria-live="polite"></div>',
+      '<div class="setting-summary">快捷入口：Holodex 顶部 ⋮ → 全屏显示，展开菜单后轻点一次即可请求。浏览器需要页面内真实触摸；旋转或刷新不会自行获得授权。横竖屏均可手动进入，安卓返回可退出。</div></div>',
       '<div class="setting"><label for="hmtc-stats-mode">打开统计的触控方式</label>',
       '<select id="hmtc-stats-mode" data-control="statsMode">',
       '<option value="tap">左侧轻点（默认）</option>',
@@ -4324,12 +4363,11 @@
     const fullscreenSettingsButton=settings.querySelector('[data-action="landscapeFullscreen"]');
     fullscreenSettingsButton.hidden=!isMobileFullscreenDevice();
     fullscreenSettingsButton.addEventListener('click',()=>{
-      closeSettings();toggleMultiviewFullscreen();
+      toggleMultiviewFullscreen();
     });
     settings.querySelector('[data-control="fullscreenAuto"]').addEventListener('change',e=>{
       const checked=setLandscapeAutoFullscreen(e.target.checked,true);
       e.target.checked=checked;
-      if(checked&&landscapeNow())closeSettings();
     });
     settings.querySelector('[data-control="statsMode"]').addEventListener('change',e=>{
       if(['tap','hold','both'].includes(e.target.value))set(STATS_MODE_KEY,e.target.value);
@@ -4364,6 +4402,7 @@
   }
   function openSettings(){
     makeSettings();
+    syncMultiviewFullscreenButton();
     settings.querySelector('[data-control="sensitivity"]').value=String(getSensitivity());
     settings.querySelector('[data-value="sensitivity"]').textContent=getSensitivity().toFixed(1)+'×';
     settings.querySelector('[data-control="statsMode"]').value=getStatsMode();
@@ -4870,11 +4909,11 @@
     GM_registerMenuCommand('多视图：全部直播追到最新',()=>jumpAllLiveStreams()
       .catch(error=>alert('追新失败：'+error.message)));
     GM_registerMenuCommand('手动进入／退出 Holodex 全屏',toggleMultiviewFullscreen);
-    GM_registerMenuCommand('横屏自动全屏：切换开关',()=>{
+    GM_registerMenuCommand('横屏全屏准备：切换开关',()=>{
       const next=setLandscapeAutoFullscreen(!fullscreenAutoEnabled(),false);
       alert(next?
-        '横屏自动全屏已开启。旋转横屏后，轻触 Holodex 顶部空白区域可完成浏览器授权；不会劫持视频和布局按钮。':
-        '横屏自动全屏已关闭。仍可用设置面板或油猴菜单手动全屏。');
+        '横屏全屏准备已开启。旋转后请打开 Holodex 顶部 ⋮ 菜单，轻点「全屏显示」。浏览器需要真实触摸，不保证无手势自动全屏。':
+        '横屏全屏准备已关闭。横竖屏仍可从 Holodex 顶部 ⋮ 菜单或触控设置手动全屏。');
     });
     setInterval(pollCornerHuds,2200);
     const clearOnRouteExit=()=>{
@@ -4947,8 +4986,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.47 说明',()=>
-      alert('v0.6.47：多视图自动播放后快速手动暂停将受保护，不再被重试逻辑反复恢复。'));
+    GM_registerMenuCommand('Touch Controls v0.6.48 说明',()=>
+      alert('v0.6.48：复用 Holodex 顶部 ⋮ 菜单的全屏显示；横竖屏均需真实触摸请求，横屏准备不会无手势强行进入。保留快速手动暂停保护。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
