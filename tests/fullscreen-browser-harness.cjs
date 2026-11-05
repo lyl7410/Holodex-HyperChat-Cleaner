@@ -19,7 +19,7 @@ main{padding:16px}.mv-frame{height:96px;border:1px solid #597c9d;display:grid;pl
 </style><div class="multiview"><header class="mv-toolbar"><button class="nav" aria-label="菜单">☰</button><div class="mv-toolbar-btn justify-start" style="flex:1;min-width:0"><button aria-label="添加视频" style="width:44px">⊞</button></div><div class="mv-toolbar-btn justify-end"><button aria-label="布局" style="color:#f06292">▦</button><button aria-label="添加布局" style="color:#4caf50">⊞</button><button aria-label="调整" style="color:#ff9800">☷</button><button aria-label="交换" style="color:#5c6bc0">⇵</button><button aria-label="链接">↗</button><button aria-label="更多" aria-haspopup="true" aria-expanded="false"><svg><path d="${paths[1]}"></path></svg></button><button aria-label="收起">⌃</button></div></header>
 <div class="v-menu__content" role="menu" hidden><div class="v-list"><div tabindex="0" role="menuitem" class="v-list-item"><svg><path d="${paths[0]}"></path></svg><span>全屏显示</span></div></div></div>
 <main><div class="mv-frame">视频区域占位（没有全屏悬浮入口）</div>
-<section id="hmtc-settings"><label><input type="checkbox" data-control="fullscreenAuto">横屏全屏准备（仍需触摸入口）</label><br>
+<section id="hmtc-settings"><label><input type="checkbox" data-control="fullscreenAuto">横屏自动尝试全屏／竖屏自动恢复</label><br>
 <button data-action="landscapeFullscreen">进入网页全屏</button><p data-field="fullscreenState" role="status"></p></section>
 <p>本页验证与工具栏同排的全屏图标和真实浏览器 API；不代表安卓 Vivaldi 实测。</p><pre id="evidence"></pre></main></div>
 <script>

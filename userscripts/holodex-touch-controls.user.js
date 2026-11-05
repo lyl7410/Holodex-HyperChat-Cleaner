@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.50
-// @description  手机全屏入口与原生工具栏图标并排，不增加顶部行；保留触摸全屏与快速暂停保护。
+// @version      0.6.51
+// @description  横屏自动尝试全屏、竖屏自动恢复；保留同排全屏图标、手动全屏与快速暂停保护。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -2359,7 +2359,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.50', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.51', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
   const STATS_MODE_KEY='hmtc_stats_trigger_v1';
@@ -2385,10 +2385,16 @@
       !window.matchMedia?.('(any-pointer:fine)')?.matches;
     return /Android|iPhone|iPad|iPod/i.test(ua)||touchOnly;
   };
-  const landscapeNow=()=>innerWidth>innerHeight;
+  const landscapeNow=()=>{
+    const orientation=window.screen?.orientation?.type;
+    if(/Android/i.test(navigator.userAgent||'')&&/^(landscape|portrait)-/.test(orientation||''))
+      return orientation.startsWith('landscape');
+    return innerWidth>innerHeight;
+  };
   const fullscreenAutoEnabled=()=>!!get(FULLSCREEN_AUTO_KEY,false);
   let autoFullscreenPending=isMulti()&&landscapeNow()&&fullscreenAutoEnabled();
   let autoFullscreenSuppressed=false,fullscreenRequestBusy=false,fullscreenWasOurs=false;
+  let landscapeFullscreenSession=false,portraitExitInProgress=false,portraitAutoRestored=false;
   let fullscreenFeedback='';
   let lastFullscreenLandscape=landscapeNow(),lastFullscreenMulti=isMulti();
   // Do not inject controls into the framework-owned Holodex toolbar.
@@ -2406,22 +2412,24 @@
     const checkbox=document.querySelector?.('#hmtc-settings [data-control="fullscreenAuto"]');
     if(checkbox)checkbox.checked=fullscreenAutoEnabled();
     const status=document.querySelector?.('#hmtc-settings [data-field="fullscreenState"]');
-    if(status)status.textContent=!isMulti()?'请先进入多视图页面':own?
+    if(status)status.textContent=!isMulti()?'请先进入多视图页面':fullscreenFeedback?fullscreenFeedback:own?
       '已进入网页全屏，可按安卓返回退出':fullscreenRequestBusy?'正在请求网页全屏…':
-      fullscreenFeedback||(autoFullscreenSuppressed?'已退出；本次横屏不再自动进入':
+      fullscreenFeedback||(portraitAutoRestored?'已恢复竖屏窗口模式':autoFullscreenSuppressed?'已退出；本次横屏不再自动进入':
       autoFullscreenPending?'横屏已准备：轻点工具栏全屏图标':
-      fullscreenAutoEnabled()?'横屏准备已开启；旋转后仍需触摸全屏入口':
-      '横屏准备已关闭；横竖屏均可手动全屏');
+      fullscreenAutoEnabled()?'横屏自动尝试已开启；浏览器拒绝时需点一下，回竖屏自动恢复':
+      '横屏自动尝试已关闭；横竖屏均可手动全屏');
   }
-  function fullscreenFailed(error,silent){
+  function fullscreenFailed(error,silent,exiting=false){
     fullscreenRequestBusy=false;
-    autoFullscreenPending=fullscreenAutoEnabled()&&!autoFullscreenSuppressed&&isMulti()&&landscapeNow();
-    fullscreenFeedback='未进入全屏：请轻点工具栏全屏图标重试。浏览器需要真实触摸，也可能限制了全屏。';
+    portraitExitInProgress=false;
+    autoFullscreenPending=fullscreenAutoEnabled()&&!autoFullscreenSuppressed&&isMulti()&&landscapeNow()&&!document.fullscreenElement;
+    fullscreenFeedback=exiting?'未能退出全屏，请点击工具栏全屏图标或按安卓返回。':
+      '未进入全屏：请轻点工具栏全屏图标重试。浏览器需要真实触摸，也可能限制了全屏。';
     console.warn('[HMTC] 网页全屏失败',error);
     syncMultiviewFullscreenButton();
     if(!silent)alert(fullscreenFeedback);
   }
-  function requestMultiviewFullscreen(silent=false){
+  function requestMultiviewFullscreen(silent=false,automatic=false){
     if(!isMulti()||!isMobileFullscreenDevice()||
        document.fullscreenElement||fullscreenRequestBusy)return false;
     const root=document.documentElement;
@@ -2430,18 +2438,20 @@
       syncMultiviewFullscreenButton();if(!silent)alert(fullscreenFeedback);
       return false;
     }
-    // A rotation, timer, RPC or userscript-manager command cannot create
-    // transient activation. Keep the actual request in the trusted click stack.
-    if(navigator.userActivation?.isActive===false){
+    // Manual actions require in-page activation. A bounded orientation attempt
+    // may ask the browser directly, but cannot manufacture activation.
+    if(!automatic&&navigator.userActivation?.isActive===false){
       fullscreenFailed('需要页面内的真实触摸',silent);return false;
     }
     fullscreenRequestBusy=true;autoFullscreenPending=false;
+    portraitAutoRestored=false;
+    landscapeFullscreenSession=fullscreenAutoEnabled()&&landscapeNow();
     fullscreenFeedback='';syncMultiviewFullscreenButton();
     try{
       const result=root.requestFullscreen({navigationUI:'hide'});
       Promise.resolve(result).then(()=>{
         fullscreenRequestBusy=false;
-        if(document.fullscreenElement===root){fullscreenFeedback='';syncMultiviewFullscreenButton();}
+        if(document.fullscreenElement===root){fullscreenFeedback='';reconcileLandscapeFullscreen();}
         else fullscreenFailed('浏览器未确认全屏状态',silent);
       },error=>{
         fullscreenFailed(error,silent);
@@ -2452,17 +2462,21 @@
       return false;
     }
   }
+  function exitMultiviewFullscreen(automatic=false){
+    if(fullscreenRequestBusy||document.fullscreenElement!==document.documentElement)return;
+    autoFullscreenPending=false;autoFullscreenSuppressed=!automatic;
+    portraitExitInProgress=automatic;landscapeFullscreenSession=false;
+    fullscreenFeedback='';fullscreenRequestBusy=true;syncMultiviewFullscreenButton();
+    try{
+      Promise.resolve(document.exitFullscreen()).then(()=>{
+        fullscreenRequestBusy=false;syncMultiviewFullscreenButton();
+      },error=>fullscreenFailed(error,automatic,true));
+    }catch(error){fullscreenFailed(error,automatic,true);}
+  }
   function toggleMultiviewFullscreen(){
     if(!isMulti())return;
     if(document.fullscreenElement===document.documentElement){
-      if(fullscreenRequestBusy)return;
-      autoFullscreenPending=false;autoFullscreenSuppressed=true;
-      fullscreenFeedback='';fullscreenRequestBusy=true;syncMultiviewFullscreenButton();
-      try{
-        Promise.resolve(document.exitFullscreen()).then(()=>{
-          fullscreenRequestBusy=false;syncMultiviewFullscreenButton();
-        },error=>fullscreenFailed(error,false));
-      }catch(error){fullscreenFailed(error,false);}
+      exitMultiviewFullscreen(false);
       return;
     }
     if(document.fullscreenElement)return;
@@ -2470,7 +2484,8 @@
   }
   function setLandscapeAutoFullscreen(enabled,fromUserGesture=false){
     const next=!!enabled;set(FULLSCREEN_AUTO_KEY,next);
-    autoFullscreenSuppressed=false;fullscreenFeedback='';
+    landscapeFullscreenSession=next&&landscapeNow()&&document.fullscreenElement===document.documentElement;
+    autoFullscreenSuppressed=false;fullscreenFeedback='';portraitAutoRestored=false;
     autoFullscreenPending=next&&landscapeNow()&&isMulti()&&!document.fullscreenElement;
     if(autoFullscreenPending&&fromUserGesture&&navigator.userActivation?.isActive===true)
       requestMultiviewFullscreen(true);
@@ -2483,23 +2498,38 @@
     const changedToPortrait=!landscape&&lastFullscreenLandscape;
     const enteredMultiview=multi&&!lastFullscreenMulti;
     const leftMultiview=!multi&&lastFullscreenMulti;
+    if(changedToLandscape||leftMultiview)portraitAutoRestored=false;
+    let attempt=false;
+    if(!multi||!fullscreenAutoEnabled())landscapeFullscreenSession=false;
     if(!multi||!landscape||!fullscreenAutoEnabled()){
       autoFullscreenPending=false;
       if(changedToPortrait||leftMultiview){autoFullscreenSuppressed=false;fullscreenFeedback='';}
     }else if((changedToLandscape||enteredMultiview)&&
       fullscreenAutoEnabled()&&!document.fullscreenElement){
       autoFullscreenSuppressed=false;autoFullscreenPending=true;fullscreenFeedback='';
+      attempt=changedToLandscape;
     }
     lastFullscreenLandscape=landscape;lastFullscreenMulti=multi;
+    // One best-effort call per portrait->landscape transition. The browser,
+    // not this script, decides whether activation is sufficient. Never retry
+    // from the polling timer or hijack an unrelated touch after rejection.
+    if(attempt)requestMultiviewFullscreen(true,true);
+    if(multi&&!landscape&&fullscreenAutoEnabled()&&landscapeFullscreenSession&&
+       document.fullscreenElement===document.documentElement&&!fullscreenRequestBusy)
+      exitMultiviewFullscreen(true);
     syncMultiviewFullscreenButton();
   }
   function onMultiviewFullscreenChange(){
     const own=document.fullscreenElement===document.documentElement;
     if(own)autoFullscreenPending=false;
     else if(fullscreenWasOurs){
-      autoFullscreenPending=false;autoFullscreenSuppressed=true;
+      autoFullscreenPending=false;autoFullscreenSuppressed=!portraitExitInProgress;
+      landscapeFullscreenSession=false;
     }
-    fullscreenFeedback='';fullscreenWasOurs=own;syncMultiviewFullscreenButton();
+    portraitAutoRestored=!own&&portraitExitInProgress;
+    fullscreenFeedback='';
+    if(!own)portraitExitInProgress=false;
+    fullscreenWasOurs=own;syncMultiviewFullscreenButton();
   }
   // Exact native fullscreen glyph observed on holodex.net/multiview, 2026-11-05.
   // Match its semantic menu role + glyph, never translated text or child index.
@@ -2579,6 +2609,7 @@
     fullscreenListenersInstalled=true;
     window.addEventListener('resize',reconcileLandscapeFullscreen,{passive:true});
     window.addEventListener('orientationchange',reconcileLandscapeFullscreen,{passive:true});
+    window.screen?.orientation?.addEventListener?.('change',reconcileLandscapeFullscreen);
     window.addEventListener('popstate',reconcileLandscapeFullscreen,{passive:true});
     window.addEventListener('hashchange',reconcileLandscapeFullscreen,{passive:true});
     window.addEventListener('scroll',syncFullscreenShortcut,{capture:true,passive:true});
@@ -4364,10 +4395,10 @@
       '<div class="setting-summary">70%～180%，默认100%；数字、Mbps和独立背景同步缩放，立即生效。</div></div>',
       '<div class="setting"><label>沉浸全屏（横屏与竖屏）</label>',
       '<label class="hmtc-toggle"><input type="checkbox" data-control="fullscreenAuto">',
-      '<span>横屏全屏准备（仍需触摸入口）</span></label>',
+      '<span>横屏自动尝试全屏／竖屏自动恢复</span></label>',
       '<button type="button" data-action="landscapeFullscreen" style="width:100%;margin:6px 0">进入／退出网页全屏</button>',
       '<div class="setting-summary" data-field="fullscreenState" role="status" aria-live="polite"></div>',
-      '<div class="setting-summary">快捷入口：工具栏粉色布局图标前的全屏图标，与原图标同排，不增加顶部行。横屏或刷新仍需真实触摸，安卓返回可退出。</div></div>',
+      '<div class="setting-summary">开启后，转横屏自动请求一次；若浏览器拒绝，请点全屏图标。横屏进入的网页全屏转竖屏自动退出；竖屏手动全屏保留。刷新不强制全屏，安卓返回可退出。</div></div>',
       '<div class="setting"><label for="hmtc-stats-mode">打开统计的触控方式</label>',
       '<select id="hmtc-stats-mode" data-control="statsMode">',
       '<option value="tap">左侧轻点（默认）</option>',
@@ -4965,11 +4996,11 @@
     GM_registerMenuCommand('多视图：全部直播追到最新',()=>jumpAllLiveStreams()
       .catch(error=>alert('追新失败：'+error.message)));
     GM_registerMenuCommand('手动进入／退出 Holodex 全屏',toggleMultiviewFullscreen);
-    GM_registerMenuCommand('横屏全屏准备：切换开关',()=>{
+    GM_registerMenuCommand('横屏自动尝试／竖屏恢复：切换开关',()=>{
       const next=setLandscapeAutoFullscreen(!fullscreenAutoEnabled(),false);
       alert(next?
-        '横屏全屏准备已开启。旋转后轻点工具栏全屏图标。浏览器需要真实触摸，不保证无手势自动全屏。':
-        '横屏全屏准备已关闭。横竖屏仍可从工具栏全屏图标或触控设置手动全屏。');
+        '已开启横屏自动尝试、竖屏自动恢复。转横屏请求一次；若浏览器拒绝，点全屏图标即可。竖屏手动全屏保留，不保证无手势自动进入。':
+        '横屏自动尝试及竖屏恢复已关闭。仍可从工具栏全屏图标或触控设置手动全屏。');
     });
     setInterval(pollCornerHuds,2200);
     const clearOnRouteExit=()=>{
@@ -5042,8 +5073,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.50 说明',()=>
-      alert('v0.6.50：撤回独立顶栏，全屏图标与原工具栏图标并排、位于粉色布局图标前，不增加顶部行。横屏仍需真实触摸。'));
+    GM_registerMenuCommand('Touch Controls v0.6.51 说明',()=>
+      alert('v0.6.51：可开启横屏自动尝试、竖屏自动恢复；浏览器拒绝自动进入时保留一触全屏。竖屏手动全屏和同排图标保留。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();

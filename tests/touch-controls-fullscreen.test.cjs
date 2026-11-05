@@ -54,14 +54,70 @@ test('untrusted, unrelated, already-handled and desktop clicks pass through unto
   }
   const h=harness({mobile:false});assert.equal(h.click().stopped,undefined);assert.equal(h.calls.length,0);
 });
-test('reload and rotation only arm the saved setting; no arbitrary user gesture is consumed',()=>{
+test('reload does not force fullscreen; one permitted request per landscape transition',async()=>{
   const h=harness({enabled:true,landscape:true});assert.equal(h.ctx.state().pending,true);
   assert.match(h.status.textContent,/横屏已准备/);assert.equal(h.calls.length,0);
   assert.equal(h.listeners.has('doc:pointerup'),false);
   h.ctx.innerWidth=430;h.ctx.innerHeight=900;h.ctx.reconcileLandscapeFullscreen();
   assert.equal(h.ctx.state().pending,false);
   h.ctx.innerWidth=900;h.ctx.innerHeight=430;h.ctx.reconcileLandscapeFullscreen();
-  assert.equal(h.ctx.state().pending,true);assert.equal(h.calls.length,0);
+  assert.equal(h.ctx.state().pending,false);assert.equal(h.calls.length,1);await settle();
+  h.ctx.reconcileLandscapeFullscreen();assert.equal(h.calls.length,1);
+});
+test('automatic landscape rejection is silent and does not cause polling retries',async()=>{
+  const h=harness({enabled:true,activation:false,mode:'reject'});
+  h.ctx.innerWidth=900;h.ctx.innerHeight=430;h.ctx.reconcileLandscapeFullscreen();await settle();
+  assert.deepEqual(h.calls,['enter']);assert.equal(h.alerts.length,0);
+  assert.equal(h.ctx.state().pending,true);assert.match(h.status.textContent,/未进入全屏/);
+  for(let i=0;i<10;i++)h.ctx.reconcileLandscapeFullscreen();assert.equal(h.calls.length,1);
+});
+test('landscape session automatically exits in portrait without user activation',async()=>{
+  const h=harness({enabled:true});h.ctx.innerWidth=900;h.ctx.innerHeight=430;
+  h.ctx.reconcileLandscapeFullscreen();await settle();assert.equal(h.doc.fullscreenElement,h.doc.documentElement);
+  h.ctx.navigator.userActivation.isActive=false;h.ctx.innerWidth=430;h.ctx.innerHeight=900;
+  h.ctx.reconcileLandscapeFullscreen();await settle();assert.deepEqual(h.calls,['enter','exit']);
+  assert.equal(h.doc.fullscreenElement,null);assert.equal(h.ctx.state().suppressed,false);
+  assert.match(h.status.textContent,/已恢复竖屏/);assert.equal(h.button.textContent,'进入网页全屏');
+  h.ctx.reconcileLandscapeFullscreen();assert.equal(h.calls.length,2);
+});
+test('portrait manual fullscreen and auto-off landscape manual fullscreen are retained',async()=>{
+  const portrait=harness({enabled:true});portrait.click();await settle();portrait.ctx.reconcileLandscapeFullscreen();
+  assert.equal(portrait.doc.fullscreenElement,portrait.doc.documentElement);
+  const off=harness({landscape:true});off.click();await settle();
+  off.ctx.innerWidth=430;off.ctx.innerHeight=900;off.ctx.reconcileLandscapeFullscreen();
+  assert.deepEqual(off.calls,['enter']);
+});
+test('automatic exit rejection reports recovery guidance without alerts or polling retries',async()=>{
+  const h=harness({enabled:true,landscape:true});h.click();await settle();
+  h.doc.exitFullscreen=()=>{h.calls.push('exit');return Promise.reject(Error('exit denied'));};
+  h.ctx.innerWidth=430;h.ctx.innerHeight=900;h.ctx.reconcileLandscapeFullscreen();await settle();
+  assert.match(h.status.textContent,/未能退出全屏/);assert.equal(h.alerts.length,0);
+  for(let i=0;i<5;i++)h.ctx.reconcileLandscapeFullscreen();assert.deepEqual(h.calls,['enter','exit']);
+});
+test('manual fallback in landscape joins portrait recovery; foreign fullscreen never does',async()=>{
+  const h=harness({enabled:true,landscape:true});h.click();await settle();
+  h.ctx.innerWidth=430;h.ctx.innerHeight=900;h.ctx.reconcileLandscapeFullscreen();await settle();
+  assert.deepEqual(h.calls,['enter','exit']);
+  const other=harness({enabled:true,landscape:true});other.doc.fullscreenElement={};
+  other.ctx.innerWidth=430;other.ctx.innerHeight=900;other.ctx.reconcileLandscapeFullscreen();
+  assert.equal(other.calls.length,0);
+});
+test('rotation to portrait during an unresolved enter request exits once entry completes',async()=>{
+  const h=harness({enabled:true});let resolveEnter;
+  h.doc.documentElement.requestFullscreen=()=>{h.calls.push('enter');return new Promise(r=>{resolveEnter=r;});};
+  h.ctx.innerWidth=900;h.ctx.innerHeight=430;h.ctx.reconcileLandscapeFullscreen();
+  h.ctx.innerWidth=430;h.ctx.innerHeight=900;h.ctx.reconcileLandscapeFullscreen();
+  h.doc.fullscreenElement=h.doc.documentElement;h.listeners.get('doc:fullscreenchange')();resolveEnter();await settle();
+  assert.deepEqual(h.calls,['enter','exit']);assert.equal(h.doc.fullscreenElement,null);
+});
+test('Android screen orientation takes precedence over viewport changes caused by browser chrome',async()=>{
+  const h=harness({enabled:true});h.ctx.window.screen={orientation:{type:'portrait-primary'}};
+  h.ctx.innerWidth=900;h.ctx.innerHeight=430;h.ctx.reconcileLandscapeFullscreen();assert.equal(h.calls.length,0);
+  h.ctx.window.screen.orientation.type='landscape-primary';h.ctx.reconcileLandscapeFullscreen();await settle();
+  assert.equal(h.doc.fullscreenElement,h.doc.documentElement);
+  h.ctx.innerWidth=430;h.ctx.innerHeight=900;h.ctx.reconcileLandscapeFullscreen();assert.equal(h.calls.length,1);
+  h.ctx.window.screen.orientation.type='portrait-primary';h.ctx.reconcileLandscapeFullscreen();await settle();
+  assert.deepEqual(h.calls,['enter','exit']);
 });
 test('no activation, rejected, thrown and unconfirmed requests show retry guidance, never success',async()=>{
   for(const options of [{activation:false},{mode:'reject'},{mode:'throw'},{mode:'unconfirmed'}]){
@@ -90,7 +146,7 @@ test('duplicate clicks are bounded; Android Back suppresses re-entry until a fre
   assert.equal(h.ctx.state().pending,false);assert.match(h.status.textContent,/已退出/);
   h.ctx.innerWidth=430;h.ctx.innerHeight=900;h.ctx.reconcileLandscapeFullscreen();
   h.ctx.innerWidth=900;h.ctx.innerHeight=430;h.ctx.reconcileLandscapeFullscreen();
-  assert.equal(h.ctx.state().pending,true);assert.equal(h.calls.length,1);
+  assert.equal(h.ctx.state().pending,false);assert.equal(h.calls.length,2);
 });
 test('off, route exit and failed in-flight requests cannot leave the auto setting armed incorrectly',async()=>{
   const h=harness({enabled:true,landscape:true,mode:'reject'});h.click();
@@ -133,5 +189,5 @@ test('body-owned shortcut shares the native row without adding top space and hid
 });
 test('fullscreen module never writes Vue state or replaces native toolbar children',()=>{
   assert.doesNotMatch(source.slice(start,end),/innerHTML|\.remove\(|__vue__|toolbar\.appendChild/);
-  assert.match(source,/仍需触摸入口/);
+  assert.match(source,/横屏自动尝试全屏／竖屏自动恢复/);
 });
