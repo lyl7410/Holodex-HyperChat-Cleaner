@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.41
-// @description  清理 Holodex 旧视频与右键诊断菜单，保留自动播放诊断、快捷统计与 TrustedHTML 兼容。
+// @version      0.6.51
+// @description  横屏自动尝试全屏、竖屏自动恢复；保留同排全屏图标、手动全屏与快速暂停保护。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -23,8 +23,8 @@
 // @grant        GM_addValueChangeListener
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
-// @updateURL    https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js
-// @downloadURL  https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js
+// @updateURL    https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/feat/android-landscape-fullscreen-v0642/userscripts/holodex-touch-controls.user.js
+// @downloadURL  https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/feat/android-landscape-fullscreen-v0642/userscripts/holodex-touch-controls.user.js
 // ==/UserScript==
 
 (function HolodexTouchControls() {
@@ -906,7 +906,43 @@
         message:menu.submenu?'已展开真实 YouTube 画质选项，请选择清晰度':
           '已打开 YouTube 设置，请选择画质 / Quality'};
     }
-    return {snapshot,setRate,qualityOptions,setQuality,openQualityMenu,video,getPlayer};
+    // Only seek live streams, using the end of their seekable range rather than
+    // video.duration, which can describe a sliding DVR window.
+    async function goLive(statusHint,expectedVideoId){
+      const p=getPlayer(),v=video();
+      if(!p||!v)throw Error('YouTube 播放器尚未就绪');
+      let id='';try{id=String(p.getVideoData?.()?.video_id||'');}catch{}
+      if(expectedVideoId&&id&&expectedVideoId!==id)
+        throw Error('播放器正在切换视频，已取消追新');
+      const live=resolvePlaybackState(
+        youtubeWatchLiveState(pageDoc,getPlayer,video,pageDoc.defaultView),statusHint).live;
+      if(live!==true)throw Error(live===false?
+        '当前为录像，不支持追到最新直播':'尚未确认当前视频正在直播');
+      let start=NaN,end=NaN;
+      try{
+        const ranges=v.seekable;
+        if(ranges?.length){const i=ranges.length-1;
+          start=Number(ranges.start(i));end=Number(ranges.end(i));}
+      }catch{}
+      if(!Number.isFinite(end)||end<=0){
+        const badge=p.querySelector?.('.ytp-live-badge');
+        if(typeof badge?.click!=='function')throw Error('当前直播没有可定位的进度范围');
+        badge.click();
+        return {requested:true,confirmed:false,method:'live-badge',
+          message:'已请求 YouTube LIVE 按钮，未能确认最终位置'};
+      }
+      const target=Math.max(Number.isFinite(start)?start:0,end-1.5);
+      if(!Number.isFinite(target)||target<0)throw Error('直播进度范围异常');
+      if(typeof p.seekTo==='function')p.seekTo(target,true);
+      else v.currentTime=target;
+      await new Promise(resolve=>setTimeout(resolve,220));
+      const after=Number(v.currentTime);
+      const confirmed=Number.isFinite(after)&&Math.abs(after-target)<=8;
+      return {requested:true,confirmed,method:'seekable-edge',target,
+        message:confirmed?'已追到最新可用直播进度':
+          '已请求追到最新直播进度，等待播放器确认'};
+    }
+    return {snapshot,setRate,qualityOptions,setQuality,openQualityMenu,goLive,video,getPlayer};
   }
 
 
@@ -1192,6 +1228,18 @@
   function renderMediaKind(panel,state){
     const badge=panel?.querySelector('[data-hmtc-media-kind]');
     if(!badge)return;
+    // Holodex reuses its existing red LIVE label as the jump control.
+    // The YouTube watch-panel badge remains a noninteractive span.
+    const goLiveButton=panel?.querySelector('[data-action="goLive"]');
+    if(goLiveButton){
+      const isLive=state?.live===true;
+      goLiveButton.disabled=!isLive||goLiveButton.dataset.pending==='1';
+      const hint=isLive?'直播中，点击追到最新直播进度':
+        state?.live===false?'当前为录像，不能追新':'尚未确认直播状态，不能追新';
+      goLiveButton.title=hint;
+      goLiveButton.setAttribute('aria-label',hint);
+      goLiveButton.setAttribute('aria-disabled',goLiveButton.disabled?'true':'false');
+    }
     badge.textContent=playbackKindLabel(state);
     badge.dataset.kind=state?.live===true?'live':state?.live===false?'vod':'unknown';
     const compact=!!panel._hmtcCompact;
@@ -2279,7 +2327,7 @@
         catch(err){respond({ok:false,error:String(err?.message||err).slice(0,120)});}
         return;
       }
-      if(['playbackClock','playbackInfo','playbackRate','qualityMenu','qualityOptions','selectQuality'].includes(message.action)){
+      if(['playbackClock','playbackInfo','playbackRate','qualityMenu','qualityOptions','selectQuality','goLive'].includes(message.action)){
         try{
           if(!player())throw Error('YouTube 播放器尚未就绪');
           let info;
@@ -2290,6 +2338,7 @@
           if(message.action==='qualityMenu')info=await controls.openQualityMenu();
           if(message.action==='qualityOptions')info=await controls.qualityOptions();
           if(message.action==='selectQuality')info=await controls.setQuality(message.quality);
+          if(message.action==='goLive')info=await controls.goLive(message.status,videoId);
           respond({ok:true,data:info});
         }catch(error){
           respond({ok:false,error:String(error?.message||error).slice(0,150)});
@@ -2310,7 +2359,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.41', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.51', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
   const STATS_MODE_KEY='hmtc_stats_trigger_v1';
@@ -2327,6 +2376,247 @@
   GM_registerMenuCommand('暂停 Holodex Touch Controls',()=>{set(KEY,false);location.reload();});
   const isMulti=()=>/^\/multiview(?:\/|$)/.test(location.pathname);
   const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
+  // Body-owned mobile shortcut occupies a reserved slot beside native icons.
+  // The native More > Fullscreen handler remains a fallback. Android Back exits.
+  const FULLSCREEN_AUTO_KEY='hmtc_landscape_auto_fullscreen_v1';
+  const isMobileFullscreenDevice=()=>{
+    const ua=navigator.userAgent||'';
+    const touchOnly=!!window.matchMedia?.('(pointer:coarse)')?.matches&&
+      !window.matchMedia?.('(any-pointer:fine)')?.matches;
+    return /Android|iPhone|iPad|iPod/i.test(ua)||touchOnly;
+  };
+  const landscapeNow=()=>{
+    const orientation=window.screen?.orientation?.type;
+    if(/Android/i.test(navigator.userAgent||'')&&/^(landscape|portrait)-/.test(orientation||''))
+      return orientation.startsWith('landscape');
+    return innerWidth>innerHeight;
+  };
+  const fullscreenAutoEnabled=()=>!!get(FULLSCREEN_AUTO_KEY,false);
+  let autoFullscreenPending=isMulti()&&landscapeNow()&&fullscreenAutoEnabled();
+  let autoFullscreenSuppressed=false,fullscreenRequestBusy=false,fullscreenWasOurs=false;
+  let landscapeFullscreenSession=false,portraitExitInProgress=false,portraitAutoRestored=false;
+  let fullscreenFeedback='';
+  let lastFullscreenLandscape=landscapeNow(),lastFullscreenMulti=isMulti();
+  // Do not inject controls into the framework-owned Holodex toolbar.
+  // Do not place a substitute floating button over videos either.
+  // Manual fullscreen stays available from the settings and script menu.
+  function syncMultiviewFullscreenButton(){
+    syncFullscreenShortcut();
+    const button=document.querySelector?.('#hmtc-settings [data-action="landscapeFullscreen"]');
+    const own=document.fullscreenElement===document.documentElement;
+    if(button){
+      button.textContent=own?'退出网页全屏':'进入网页全屏';
+      button.setAttribute('aria-pressed',own?'true':'false');
+      button.disabled=fullscreenRequestBusy;
+    }
+    const checkbox=document.querySelector?.('#hmtc-settings [data-control="fullscreenAuto"]');
+    if(checkbox)checkbox.checked=fullscreenAutoEnabled();
+    const status=document.querySelector?.('#hmtc-settings [data-field="fullscreenState"]');
+    if(status)status.textContent=!isMulti()?'请先进入多视图页面':fullscreenFeedback?fullscreenFeedback:own?
+      '已进入网页全屏，可按安卓返回退出':fullscreenRequestBusy?'正在请求网页全屏…':
+      fullscreenFeedback||(portraitAutoRestored?'已恢复竖屏窗口模式':autoFullscreenSuppressed?'已退出；本次横屏不再自动进入':
+      autoFullscreenPending?'横屏已准备：轻点工具栏全屏图标':
+      fullscreenAutoEnabled()?'横屏自动尝试已开启；浏览器拒绝时需点一下，回竖屏自动恢复':
+      '横屏自动尝试已关闭；横竖屏均可手动全屏');
+  }
+  function fullscreenFailed(error,silent,exiting=false){
+    fullscreenRequestBusy=false;
+    portraitExitInProgress=false;
+    autoFullscreenPending=fullscreenAutoEnabled()&&!autoFullscreenSuppressed&&isMulti()&&landscapeNow()&&!document.fullscreenElement;
+    fullscreenFeedback=exiting?'未能退出全屏，请点击工具栏全屏图标或按安卓返回。':
+      '未进入全屏：请轻点工具栏全屏图标重试。浏览器需要真实触摸，也可能限制了全屏。';
+    console.warn('[HMTC] 网页全屏失败',error);
+    syncMultiviewFullscreenButton();
+    if(!silent)alert(fullscreenFeedback);
+  }
+  function requestMultiviewFullscreen(silent=false,automatic=false){
+    if(!isMulti()||!isMobileFullscreenDevice()||
+       document.fullscreenElement||fullscreenRequestBusy)return false;
+    const root=document.documentElement;
+    if(typeof root.requestFullscreen!=='function'){
+      autoFullscreenPending=false;fullscreenFeedback='浏览器不支持网页全屏。';
+      syncMultiviewFullscreenButton();if(!silent)alert(fullscreenFeedback);
+      return false;
+    }
+    // Manual actions require in-page activation. A bounded orientation attempt
+    // may ask the browser directly, but cannot manufacture activation.
+    if(!automatic&&navigator.userActivation?.isActive===false){
+      fullscreenFailed('需要页面内的真实触摸',silent);return false;
+    }
+    fullscreenRequestBusy=true;autoFullscreenPending=false;
+    portraitAutoRestored=false;
+    landscapeFullscreenSession=fullscreenAutoEnabled()&&landscapeNow();
+    fullscreenFeedback='';syncMultiviewFullscreenButton();
+    try{
+      const result=root.requestFullscreen({navigationUI:'hide'});
+      Promise.resolve(result).then(()=>{
+        fullscreenRequestBusy=false;
+        if(document.fullscreenElement===root){fullscreenFeedback='';reconcileLandscapeFullscreen();}
+        else fullscreenFailed('浏览器未确认全屏状态',silent);
+      },error=>{
+        fullscreenFailed(error,silent);
+      });
+      return true;
+    }catch(error){
+      fullscreenFailed(error,silent);
+      return false;
+    }
+  }
+  function exitMultiviewFullscreen(automatic=false){
+    if(fullscreenRequestBusy||document.fullscreenElement!==document.documentElement)return;
+    autoFullscreenPending=false;autoFullscreenSuppressed=!automatic;
+    portraitExitInProgress=automatic;landscapeFullscreenSession=false;
+    fullscreenFeedback='';fullscreenRequestBusy=true;syncMultiviewFullscreenButton();
+    try{
+      Promise.resolve(document.exitFullscreen()).then(()=>{
+        fullscreenRequestBusy=false;syncMultiviewFullscreenButton();
+      },error=>fullscreenFailed(error,automatic,true));
+    }catch(error){fullscreenFailed(error,automatic,true);}
+  }
+  function toggleMultiviewFullscreen(){
+    if(!isMulti())return;
+    if(document.fullscreenElement===document.documentElement){
+      exitMultiviewFullscreen(false);
+      return;
+    }
+    if(document.fullscreenElement)return;
+    autoFullscreenPending=false;requestMultiviewFullscreen(false);
+  }
+  function setLandscapeAutoFullscreen(enabled,fromUserGesture=false){
+    const next=!!enabled;set(FULLSCREEN_AUTO_KEY,next);
+    landscapeFullscreenSession=next&&landscapeNow()&&document.fullscreenElement===document.documentElement;
+    autoFullscreenSuppressed=false;fullscreenFeedback='';portraitAutoRestored=false;
+    autoFullscreenPending=next&&landscapeNow()&&isMulti()&&!document.fullscreenElement;
+    if(autoFullscreenPending&&fromUserGesture&&navigator.userActivation?.isActive===true)
+      requestMultiviewFullscreen(true);
+    syncMultiviewFullscreenButton();
+    return next;
+  }
+  function reconcileLandscapeFullscreen(){
+    const multi=isMulti(),landscape=landscapeNow();
+    const changedToLandscape=landscape&&!lastFullscreenLandscape;
+    const changedToPortrait=!landscape&&lastFullscreenLandscape;
+    const enteredMultiview=multi&&!lastFullscreenMulti;
+    const leftMultiview=!multi&&lastFullscreenMulti;
+    if(changedToLandscape||leftMultiview)portraitAutoRestored=false;
+    let attempt=false;
+    if(!multi||!fullscreenAutoEnabled())landscapeFullscreenSession=false;
+    if(!multi||!landscape||!fullscreenAutoEnabled()){
+      autoFullscreenPending=false;
+      if(changedToPortrait||leftMultiview){autoFullscreenSuppressed=false;fullscreenFeedback='';}
+    }else if((changedToLandscape||enteredMultiview)&&
+      fullscreenAutoEnabled()&&!document.fullscreenElement){
+      autoFullscreenSuppressed=false;autoFullscreenPending=true;fullscreenFeedback='';
+      attempt=changedToLandscape;
+    }
+    lastFullscreenLandscape=landscape;lastFullscreenMulti=multi;
+    // One best-effort call per portrait->landscape transition. The browser,
+    // not this script, decides whether activation is sufficient. Never retry
+    // from the polling timer or hijack an unrelated touch after rejection.
+    if(attempt)requestMultiviewFullscreen(true,true);
+    if(multi&&!landscape&&fullscreenAutoEnabled()&&landscapeFullscreenSession&&
+       document.fullscreenElement===document.documentElement&&!fullscreenRequestBusy)
+      exitMultiviewFullscreen(true);
+    syncMultiviewFullscreenButton();
+  }
+  function onMultiviewFullscreenChange(){
+    const own=document.fullscreenElement===document.documentElement;
+    if(own)autoFullscreenPending=false;
+    else if(fullscreenWasOurs){
+      autoFullscreenPending=false;autoFullscreenSuppressed=!portraitExitInProgress;
+      landscapeFullscreenSession=false;
+    }
+    portraitAutoRestored=!own&&portraitExitInProgress;
+    fullscreenFeedback='';
+    if(!own)portraitExitInProgress=false;
+    fullscreenWasOurs=own;syncMultiviewFullscreenButton();
+  }
+  // Exact native fullscreen glyph observed on holodex.net/multiview, 2026-11-05.
+  // Match its semantic menu role + glyph, never translated text or child index.
+  const NATIVE_FULLSCREEN_PATH='M5,5H10V7H7V10H5V5M14,5H19V10H17V7H14V5M17,14H19V19H14V17H17V14M10,17V19H5V14H7V17H10Z';
+  const NATIVE_MORE_PATH='M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z';
+  let fullscreenShortcut=null,fullscreenShortcutStyle=null;
+  function syncFullscreenShortcut(){
+    // Reserve one horizontal slot in the existing group. The actual button is
+    // body-owned: no inserting/reparenting Vue-managed toolbar children.
+    if(!document.createElement||!document.body||!document.documentElement.classList)return;
+    const group=document.querySelector('.mv-toolbar .mv-toolbar-btn.justify-end');
+    const toolbar=document.querySelector('.mv-toolbar');
+    let visible=isMulti()&&isMobileFullscreenDevice()&&!!group&&!!toolbar;
+    if(visible&&!fullscreenShortcut?.isConnected){
+      const bar=document.createElement('div');bar.id='hmtc-fullscreen-shortcut';
+      const button=document.createElement('button');button.type='button';
+      button.addEventListener('click',event=>{if(event.isTrusted)toggleMultiviewFullscreen();});
+      bar.appendChild(button);document.body.appendChild(bar);
+      fullscreenShortcut=bar;
+    }
+    if(visible&&!fullscreenShortcutStyle?.isConnected){
+      fullscreenShortcutStyle=document.createElement('style');
+      fullscreenShortcutStyle.textContent=`
+        html.hmtc-fullscreen-inline .mv-toolbar .mv-toolbar-btn.justify-start{min-width:44px!important}
+        html.hmtc-fullscreen-inline .mv-toolbar .mv-toolbar-btn.justify-end{padding-left:48px!important;min-width:0;
+          overflow-x:auto;overflow-y:hidden;justify-content:flex-start!important;clip-path:inset(0 0 0 48px);scrollbar-width:none}
+        html.hmtc-fullscreen-inline .mv-toolbar .mv-toolbar-btn.justify-end>button{flex-shrink:0!important}
+        #hmtc-fullscreen-shortcut{position:fixed;z-index:7;width:44px;height:44px;box-sizing:border-box}
+        #hmtc-fullscreen-shortcut[hidden]{display:none!important}
+        #hmtc-fullscreen-shortcut button{display:flex;align-items:center;justify-content:center;width:44px;height:44px;min-height:44px;min-width:44px;padding:0;margin:0;
+          border:0;border-radius:50%;background:transparent;color:#a9d6fb;font:30px/1 system-ui;touch-action:manipulation;cursor:pointer}
+        #hmtc-fullscreen-shortcut button[data-pending="true"]{color:#ffe17b}
+        #hmtc-fullscreen-shortcut button:focus-visible{outline:2px solid white;outline-offset:1px}
+        html.hmtc-fullscreen-inline .v-menu__content [role="menuitem"]:has(svg path[d="${NATIVE_FULLSCREEN_PATH}"]){display:none!important}`;
+      (document.head||document.body).appendChild(fullscreenShortcutStyle);
+    }
+    document.documentElement.classList.toggle('hmtc-fullscreen-inline',visible);
+    if(!fullscreenShortcut)return;
+    if(visible){
+      const g=group.getBoundingClientRect(),t=toolbar.getBoundingClientRect();
+      const x=g.left+2,y=t.top+(t.height-44)/2;
+      // A collapsed/scrolled/offscreen toolbar must never leave a floating
+      // hit target on the video. Restore the native menu as the fallback.
+      visible=t.height>=44&&g.width>=48&&x>=Math.max(0,g.left)&&x+44<=innerWidth&&
+        y>=0&&y+44<=innerHeight&&y>=t.top&&y+44<=t.bottom;
+      if(visible){fullscreenShortcut.style.left=x+'px';fullscreenShortcut.style.top=y+'px';}
+      else document.documentElement.classList.toggle('hmtc-fullscreen-inline',false);
+    }
+    fullscreenShortcut.hidden=!visible;
+    const own=document.fullscreenElement===document.documentElement;
+    const button=fullscreenShortcut.querySelector('button');
+    button.textContent=fullscreenRequestBusy?'…':own?'⊡':'⛶';
+    button.disabled=fullscreenRequestBusy;
+    button.setAttribute('aria-pressed',String(own));
+    button.setAttribute('data-pending',String(autoFullscreenPending));
+    button.setAttribute('aria-label',own?'退出全屏':fullscreenFeedback?'重试全屏':autoFullscreenPending?'横屏已准备，点击全屏':'进入全屏');
+    button.title=fullscreenFeedback||(own?'退出全屏':autoFullscreenPending?'横屏已准备，点击进入全屏':'进入全屏');
+  }
+  function onNativeFullscreenClick(event){
+    if(!event.isTrusted||event.defaultPrevented||!isMulti()||!isMobileFullscreenDevice())return;
+    const item=event.target?.closest?.('.v-menu__content [role="menuitem"]');
+    if(!item||!Array.from(item.querySelectorAll('svg path')).some(p=>p.getAttribute('d')===NATIVE_FULLSCREEN_PATH))return;
+    if(typeof document.documentElement.requestFullscreen!=='function'||
+       (document.fullscreenElement&&document.fullscreenElement!==document.documentElement))return;
+    // Own only this native action to avoid the site's handler double-toggling.
+    // No awaiting, synthetic tap or timer may precede the fullscreen call.
+    event.preventDefault();event.stopImmediatePropagation();
+    toggleMultiviewFullscreen();
+    // Ask the native activator to close its own menu; Vue keeps DOM ownership.
+    const more=Array.from(document.querySelectorAll('.mv-toolbar button[aria-haspopup="true"]'))
+      .find(b=>Array.from(b.querySelectorAll('svg path')).some(p=>p.getAttribute('d')===NATIVE_MORE_PATH));
+    if(more?.getAttribute('aria-expanded')==='true')more.click();
+  }
+  let fullscreenListenersInstalled=false;
+  function installMultiviewFullscreenButton(){
+    if(fullscreenListenersInstalled)return;
+    fullscreenListenersInstalled=true;
+    window.addEventListener('resize',reconcileLandscapeFullscreen,{passive:true});
+    window.addEventListener('orientationchange',reconcileLandscapeFullscreen,{passive:true});
+    window.screen?.orientation?.addEventListener?.('change',reconcileLandscapeFullscreen);
+    window.addEventListener('popstate',reconcileLandscapeFullscreen,{passive:true});
+    window.addEventListener('hashchange',reconcileLandscapeFullscreen,{passive:true});
+    window.addEventListener('scroll',syncFullscreenShortcut,{capture:true,passive:true});
+    document.addEventListener('fullscreenchange',onMultiviewFullscreenChange);
+    document.addEventListener('click',onNativeFullscreenClick,{capture:true});
+    syncMultiviewFullscreenButton();
+  }
   const token='hmtc-'+(crypto.randomUUID?.()||String(Date.now())+Math.random());
   const clamp=n=>Math.max(0,Math.min(100,Math.round(Number(n)||0)));
   const getSensitivity=()=>{
@@ -2594,8 +2884,33 @@
   let hintTimer=null,statsInterval=null;
 
   GM_addStyle(`
+  /* Fullscreen shortcut shares the native toolbar row, never a video overlay. */
+  /* LIVE in the existing latency row doubles as the jump-to-live control.
+     A 40px hit target and larger red type, but no extra panel row. */
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump{
+    flex:none;display:inline-flex;align-items:center;justify-content:center;
+    min-height:40px!important;min-width:74px!important;
+    padding:7px 11px!important;margin:0!important;
+    font:800 17px/1.18 system-ui,sans-serif!important;
+    border-radius:10px!important;border:1px solid #ff98986b!important;
+    background:rgba(145,37,48,.23)!important;color:#ffb0b0!important;
+    white-space:nowrap;touch-action:manipulation;
+    -webkit-tap-highlight-color:transparent}
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump[data-kind="live"]::before{
+    font-size:10px;margin-right:5px;color:#ff6565}
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump[data-kind="live"]:active{
+    background:rgba(195,46,64,.48)!important}
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump:focus-visible{
+    outline:2px solid #ffb9b9;outline-offset:2px}
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump:not([data-kind="live"]){
+    border:0!important;background:transparent!important;
+    color:#d4e3ed!important;font-size:13px!important;
+    min-height:30px!important;min-width:0!important;padding:0 4px!important;
+    cursor:default!important}
+  #hmtc-sheet .hmtc-live-status button.hmtc-live-jump:disabled{
+    cursor:default!important}
   /* Invisible zones occupy twice the v0.3.1 width, and are 78% tall. */
-  .hmtc-edge{position:absolute;z-index:45;top:11%;height:78%;width:36%;
+  .hmtc-edge{position:absolute;z-index:45;top:max(64px,20%);bottom:max(54px,18%);height:auto;width:36%;
     min-width:min(46px,46%);max-width:min(112px,46%);background:transparent;
     box-sizing:border-box;-webkit-user-select:none;user-select:none;
     -webkit-tap-highlight-color:transparent;overscroll-behavior:contain}
@@ -2826,6 +3141,31 @@
     function unmarkManual(key){
       if(manualPauses.delete(key))saveManual();
     }
+    // A quick user pause must take precedence over the 1050ms retry scan.
+    // Delay attribution briefly so a YouTube onAutoplayBlocked event can
+    // cancel false positives from a browser-denied first playback.
+    function cancelPauseCandidate(track){
+      if(!track)return;
+      track.pendingManualPause=0;
+      track.pauseSerial=(track.pauseSerial||0)+1;
+    }
+    function schedulePauseCandidate(key,track){
+      if(!autoCfg.respectPause||doc.hidden||track.returned||
+         !track.everPlaying||track.pendingManualPause||manualPauses.has(key))return;
+      const now=Date.now();
+      if(track.blockedAt&&now-track.blockedAt<12000)return;
+      track.pendingManualPause=now;
+      const serial=++track.pauseSerial;
+      win.setTimeout(()=>{
+        if(attempts.get(key)!==track||serial!==track.pauseSerial)return;
+        track.pendingManualPause=0;
+        if(!autoCfg.respectPause||doc.hidden||track.returned||
+           (track.blockedAt&&Date.now()-track.blockedAt<12000)||
+           getPlaybackState(track.player)!==2)return;
+        markManual(key);
+        track.suppressed=true;
+      },1000);
+    }
     const cellKey=(vm)=>String(vm.item?.i??'')+':'+vm.video?.id;
     function autoplayCells(){
       const roots=doc.querySelectorAll('.multiview .mv-cell > .cell-content');
@@ -2871,10 +3211,35 @@
         win[callback]=()=>{
           if(attempts.get(key)!==track)return;
           track.blockedAt=Date.now();
+          cancelPauseCandidate(track);
           track.lastFailure='浏览器拒绝了自动播放';
         };
         player.addEventListener('onAutoplayBlocked',callback);
-        activeCallbacks.set(key,{player,callback});
+        const stateCallback='__hmtcPlayerState_'+(++blockedListenerSerial);
+        win[stateCallback]=event=>{
+          if(attempts.get(key)!==track)return;
+          const state=Number(event?.data);
+          if(!Number.isFinite(state))return;
+          const previous=track.lastEventState;
+          track.lastEventState=state;
+          if(state===1){
+            cancelPauseCandidate(track);
+            track.playingSince=Date.now();
+            track.everPlaying=true;
+            track.returned=false;
+            track.blockedAt=0;
+            // User pressed Play on a previously paused stream.
+            unmarkManual(key);
+            track.suppressed=false;
+          }else if(state===2&&
+            (previous===1||(previous===3&&track.everPlaying)||
+              track.lastState===1||(track.lastState===3&&track.everPlaying))){
+            schedulePauseCandidate(key,track);
+          }
+        };
+        try{player.addEventListener('onStateChange',stateCallback);}
+        catch{try{delete win[stateCallback];}catch{}}
+        activeCallbacks.set(key,{player,callback,stateCallback});
       }catch{
         try{delete win[callback];}catch{}
       }
@@ -2884,7 +3249,9 @@
       if(!entry)return;
       activeCallbacks.delete(key);
       try{entry.player.removeEventListener?.('onAutoplayBlocked',entry.callback);}catch{}
+      try{entry.player.removeEventListener?.('onStateChange',entry.stateCallback);}catch{}
       try{delete win[entry.callback];}catch{}
+      try{delete win[entry.stateCallback];}catch{}
     }
     function nextRetryCampaign(){
       for(const [key,track] of attempts){
@@ -2921,12 +3288,14 @@
           track={player,lastState:null,lastTry:0,tries:0,gestureTries:0,
             returned:false,suppressed:false,everPlaying:false,campaigns:0,
             playingSince:0,blockedAt:0,lastFailure:'',firstSeen:now,
-            muteAppliedAt:0,mutedStarts:0,pendingMutedPlay:false};
+            muteAppliedAt:0,mutedStarts:0,pendingMutedPlay:false,
+            pendingManualPause:0,pauseSerial:0,lastEventState:null};
           attempts.set(key,track);
           subscribeAutoplayBlocked(key,player,track);
         }
         // 1 = playing, 3 = buffering. Neither should ever be restarted.
         if(state===1||state===3){
+          if(track.pendingManualPause)cancelPauseCandidate(track);
           result.playing++;
           if(state===1){
             if(!track.playingSince)track.playingSince=now;
@@ -2940,17 +3309,11 @@
           continue;
         }
         if(state===0){restoreFirstPlay(track);track.lastState=state;result.ended++;continue;}
-        // Do not persist autoplay denial as a user pause. YouTube may report
-        // PLAYING fleetingly, then pause because the browser blocks sound.
-        // Only a sufficiently established playback followed by pause can be
-        // reasonably classified as intentional without event attribution.
+        // Player events identify a fast pause even between scanning ticks.
+        // This state transition is a fallback if events are unavailable.
         if(state===2&&(track.lastState===1||
-             (track.lastState===3&&track.everPlaying))&&!track.returned&&
-           track.playingSince>0&&now-track.playingSince>=6500&&
-           (!track.lastTry||now-track.lastTry>=7000)&&
-           (!track.blockedAt||now-track.blockedAt>=12000)){
-          markManual(key);
-        }
+            (track.lastState===3&&track.everPlaying)))
+          schedulePauseCandidate(key,track);
         track.lastState=state;
         if(![-1,2,5].includes(state)){result.waiting++;continue;}
         // On a fresh reload Holodex first creates its YouTube Player, then
@@ -2960,8 +3323,12 @@
           result.waiting++;continue;
         }
         if(manualRun){
+          cancelPauseCandidate(track);
           unmarkManual(key);track.tries=0;track.gestureTries=0;
           track.suppressed=false;
+        }
+        if(track.pendingManualPause&&!manualRun){
+          result.protected++;continue;
         }
         if(track.suppressed&&!manualRun){result.protected++;continue;}
         if(autoCfg.respectPause&&manualPauses.has(key)&&!manualRun){
@@ -3026,7 +3393,8 @@
               // The user could have navigated or started this stream meanwhile.
               if(attempts.get(key)!==track||doc.hidden||
                  !autoCfg.enabled||!autoCfg.muteFallback||
-                 (autoCfg.respectPause&&manualPauses.has(key))||
+                 (autoCfg.respectPause&&
+                   (manualPauses.has(key)||track.pendingManualPause||track.suppressed))||
                  (win.location?.pathname &&
                   !win.location.pathname.startsWith('/multiview')))return;
               try{
@@ -3050,6 +3418,7 @@
       // Do not reuse an old attempt record if Holodex removed/replaced its cell.
       for(const key of attempts.keys()){
         if(!current.has(key)){
+          cancelPauseCandidate(attempts.get(key));
           restoreFirstPlay(attempts.get(key));
           removeAutoplayListener(key);
           attempts.delete(key);unmarkManual(key);
@@ -3072,6 +3441,7 @@
           state===1?'正在播放':state===3?'正在缓冲':
           state===0?'播放已结束（不自动重播）':
           protectedPause?'受保护的手动暂停':
+          track?.pendingManualPause?'暂停保护中，等待播放器确认':
           track?.lastFailure||(
             state===-1&&track&&Date.now()-track.firstSeen<3200?
               '等待 YouTube 播放器完成初次加载':
@@ -3111,10 +3481,17 @@
 
     function autoConfigure(msg){
       const wasEnabled=autoCfg.enabled;
+      const wasRespectPause=autoCfg.respectPause;
       const muteJustEnabled=!autoCfg.muteFallback&&msg.muteFallback===true;
       agentBoot.lastRpcConfigAt=Date.now();
       for(const name of ['enabled','onReturn','respectPause','muteFallback'])
         if(typeof msg[name]==='boolean')autoCfg[name]=msg[name];
+      if(wasRespectPause&&!autoCfg.respectPause){
+        for(const [key,track] of attempts){
+          if(track.pendingManualPause||manualPauses.has(key))track.suppressed=false;
+          cancelPauseCandidate(track);
+        }
+      }
       agentBoot.lastRpcEnabled=autoCfg.enabled;
       if(!autoCfg.enabled){
         for(const track of attempts.values())restoreFirstPlay(track);
@@ -3486,6 +3863,17 @@
         '需要浏览器许可或在页面内直接操作播放器。');
     }).catch(error=>alert('播放诊断未完成：'+error.message));
   }
+  async function jumpAllLiveStreams(){
+    if(!isMulti())return alert('请先进入 Holodex 多视图页面。');
+    const live=[...rowMap.values()].filter(row=>row.status==='live');
+    if(!live.length)return alert('当前没有标记为正在直播的视频；录像不会被跳转。');
+    const results=await Promise.allSettled(live.map(row=>nativeRequest(row,'goLive',3500)));
+    const successful=results.filter(r=>r.status==='fulfilled'&&r.value?.requested).length;
+    const confirmed=results.filter(r=>r.status==='fulfilled'&&r.value?.confirmed).length;
+    alert('直播追新：请求 '+live.length+' 路，已发送 '+successful+
+      ' 路，其中确认 '+confirmed+' 路'+(successful<live.length?
+      '；失败 '+(live.length-successful)+' 路':'')+'。录像不变。');
+  }
   function manualAutoPlay(){
     if(!isMulti())return alert('请先进入 Holodex 多视图页面。');
     if(!installed)return alert('多视图播放器尚未就绪，请刷新页面再试。');
@@ -3517,7 +3905,7 @@
   function nativeRequest(row,action,timeout=1800,extra={}) {
     if(!['stats','nativeToggle','monitorStart','monitorStop','desktopPanelStatus','statsDiagnostics',
           'playbackClock','playbackInfo','playbackRate','qualityMenu',
-          'qualityOptions','selectQuality'].includes(action))
+          'qualityOptions','selectQuality','goLive'].includes(action))
       return Promise.reject(new Error('不支持的 YouTube 指令'));
     const target=nativeFrame(row);
     if(!target)return Promise.reject(new Error('未找到当前视频的 YouTube 嵌入播放器'));
@@ -3848,7 +4236,8 @@
       '<div class="title" data-field="title">YouTube</div>',
       '<button type="button" data-action="close" aria-label="关闭">✕</button></div>',
       '<div class="hmtc-live-status" data-hmtc-latency-metric data-kind="unknown">',
-      '<span class="hmtc-media-kind" data-hmtc-media-kind>待确认</span>',
+      '<button type="button" class="hmtc-media-kind hmtc-live-jump" data-hmtc-media-kind',
+      ' data-action="goLive" aria-label="尚未确认直播状态，不能追新" disabled>待确认</button>',
       '<span data-hmtc-latency-label>视频状态</span><strong data-field="latency" data-hmtc-latency-value>识别中</strong></div>',
       '<div class="net"><div class="sub">连接速度</div>',
       '<div><span class="speed" data-field="speed">—</span><span class="unit">Mbps</span>',
@@ -3902,6 +4291,28 @@
       if(action==='settings'){openSettings();return;}
       const row=active&&rowMap.get(active.layoutId+':'+active.videoId);
       if(!row)return;
+      if(action==='goLive'){
+        // Clicks must come from the currently confirmed live badge only.
+        // The iframe independently checks real live state and video identity.
+        if(btn.dataset.kind!=='live'||btn.disabled||btn.dataset.pending==='1')return;
+        btn.dataset.pending='1';
+        btn.disabled=true;
+        btn.setAttribute('aria-disabled','true');
+        try{
+          const result=await nativeRequest(row,'goLive',3500);
+          if(active?.layoutId===row.layoutId&&active?.videoId===row.videoId){
+            field('note',result.message||'已请求直播追新');stats();
+          }
+        }catch(error){
+          if(active?.layoutId===row.layoutId&&active?.videoId===row.videoId)
+            field('note','直播追新失败：'+error.message);
+        }finally{
+          delete btn.dataset.pending;
+          btn.disabled=btn.dataset.kind!=='live';
+          btn.setAttribute('aria-disabled',btn.disabled?'true':'false');
+        }
+        return;
+      }
       if(action==='qualityPreset'){
         await applyHolodexQuality(row,btn);
         return;
@@ -3982,6 +4393,12 @@
       '<b data-value="hudSize">100%</b></label>',
       '<input type="range" min="70" max="180" step="10" data-control="hudSize">',
       '<div class="setting-summary">70%～180%，默认100%；数字、Mbps和独立背景同步缩放，立即生效。</div></div>',
+      '<div class="setting"><label>沉浸全屏（横屏与竖屏）</label>',
+      '<label class="hmtc-toggle"><input type="checkbox" data-control="fullscreenAuto">',
+      '<span>横屏自动尝试全屏／竖屏自动恢复</span></label>',
+      '<button type="button" data-action="landscapeFullscreen" style="width:100%;margin:6px 0">进入／退出网页全屏</button>',
+      '<div class="setting-summary" data-field="fullscreenState" role="status" aria-live="polite"></div>',
+      '<div class="setting-summary">开启后，转横屏自动请求一次；若浏览器拒绝，请点全屏图标。横屏进入的网页全屏转竖屏自动退出；竖屏手动全屏保留。刷新不强制全屏，安卓返回可退出。</div></div>',
       '<div class="setting"><label for="hmtc-stats-mode">打开统计的触控方式</label>',
       '<select id="hmtc-stats-mode" data-control="statsMode">',
       '<option value="tap">左侧轻点（默认）</option>',
@@ -4030,6 +4447,15 @@
       setHudPosition(e.target.value);
     });
     settings.querySelector('[data-control="hudSize"]').addEventListener('input',e=>setHudSize(e.target.value));
+    const fullscreenSettingsButton=settings.querySelector('[data-action="landscapeFullscreen"]');
+    fullscreenSettingsButton.hidden=!isMobileFullscreenDevice();
+    fullscreenSettingsButton.addEventListener('click',()=>{
+      toggleMultiviewFullscreen();
+    });
+    settings.querySelector('[data-control="fullscreenAuto"]').addEventListener('change',e=>{
+      const checked=setLandscapeAutoFullscreen(e.target.checked,true);
+      e.target.checked=checked;
+    });
     settings.querySelector('[data-control="statsMode"]').addEventListener('change',e=>{
       if(['tap','hold','both'].includes(e.target.value))set(STATS_MODE_KEY,e.target.value);
     });
@@ -4063,12 +4489,14 @@
   }
   function openSettings(){
     makeSettings();
+    syncMultiviewFullscreenButton();
     settings.querySelector('[data-control="sensitivity"]').value=String(getSensitivity());
     settings.querySelector('[data-value="sensitivity"]').textContent=getSensitivity().toFixed(1)+'×';
     settings.querySelector('[data-control="statsMode"]').value=getStatsMode();
     settings.querySelector('[data-control="hudPosition"]').value=hudPosition();
     settings.querySelector('[data-control="hudSize"]').value=String(hudSize());
     settings.querySelector('[data-value="hudSize"]').textContent=hudSize()+'%';
+    settings.querySelector('[data-control="fullscreenAuto"]').checked=fullscreenAutoEnabled();
     const config=autoplaySettings();
     settings.querySelector('[data-control="autoEnabled"]').checked=config.enabled;
     settings.querySelector('[data-field="autoState"]').textContent=config.enabled?
@@ -4547,6 +4975,7 @@
   }
   function init(){
     if(!document.body)return;
+    installMultiviewFullscreenButton();
 
     // Stats/settings are available on every device; only broad gesture zones
     // are gated to touch-only input. Hybrid PCs keep the normal mouse target.
@@ -4564,6 +4993,15 @@
     GM_registerMenuCommand('播放信息：切换时间／速度／隐藏',cycleHudMode);
     GM_registerMenuCommand('播放信息：选择显示角落',chooseHudPosition);
     GM_registerMenuCommand('播放信息：调整显示大小',chooseHudSize);
+    GM_registerMenuCommand('多视图：全部直播追到最新',()=>jumpAllLiveStreams()
+      .catch(error=>alert('追新失败：'+error.message)));
+    GM_registerMenuCommand('手动进入／退出 Holodex 全屏',toggleMultiviewFullscreen);
+    GM_registerMenuCommand('横屏自动尝试／竖屏恢复：切换开关',()=>{
+      const next=setLandscapeAutoFullscreen(!fullscreenAutoEnabled(),false);
+      alert(next?
+        '已开启横屏自动尝试、竖屏自动恢复。转横屏请求一次；若浏览器拒绝，点全屏图标即可。竖屏手动全屏保留，不保证无手势自动进入。':
+        '横屏自动尝试及竖屏恢复已关闭。仍可从工具栏全屏图标或触控设置手动全屏。');
+    });
     setInterval(pollCornerHuds,2200);
     const clearOnRouteExit=()=>{
       if(isMulti())return;
@@ -4635,13 +5073,14 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.41 说明',()=>
-      alert('v0.6.41：移除 Holodex 旧视频类型／延迟与右键面板诊断菜单；保留自动播放故障诊断。'));
+    GM_registerMenuCommand('Touch Controls v0.6.51 说明',()=>
+      alert('v0.6.51：可开启横屏自动尝试、竖屏自动恢复；浏览器拒绝自动进入时保留一触全屏。竖屏手动全屏和同排图标保留。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
     setInterval(()=>{
       if(!document.body)return;
+      reconcileLandscapeFullscreen();
       const nowMulti=isMulti();
       if(location.href!==last){
         last=location.href;

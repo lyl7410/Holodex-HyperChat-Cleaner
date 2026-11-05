@@ -47,8 +47,11 @@ test('PC initialization registers statistics; selection opens the correct video 
     location:{href:'https://holodex.net/multiview'},backdrop:{hidden:false},sheet:{hidden:false},
     GM_registerMenuCommand:(name,fn)=>menus.set(name,fn),
     watchTouchZonePolicy:fn=>{policyChange=fn;},touchZonesAllowed:()=>false,
-    cycleHudMode:noop,pollCornerHuds:noop,clearHudCells:noop,openSettings:noop,
-    manualAutoPlay:noop,diagnoseAutoPlay:noop,makeSheet:noop,installDesktopDismiss:noop,get:(_k,d)=>d,DEBUG_KEY:'debug',
+    cycleHudMode:noop,chooseHudPosition:noop,chooseHudSize:noop,pollCornerHuds:noop,clearHudCells:noop,openSettings:noop,
+    manualAutoPlay:noop,diagnoseAutoPlay:noop,makeSheet:noop,installDesktopDismiss:noop,
+    installMultiviewFullscreenButton:noop,syncMultiviewFullscreenButton:noop,
+    toggleMultiviewFullscreen:noop,
+    get:(_k,d)=>d,DEBUG_KEY:'debug',
     installBridge:noop,isMulti:()=>true,setInterval:noop,refresh:noop,
     rowMap:new Map(rows.map(r=>[r.layoutId+':'+r.videoId,r])),
     openSheet:r=>opened.push(r),alert:noop,prompt:()=> '2'
@@ -62,6 +65,103 @@ test('PC initialization registers statistics; selection opens the correct video 
   ctx.prompt=()=> '999';select();assert.equal(opened.length,2);
   ctx.rowMap.clear();select();assert.equal(opened.length,2);
   policyChange();assert.equal(removed,1);assert.equal(ctx.backdrop.hidden,true);
+});
+test('v0.6.45 no longer mutates Vue toolbar or covers native video controls',async()=>{
+  const listeners=new Map(),ui={textContent:'',attrs:{},
+    setAttribute(k,v){this.attrs[k]=v;}};
+  let uiLookupCount=0,created=0,appended=0;
+  const doc={
+    documentElement:{requestFullscreen(){
+      doc.fullscreenElement=doc.documentElement;
+      listeners.get('doc:fullscreenchange')?.();return Promise.resolve();
+    }},
+    fullscreenElement:null,
+    querySelector:sel=>{uiLookupCount++;return sel.includes('landscapeFullscreen')?ui:null;},
+    createElement(){created++;throw Error('Unexpected DOM insertion');},
+    body:{appendChild(){appended++;throw Error('Unexpected overlay');}},
+    addEventListener:(name,cb)=>listeners.set('doc:'+name,cb),
+    exitFullscreen(){doc.fullscreenElement=null;listeners.get('doc:fullscreenchange')?.();return Promise.resolve();}
+  };
+  const ctx=vm.createContext({document:doc,
+    window:{addEventListener:(name,cb)=>listeners.set('win:'+name,cb),matchMedia:()=>({matches:false})},
+    navigator:{userAgent:'Mozilla/5.0 (Linux; Android 17)'},location:{pathname:'/multiview/'},
+    get:(_key,def)=>def,set(){},innerWidth:713,innerHeight:1536,
+    console:{warn(){}},alert(){}});
+  vm.runInContext(section("  const isMulti=()=>","  const token="),ctx);
+  ctx.installMultiviewFullscreenButton();
+  assert.equal(created,0);
+  assert.equal(appended,0);
+  ctx.toggleMultiviewFullscreen();await new Promise(setImmediate);
+  assert.equal(doc.fullscreenElement,doc.documentElement);
+  assert.equal(ui.textContent,'退出网页全屏');
+  ctx.toggleMultiviewFullscreen();await new Promise(setImmediate);
+  assert.equal(doc.fullscreenElement,null);
+  assert.equal(ui.textContent,'进入网页全屏');
+  ctx.installMultiviewFullscreenButton();
+  assert.equal(created,0,'repeated init must not mutate page layout');
+  assert.ok(uiLookupCount>0);
+  assert.ok(source.includes("GM_registerMenuCommand('手动进入／退出 Holodex 全屏',toggleMultiviewFullscreen)"));
+  assert.ok(source.includes('data-action="landscapeFullscreen"'));
+  assert.ok(!source.includes('toolbar.appendChild(button)'));
+  assert.ok(!source.includes('function multiviewToolbar()'));
+  assert.ok(!source.includes('#hmtc-multiview-fullscreen{'));
+});
+test('v0.6.45 keeps stats touch zones away from native player top/bottom controls',()=>{
+  assert.match(source, /top:max\(64px,20%\);bottom:max\(54px,18%\);height:auto;width:36%/);
+  // 300px player: the first 64px and last 54px cannot open stats
+  // through the transparent edge zones. This is a CSS-boundary check.
+  const height=300,top=Math.max(64,.2*height),bottom=Math.max(54,.18*height);
+  assert.equal(top,64);
+  assert.equal(bottom,54);
+  assert.ok(30<top&&height-30>height-bottom);
+  assert.match(source,/zone\.addEventListener\('touchend',event=>/);
+  assert.match(source,/function appendStaticPanelMarkup\(root,markup\)/);
+  assert.match(source,/GM_registerMenuCommand\('多视图：全部直播追到最新'/);
+});
+test('fullscreen never treats arbitrary background/video/control taps as activation',()=>{
+  assert.doesNotMatch(source,/addEventListener\('pointerup',onFullscreen/);
+  assert.doesNotMatch(source,/onFullscreenAutoGesture/);
+  assert.match(source,/addEventListener\('click',onNativeFullscreenClick,\{capture:true\}\)/);
+});
+test('live-edge seeking only uses seekable end and rejects archived streams',async()=>{
+  const id='abcdefghijk',video={currentTime:12,seekable:{length:1,start:()=>0,end:()=>7200}};
+  const player={getVideoData:()=>({video_id:id}),
+    querySelector:selector=>selector.startsWith('video')?video:null,
+    seekTo(t){video.currentTime=t;this.requested=t;}};
+  const ctx=vm.createContext({COMMON_RATES:[1,1.25,1.5,1.75,2],setTimeout,
+    resolvePlaybackState:(state,hint)=>({live:state.live??(hint==='live'?true:null)}),
+    youtubeWatchLiveState:()=>({live:true})});
+  vm.runInContext(section('  function youtubePlaybackTools(', '  // Restore the SAME measurement strategy'),ctx);
+  const tools=ctx.youtubePlaybackTools({defaultView:{},querySelector:()=>null},()=>player);
+  const result=await tools.goLive('live',id);
+  assert.equal(result.confirmed,true);
+  assert.equal(player.requested,7198.5);
+  assert.equal(video.currentTime,7198.5);
+  ctx.youtubeWatchLiveState=()=>({live:false});
+  await assert.rejects(tools.goLive('past',id),/录像/);
+  assert.equal(player.requested,7198.5,'VOD must not be sought');
+  ctx.youtubeWatchLiveState=()=>({live:true});
+  await assert.rejects(tools.goLive('live','zzzzzzzzzzz'),/切换视频/);
+  assert.match(source,/message\.action==='goLive'/);
+  assert.match(source,/'qualityOptions','selectQuality','goLive'\]\.includes\(action\)/);
+});
+test('live seek without a seekable range uses YouTube LIVE button or reports unsupported',async()=>{
+  const id='abcdefghijk',video={currentTime:40,seekable:{length:0}};
+  let clicks=0;
+  const player={getVideoData:()=>({video_id:id}),querySelector:selector=>
+    selector.startsWith('video')?video:{click(){clicks++;}}};
+  const ctx=vm.createContext({COMMON_RATES:[1,1.25,1.5,1.75,2],setTimeout,
+    resolvePlaybackState:()=>({live:true}),youtubeWatchLiveState:()=>({live:true})});
+  vm.runInContext(section('  function youtubePlaybackTools(', '  // Restore the SAME measurement strategy'),ctx);
+  const tools=ctx.youtubePlaybackTools({defaultView:{},querySelector:()=>null},()=>player);
+  let result=await tools.goLive('live',id);
+  assert.equal(result.requested,true);
+  assert.equal(result.confirmed,false);
+  assert.equal(clicks,1);
+  player.querySelector=selector=>selector.startsWith('video')?video:null;
+  await assert.rejects(tools.goLive('live',id),/没有可定位/);
+  assert.match(source,/data-action="goLive"/);
+  assert.match(source,/GM_registerMenuCommand\('多视图：全部直播追到最新'/);
 });
 test('actual zone handlers pass idle right-click and desktop mouse through, retaining touch tap/hold',()=>{
   const zones=[];let opened=0,allowed=true;
@@ -172,7 +272,7 @@ test('YouTube Trusted Types: static panels render with innerHTML prohibited',()=
 test('YouTube panel opens with no full-screen mouse blocker and closes cleanly',()=>{
   for(const touch of [false,true]){
     const ctx=vm.createContext({supported:()=>true,p:()=>({}),makePanel(){},
-      sheet:{hidden:true},backdrop:{hidden:true},touchZonesAllowed:()=>touch,desktopMountAllowed:()=>true,desktopVideoAnchor:()=>null,presentPanel(){},
+    sheet:{hidden:true,querySelector:()=>({})},hudPosition:()=> 'top-left',hudSize:()=>100,backdrop:{hidden:true},touchZonesAllowed:()=>touch,desktopMountAllowed:()=>true,desktopVideoAnchor:()=>null,presentPanel(){},
       bandwidth:{start(){},stop(){}},hudWantsSpeed:()=>false,
       refreshSheet(){},refreshQualityChoices(){}});
     const yt=source.slice(0,source.indexOf('  // Run a minimal, read-only stats bridge'));
@@ -327,14 +427,14 @@ test('HUD position setting persists and rejects invalid values',()=>{
     Event,GM_getValue:(key,fallback)=>store.has(key)?store.get(key):fallback,
     GM_setValue:(key,value)=>store.set(key,value),prompt:()=>null,alert(){}});
   vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES='),ctx);
-  assert.equal(ctx.hudPosition(),'top-left');
+  assert.equal(vm.runInContext('hudPosition()',ctx),'top-left');
   assert.equal(ctx.setHudPosition('bottom-right'),true);
-  assert.equal(ctx.hudPosition(),'bottom-right');
+  assert.equal(vm.runInContext('hudPosition()',ctx),'bottom-right');
   assert.deepEqual(events,['hmtc:corner-hud-position']);
   assert.equal(ctx.setHudPosition('middle'),false);
-  assert.equal(ctx.hudPosition(),'bottom-right');
+  assert.equal(vm.runInContext('hudPosition()',ctx),'bottom-right');
   store.set('hmtc_corner_hud_position_v1','invalid');
-  assert.equal(ctx.hudPosition(),'top-left');
+  assert.equal(vm.runInContext('hudPosition()',ctx),'top-left');
 });
 
 test('HUD size defaults to 100%, persists, clamps and dispatches live updates',()=>{
@@ -876,6 +976,57 @@ test('latency diagnostics distinguish absent APIs, ambiguous units, recordings a
   assert.ok(report.latencyDiagnostics.sources.some(s=>s.fields?.includes('live_latency')));
   ctx=frameStatsContext({},null);assert.equal(ctx.readStats('past',true).latencyDiagnostics.reasonCode,'not-live');
   assert.equal(ctx.readStats(undefined,true).latencyDiagnostics.reasonCode,'media-type-unknown');
+});
+test('v0.6.46 red LIVE badge is the only Holodex jump action and stays in latency row',()=>{
+  const template=section('  function makeSheet(){','  function closeSheet(');
+  const status=template.indexOf('<div class="hmtc-live-status"');
+  const badge=template.indexOf('class="hmtc-media-kind hmtc-live-jump"');
+  const control=template.indexOf('<div class="hmtc-play-controls">');
+  assert.ok(status>=0&&badge>status&&control>badge,'LIVE control must be in status row');
+  assert.equal((template.match(/data-action="goLive"/g)||[]).length,1);
+  assert.ok(template.indexOf('data-action="goLive"')<template.indexOf('<div class="hmtc-play-controls">'));
+  assert.doesNotMatch(template,/hmtc-go-live|追到最新直播<\/button>/);
+  assert.match(template,/aria-label="尚未确认直播状态，不能追新" disabled/);
+  assert.match(source,/#hmtc-sheet \.hmtc-live-status button\.hmtc-live-jump\{/);
+  assert.match(source,/min-height:40px!important;min-width:74px!important/);
+  assert.match(source,/font:800 17px\/1\.18 system-ui/);
+  assert.doesNotMatch(source,/#hmtc-sheet button\.hmtc-go-live/);
+});
+test('LIVE red badge is clickable only on confirmed live streams, not VOD or unknown',()=>{
+  const attributes={};
+  const badge={dataset:{},disabled:true,
+    setAttribute(k,v){attributes[k]=v;}};
+  const metric={dataset:{},hidden:false};
+  const label={textContent:''},value={},time={textContent:''};
+  const panel={querySelector:q=>({
+    '[data-hmtc-media-kind]':badge,'[data-action="goLive"]':badge,
+    '[data-hmtc-latency-metric]':metric,'[data-hmtc-latency-label]':label,
+    '[data-hmtc-latency-value]':value,'[data-hmtc-time-label]':time
+  })[q]||null};
+  const ctx=vm.createContext({});
+  vm.runInContext(stateHelpers,ctx);
+  ctx.renderMediaKind(panel,{live:null});
+  assert.equal(badge.disabled,true);
+  assert.equal(attributes['aria-disabled'],'true');
+  ctx.renderMediaKind(panel,{live:false});
+  assert.equal(badge.disabled,true);
+  assert.equal(badge.textContent,'录像');
+  assert.equal(metric.hidden,true);
+  ctx.renderMediaKind(panel,{live:true});
+  assert.equal(badge.disabled,false);
+  assert.equal(badge.textContent,'直播');
+  assert.equal(attributes['aria-disabled'],'false');
+  assert.match(attributes['aria-label'],/点击追到最新直播进度/);
+  // Stats may refresh during a seek; it must not re-enable pending actions.
+  badge.dataset.pending='1';
+  ctx.renderMediaKind(panel,{live:true});
+  assert.equal(badge.disabled,true);
+  delete badge.dataset.pending;
+  ctx.renderMediaKind(panel,{live:true});
+  assert.equal(badge.disabled,false);
+  assert.match(source,/if\(btn\.dataset\.kind!=='live'\|\|btn\.disabled\|\|btn\.dataset\.pending==='1'\)return/);
+  assert.match(source,/await nativeRequest\(row,'goLive',3500\)/);
+  assert.match(source,/expectedVideoId&&id&&expectedVideoId!==id/);
 });
 test('panel badge explicitly labels live, recording and unknown states',()=>{
   const badge={dataset:{}};const panel={querySelector:q=>q==='[data-hmtc-media-kind]'?badge:null};const ctx=vm.createContext({});
