@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.46
-// @description  直播追新改为点击延迟栏内的放大红色「直播」标签，不再额外占据控制面板一行；保留原有校验。
+// @version      0.6.47
+// @description  修复多视图自动播放后快速手动暂停会被再次播放；区分用户暂停和自动播放拦截。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -2359,7 +2359,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.46', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.47', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
   const STATS_MODE_KEY='hmtc_stats_trigger_v1';
@@ -3025,6 +3025,31 @@
     function unmarkManual(key){
       if(manualPauses.delete(key))saveManual();
     }
+    // A quick user pause must take precedence over the 1050ms retry scan.
+    // Delay attribution briefly so a YouTube onAutoplayBlocked event can
+    // cancel false positives from a browser-denied first playback.
+    function cancelPauseCandidate(track){
+      if(!track)return;
+      track.pendingManualPause=0;
+      track.pauseSerial=(track.pauseSerial||0)+1;
+    }
+    function schedulePauseCandidate(key,track){
+      if(!autoCfg.respectPause||doc.hidden||track.returned||
+         !track.everPlaying||track.pendingManualPause||manualPauses.has(key))return;
+      const now=Date.now();
+      if(track.blockedAt&&now-track.blockedAt<12000)return;
+      track.pendingManualPause=now;
+      const serial=++track.pauseSerial;
+      win.setTimeout(()=>{
+        if(attempts.get(key)!==track||serial!==track.pauseSerial)return;
+        track.pendingManualPause=0;
+        if(!autoCfg.respectPause||doc.hidden||track.returned||
+           (track.blockedAt&&Date.now()-track.blockedAt<12000)||
+           getPlaybackState(track.player)!==2)return;
+        markManual(key);
+        track.suppressed=true;
+      },1000);
+    }
     const cellKey=(vm)=>String(vm.item?.i??'')+':'+vm.video?.id;
     function autoplayCells(){
       const roots=doc.querySelectorAll('.multiview .mv-cell > .cell-content');
@@ -3070,10 +3095,34 @@
         win[callback]=()=>{
           if(attempts.get(key)!==track)return;
           track.blockedAt=Date.now();
+          cancelPauseCandidate(track);
           track.lastFailure='浏览器拒绝了自动播放';
         };
         player.addEventListener('onAutoplayBlocked',callback);
-        activeCallbacks.set(key,{player,callback});
+        const stateCallback='__hmtcPlayerState_'+(++blockedListenerSerial);
+        win[stateCallback]=event=>{
+          if(attempts.get(key)!==track)return;
+          const state=Number(event?.data);
+          if(!Number.isFinite(state))return;
+          const previous=track.lastEventState;
+          track.lastEventState=state;
+          if(state===1){
+            cancelPauseCandidate(track);
+            track.playingSince=Date.now();
+            track.everPlaying=true;
+            track.blockedAt=0;
+            // User pressed Play on a previously paused stream.
+            unmarkManual(key);
+            track.suppressed=false;
+          }else if(state===2&&
+            (previous===1||(previous===3&&track.everPlaying)||
+              track.lastState===1||(track.lastState===3&&track.everPlaying))){
+            schedulePauseCandidate(key,track);
+          }
+        };
+        try{player.addEventListener('onStateChange',stateCallback);}
+        catch{try{delete win[stateCallback];}catch{}}
+        activeCallbacks.set(key,{player,callback,stateCallback});
       }catch{
         try{delete win[callback];}catch{}
       }
@@ -3083,7 +3132,9 @@
       if(!entry)return;
       activeCallbacks.delete(key);
       try{entry.player.removeEventListener?.('onAutoplayBlocked',entry.callback);}catch{}
+      try{entry.player.removeEventListener?.('onStateChange',entry.stateCallback);}catch{}
       try{delete win[entry.callback];}catch{}
+      try{delete win[entry.stateCallback];}catch{}
     }
     function nextRetryCampaign(){
       for(const [key,track] of attempts){
@@ -3120,12 +3171,14 @@
           track={player,lastState:null,lastTry:0,tries:0,gestureTries:0,
             returned:false,suppressed:false,everPlaying:false,campaigns:0,
             playingSince:0,blockedAt:0,lastFailure:'',firstSeen:now,
-            muteAppliedAt:0,mutedStarts:0,pendingMutedPlay:false};
+            muteAppliedAt:0,mutedStarts:0,pendingMutedPlay:false,
+            pendingManualPause:0,pauseSerial:0,lastEventState:null};
           attempts.set(key,track);
           subscribeAutoplayBlocked(key,player,track);
         }
         // 1 = playing, 3 = buffering. Neither should ever be restarted.
         if(state===1||state===3){
+          if(track.pendingManualPause)cancelPauseCandidate(track);
           result.playing++;
           if(state===1){
             if(!track.playingSince)track.playingSince=now;
@@ -3139,17 +3192,11 @@
           continue;
         }
         if(state===0){restoreFirstPlay(track);track.lastState=state;result.ended++;continue;}
-        // Do not persist autoplay denial as a user pause. YouTube may report
-        // PLAYING fleetingly, then pause because the browser blocks sound.
-        // Only a sufficiently established playback followed by pause can be
-        // reasonably classified as intentional without event attribution.
+        // Player events identify a fast pause even between scanning ticks.
+        // This state transition is a fallback if events are unavailable.
         if(state===2&&(track.lastState===1||
-             (track.lastState===3&&track.everPlaying))&&!track.returned&&
-           track.playingSince>0&&now-track.playingSince>=6500&&
-           (!track.lastTry||now-track.lastTry>=7000)&&
-           (!track.blockedAt||now-track.blockedAt>=12000)){
-          markManual(key);
-        }
+            (track.lastState===3&&track.everPlaying)))
+          schedulePauseCandidate(key,track);
         track.lastState=state;
         if(![-1,2,5].includes(state)){result.waiting++;continue;}
         // On a fresh reload Holodex first creates its YouTube Player, then
@@ -3159,8 +3206,12 @@
           result.waiting++;continue;
         }
         if(manualRun){
+          cancelPauseCandidate(track);
           unmarkManual(key);track.tries=0;track.gestureTries=0;
           track.suppressed=false;
+        }
+        if(track.pendingManualPause&&!manualRun){
+          result.protected++;continue;
         }
         if(track.suppressed&&!manualRun){result.protected++;continue;}
         if(autoCfg.respectPause&&manualPauses.has(key)&&!manualRun){
@@ -3225,7 +3276,8 @@
               // The user could have navigated or started this stream meanwhile.
               if(attempts.get(key)!==track||doc.hidden||
                  !autoCfg.enabled||!autoCfg.muteFallback||
-                 (autoCfg.respectPause&&manualPauses.has(key))||
+                 (autoCfg.respectPause&&
+                   (manualPauses.has(key)||track.pendingManualPause||track.suppressed))||
                  (win.location?.pathname &&
                   !win.location.pathname.startsWith('/multiview')))return;
               try{
@@ -3249,6 +3301,7 @@
       // Do not reuse an old attempt record if Holodex removed/replaced its cell.
       for(const key of attempts.keys()){
         if(!current.has(key)){
+          cancelPauseCandidate(attempts.get(key));
           restoreFirstPlay(attempts.get(key));
           removeAutoplayListener(key);
           attempts.delete(key);unmarkManual(key);
@@ -4894,8 +4947,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.46 说明',()=>
-      alert('v0.6.46：点击延迟栏内放大的红色「直播」标签即可追最新；不再单独占用控制面板一行。'));
+    GM_registerMenuCommand('Touch Controls v0.6.47 说明',()=>
+      alert('v0.6.47：多视图自动播放后快速手动暂停将受保护，不再被重试逻辑反复恢复。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();
