@@ -54,6 +54,10 @@ test('mobile edge zones stop above the native bottom bar so fullscreen stays tap
   // Bar auto-hidden or unmeasurable: a touch-sized minimum guard remains.
   const right=make();ctx.placeEdge(right,rect,'right',0);
   assert.ok(num(right.style.top)+num(right.style.height)<=rect.bottom-44+0.5);
+  // Mobile YouTube layout: fullscreen button sits above the seek bar (~72px from bottom).
+  const mobileRight=make();ctx.placeEdge(mobileRight,rect,'right',0,80);
+  assert.ok(num(mobileRight.style.top)+num(mobileRight.style.height)<=rect.bottom-80+0.5,
+    'mobile layout fallback must clear fullscreen button above the seek bar');
   // Tall fullscreen players keep the original 78% gesture height.
   const tall={left:0,top:0,right:844,bottom:600,width:844,height:600};
   const full=make();ctx.placeEdge(full,tall,'right',56);

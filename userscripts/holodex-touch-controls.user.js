@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.52
-// @description  横屏自动尝试全屏、竖屏自动恢复；手机手势区避让原生控制栏，修复 YouTube 连接速度面板可见性判定；保留同排全屏图标与快速暂停保护。
+// @version      0.6.53
+// @description  横屏自动尝试全屏、竖屏自动恢复；手机手势区跨外层容器避让原生底部控制栏与全屏按钮，修复连接速度面板可见性判定。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -1377,6 +1377,7 @@
     const sense=()=>Math.max(.4,Math.min(2.5,Number(setting('hmtc_volume_sensitivity_v1',1))||1));
     const video=()=>controls.video();
     let sheet=null,backdrop=null,left=null,right=null,root=null,toast=null,toastTimeout=null;
+    let lastBarGuard={player:null,width:0,height:0,measured:0};
     const muted=()=>{
       try{if(typeof p()?.isMuted==='function')return !!p().isMuted();}catch{}
       return !!video()?.muted;
@@ -1931,7 +1932,7 @@
     // Fixed-position edge portals survive YouTube's play/pause overlays,
     // dynamic control rebuilding and SPA video changes. Reposition rather
     // than relying on child stacking order inside #movie_player.
-    function placeEdge(el,rect,side,controlsHeight=0){
+    function placeEdge(el,rect,side,controlsHeight=0,minGuard=44){
       if(!el)return;
       const winWidth=innerWidth||document.documentElement.clientWidth;
       const winHeight=innerHeight||document.documentElement.clientHeight;
@@ -1944,7 +1945,7 @@
       // stay tappable. The right portal intercepts touches, so it must STOP
       // above that bar even while the bar is auto-hidden. Use the measured
       // bar height when available, with a touch-sized minimum fallback.
-      const bottomGuard=Math.max(44,Math.ceil(controlsHeight)+6);
+      const bottomGuard=Math.max(minGuard,Math.ceil(controlsHeight)+8);
       const h=Math.min(rect.height*.78,rect.height*.89-bottomGuard);
       if(h<24){el.style.display='none';return;}
       const leftPos=side==='left'?rect.left:rect.right-w;
@@ -1972,12 +1973,60 @@
         // Fixed portals are above YouTube's dynamically added controls but
         // still below our stats sheet. Native settings menus opt out.
         const rect=player.getBoundingClientRect();
-        // Measure the real native bottom bar so the fullscreen button and
-        // seek bar keep receiving taps on every player size and locale.
-        const bar=player.querySelector('.ytp-chrome-bottom,.ytm-chrome-bottom');
-        const barHeight=bar?.getBoundingClientRect?.().height||0;
-        placeEdge(left,rect,'left',barHeight);
-        placeEdge(right,rect,'right',barHeight);
+        // 移动端 YouTube（m.youtube.com）的控制栏与全屏按钮常位于 #movie_player
+        // 外部容器，且底部为“进度条 + 上排按钮”，需要从播放器底边向上量到按钮顶部。
+        const measureBottomControls=()=>{
+          const doc=page.document||document;
+          const scopes=[player,player.parentElement,
+            player.closest?.('ytm-player'),
+            player.closest?.('#player-container'),
+            player.closest?.('#player-container-id'),
+            player.closest?.('#player'),
+            doc.querySelector?.('#player-control-overlay'),
+            doc.querySelector?.('ytm-custom-control')].filter(Boolean);
+          const selector=[
+            '.ytp-chrome-bottom','.ytm-chrome-bottom',
+            '.player-controls-bottom','.ytm-chrome-controls',
+            '.ytp-fullscreen-button','.fullscreen-icon',
+            'button[aria-label*="全屏" i]','button[aria-label*="Full screen" i]',
+            'button[aria-label*="Fullscreen" i]','button[aria-label*="退出全屏" i]',
+            'button[aria-label*="Exit full screen" i]',
+            '[role="button"][aria-label*="全屏" i]',
+            '[role="button"][aria-label*="Full screen" i]',
+            '[role="button"][aria-label*="Fullscreen" i]'
+          ].join(',');
+          const visited=new Set();
+          let maxFromBottom=0;
+          for(const scope of scopes){
+            if(visited.has(scope))continue;visited.add(scope);
+            for(const el of scope.querySelectorAll?.(selector)||[]){
+              const r=el.getBoundingClientRect?.();
+              if(!r||r.width<=0||r.height<=0)continue;
+              const css=page.getComputedStyle?.(el);
+              if(css?.display==='none'||css?.visibility==='hidden')continue;
+              if(r.top<rect.top+rect.height*.35||r.bottom>rect.bottom+16||
+                 r.left<rect.left-16||r.right>rect.right+16)continue;
+              const dist=rect.bottom-r.top;
+              if(dist>maxFromBottom)maxFromBottom=dist;
+            }
+          }
+          return maxFromBottom;
+        };
+        const sameBox=lastBarGuard.player===player&&
+          Math.abs(lastBarGuard.width-rect.width)<=2&&
+          Math.abs(lastBarGuard.height-rect.height)<=2;
+        const measured=measureBottomControls();
+        if(measured>0){
+          lastBarGuard={player,width:rect.width,height:rect.height,measured};
+        }else if(!sameBox){
+          lastBarGuard={player,width:rect.width,height:rect.height,measured:0};
+        }
+        const barHeight=measured>0?measured:lastBarGuard.measured;
+        const isMobileLayout=location.hostname==='m.youtube.com'||
+          !!(page.document||document).querySelector?.('ytm-player,#player-control-overlay');
+        const minGuard=isMobileLayout?80:44;
+        placeEdge(left,rect,'left',barHeight,minGuard);
+        placeEdge(right,rect,'right',barHeight,minGuard);
       }
       if(sheet&&!sheet.hidden){
         if(!player)close();
