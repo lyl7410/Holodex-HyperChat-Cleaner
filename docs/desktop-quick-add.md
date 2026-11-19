@@ -1,6 +1,6 @@
 # Holodex Quick Add — PC 桌面使用指南
 
-当前通用版 **v0.3.0**。同一个油猴脚本同时支持 PC 和 Android，不需要另外安装 PC 脚本。
+当前通用版 **v0.3.1**。同一个油猴脚本同时支持 PC 和 Android，不需要另外安装 PC 脚本。
 
 [安装 / 更新 Quick Add](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-mobile-quick-add.user.js) · [手机使用说明](mobile-quick-add.md) · [返回项目首页](../README.md)
 
@@ -9,8 +9,10 @@
 - PC 建议使用 Chrome、Edge 或 Firefox，配合支持异步 `GM.setValue` 的 Tampermonkey / ScriptCat。尚未对所有浏览器与脚本管理器组合做完整实测。
 - **不要额外安装一份 PC 脚本**，直接更新原来的 `holodex-mobile-quick-add.user.js`；为了确保覆盖现有安装，脚本头部的 `@name` 和 `@namespace` 保持旧值，功能已经升级为通用版。
 - YouTube 和 Holodex 必须在同一个浏览器配置文件、同一个脚本管理器中运行这一个脚本。普通 / 无痕窗口、不同浏览器之间不共享队列。
-- 升级后，请刷新已打开的 **YouTube 视频页**和 **Holodex Multiview 接收页**，确保双方都使用 v0.3.0。
+- 升级后，请刷新已打开的 **YouTube 视频页**和 **Holodex Multiview 接收页**，确保双方都使用 v0.3.1。
 - 如果安装了 PC 端 Holodex MultiView Assistant 扩展，建议先暂停该扩展的一键添加功能，避免两套入口同时添加。
+
+**v0.3.1：** YouTube 无刷新切换视频后，新视频可以立即加入同一队列，不再被前一个视频长达 45 秒的接收确认阻塞。原来的队列持久化与 Holodex 接收端机制不变。
 
 ## PC 便捷操作
 

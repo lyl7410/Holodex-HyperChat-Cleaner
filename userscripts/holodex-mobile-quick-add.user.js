@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Mobile Quick Add（精简手机版）
 // @namespace    holodex-mobile-quick-add
-// @version      0.3.0
-// @description  Android/PC 通用版：YouTube 一键加入 Holodex 多视图，PC 悬停按钮与快捷键，手机保持触控体验。
+// @version      0.3.1
+// @description  修复手机 YouTube 切换视频后 Quick Add 长时间已排队、无法继续添加；发送与接收确认独立处理。
 // @match        https://youtube.com/*
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -39,7 +39,55 @@
     if (typeof GM !== 'undefined' && typeof GM.setValue === 'function') return GM.setValue(key, value);
     throw new Error('E_STORAGE：脚本管理器需支持异步 GM.setValue；请检查 ScriptCat/Tampermonkey 授权并更新版本');
   };
-  let sourcePending = null, targetSession = null, draining = false;
+  let targetSession = null, draining = false;
+  // A saved request is NOT a global sending lock. Track each video independently
+  // so YouTube SPA navigation can add video B while video A awaits an ACK.
+  const outgoingByVideo = new Map();
+  const recentVideoStatus = new Map();
+  function setVideoFeedback(videoId, label, message, duration = 7000, forceNew = false) {
+    recentVideoStatus.set(videoId, { label, message, expires: Date.now() + duration, forceNew });
+    if (videoIdFromURL(location.href) === videoId) {
+      showNotice(message, duration);
+      refreshYouTubeButton();
+    }
+  }
+  function watchQueuedRequest(request) {
+    // Do not await this from the send handler. A Holodex tab can be frozen
+    // for tens of seconds on Android, yet the user must still add more videos.
+    const { requestId, videoId } = request;
+    (async () => {
+      const until = Date.now() + 45000;
+      try {
+        while (Date.now() < until) {
+          const result = await read(PREFIX + requestId, null);
+          if (result?.status === 'done') {
+            if (outgoingByVideo.get(videoId)?.requestId === requestId) {
+              outgoingByVideo.delete(videoId);
+              setVideoFeedback(videoId, '已加入多视图',
+                '视频 ' + videoId + (result.result === 'already'
+                  ? ' 已在目标布局中，没有重复添加。'
+                  : ' 已加入同一个 Holodex 分屏。'));
+            }
+            return;
+          }
+          if (result?.status === 'error') throw new Error(result.error || 'Holodex 接收失败');
+          await delay(700);
+        }
+        if (outgoingByVideo.get(videoId)?.requestId === requestId) {
+          outgoingByVideo.delete(videoId);
+          setVideoFeedback(videoId, '接收未确认 · 重试',
+            '视频 ' + videoId + ' 仍未收到 Holodex 确认。请切回 Holodex 接收页并检查队列；如接收页已关闭，可点此新建接收页。',
+            12000, true);
+        }
+      } catch (error) {
+        if (outgoingByVideo.get(videoId)?.requestId === requestId) {
+          outgoingByVideo.delete(videoId);
+          setVideoFeedback(videoId, '添加失败 · 重试',
+            '视频 ' + videoId + ' 添加失败：' + error.message, 12000);
+        }
+      }
+    })().catch(error => console.warn('[HMA] Quick Add 确认监听异常', error));
+  }
   const receiverToken = uid();
   const incoming = new Map();
   let receiverStarted = false;
@@ -123,11 +171,15 @@
   }
 
   async function openHolodex(forceNew = false) {
-    // Each click reads this tab's current URL, never the previous receive URL.
+    // Click-time URL is essential on YouTube SPA pages: never reuse a prior ID.
     const id = videoIdFromURL(location.href);
     if (!id) return showNotice('当前页面没有有效的视频 ID。');
     if (busy) return;
-    busy = true;
+    if (!forceNew && outgoingByVideo.has(id)) {
+      return showNotice('视频 ' + id +
+        ' 已在等待 Holodex 接收，仍可继续浏览并添加其他视频。');
+    }
+    busy = true; // Lock only queue persistence, not 45-second ACK polling.
     const requestId = uid();
     let blank = sourceBlank;
     sourceBlank = null;
@@ -135,20 +187,28 @@
     try {
       let target = await read(TARGET_KEY, null);
       if (forceNew || !target || Date.now() - target.updated > TTL) {
-        // The handler pre-opens a blank tab synchronously when a new receiver is needed.
         createdNew = true;
         target = { id: uid(), updated: Date.now() };
         await write(TARGET_KEY, target);
       }
-      const request = { requestId, target: target.id, videoId: id, created: Date.now(), status: 'pending' };
+      const request = {
+        requestId, target: target.id, videoId: id,
+        created: Date.now(), status: 'pending'
+      };
+      // Async GM persistence must complete before navigating or reporting queued.
       await write(PREFIX + requestId, request);
       await write(WAKE_KEY, request);
-      sourcePending = { requestId, videoId: id };
-      makeButton().classList.remove('hma-idle');
-      makeButton().textContent = '已排队：' + id;
-      showNotice(PC_MODE
-        ? '视频 ' + id + ' 已发送到接收队列。PC 后台分屏会尝试自动添加；若未生效，请激活 Holodex 接收页。'
-        : '视频 ' + id + ' 已保存到队列。请切回 Holodex；若没有“接收中”按钮，点击“使用此分屏接收”。');
+      outgoingByVideo.set(id, { requestId, target: target.id });
+      recentVideoStatus.delete(id);
+      if (videoIdFromURL(location.href) === id) {
+        makeButton().classList.remove('hma-idle');
+        makeButton().textContent = '已排队：' + id;
+        showNotice(PC_MODE
+          ? '视频 ' + id + ' 已发送到接收队列；后台接收页会尝试添加。'
+          : '视频 ' + id + ' 已保存到队列。可以继续添加其他视频；切回 Holodex 处理队列。');
+      }
+      // ACK runs independently and must never block a subsequent +H click.
+      watchQueuedRequest(request);
       if (createdNew) {
         const url = new URL('https://holodex.net/multiview/');
         url.searchParams.set('hma_session', target.id);
@@ -157,33 +217,19 @@
       } else {
         if (blank) { try { blank.close(); } catch {} blank = null; }
         if (!PC_MODE && sourceReceiver && !sourceReceiver.closed) {
-          try { sourceReceiver.focus(); } catch { /* Android may require switching tabs manually. */ }
+          try { sourceReceiver.focus(); } catch { /* Android may require a manual tab switch. */ }
         }
-        // PC: keep the YouTube tab focused when sending to an existing receiver.
       }
-      const until = Date.now() + 45000;
-      while (Date.now() < until) {
-        const result = await read(PREFIX + requestId, null);
-        if (result?.status === 'done') {
-          showNotice('视频 ' + id + (result.result === 'already' ? ' 已在目标布局中，没有重复添加。' : ' 已加入同一个 Holodex 分屏。'));
-          sourcePending = null;
-          return;
-        }
-        if (result?.status === 'error') throw new Error(result.error);
-        await delay(700);
-      }
-      showNotice(PC_MODE
-        ? '视频 ' + id + ' 仍未收到确认。请检查 Holodex 接收标签页；接收页关闭时可新建接收页。'
-        : '视频 ' + id + ' 仍在等待，请切回原 Holodex 页。若接收页已关闭，可点击“新建接收页”。');
-      makeButton().textContent = '新建接收页';
-      makeButton().onclick = () => startSend(true);
     } catch (error) {
       if (blank) { try { blank.close(); } catch {} }
-      showNotice('发送 ' + id + ' 失败：' + error.message);
-      sourcePending = null;
+      if (outgoingByVideo.get(id)?.requestId === requestId) outgoingByVideo.delete(id);
+      if (videoIdFromURL(location.href) === id)
+        showNotice('发送 ' + id + ' 失败：' + error.message);
     } finally {
+      // On mobile, Holodex may stay backgrounded for minutes.
+      // Release immediately after enqueue, never when ACK/timeout arrives.
       busy = false;
-      if (PC_MODE) refreshYouTubeButton();
+      refreshYouTubeButton();
     }
   }
 
@@ -193,7 +239,12 @@
   try { GM_addValueChangeListener(TARGET_KEY, (_key, _old, value) => { knownTarget = value; }); } catch {}
 
   function startSend(forceNew = false) {
-    if (busy) return;
+    const id = videoIdFromURL(location.href);
+    if (!id || busy) return;
+    if (!forceNew && outgoingByVideo.has(id)) {
+      showNotice('视频 ' + id + ' 已在接收队列中，请切回 Holodex 检查。');
+      return;
+    }
     const needsNew = forceNew || !knownTarget || Date.now() - knownTarget.updated > TTL;
     sourceBlank = needsNew ? window.open('about:blank', '_blank') : null;
     if (sourceBlank) sourceReceiver = sourceBlank;
@@ -630,10 +681,34 @@
     if (!document.body) return;
     const id = videoIdFromURL(location.href);
     if (!id) { button?.remove(); notice?.remove(); return; }
-    if (!busy && sourcePending && sourcePending.videoId !== id) sourcePending = null;
     const btn = makeButton();
-    if (busy || sourcePending) return;
-    btn.classList.add('hma-idle');
+    // A new YouTube video must never inherit the previous video's disabled
+    // state, "已排队" text or "新建接收页" onclick.
+    btn.disabled = !!busy;
+    if (busy) {
+      btn.classList.remove('hma-idle');
+      btn.textContent = '正在保存到队列…';
+      return;
+    }
+    const pending = outgoingByVideo.get(id);
+    const recent = recentVideoStatus.get(id);
+    if (recent && recent.expires <= Date.now()) recentVideoStatus.delete(id);
+    btn.classList.toggle('hma-idle', !pending && !(recent && recent.expires > Date.now()));
+    if (pending) {
+      btn.textContent = '已排队：' + id;
+      btn.title = '等待 Holodex 接收；仍可切换到其他视频继续添加';
+      btn.onclick = () => showNotice('视频 ' + id +
+        ' 已在等待 Holodex 确认。可继续添加其他视频；请切回 Holodex 处理队列。');
+      return;
+    }
+    if (recent && recent.expires > Date.now()) {
+      btn.textContent = recent.label;
+      btn.title = recent.message;
+      btn.onclick = recent.forceNew
+        ? () => startSend(true)
+        : () => showNotice(recent.message);
+      return;
+    }
     btn.textContent = '＋H';
     btn.setAttribute('aria-label', '将当前视频加入 Holodex 多视图');
     btn.title = PC_MODE
