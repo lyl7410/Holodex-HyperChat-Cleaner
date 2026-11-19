@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.51
-// @description  横屏自动尝试全屏、竖屏自动恢复；保留同排全屏图标、手动全屏与快速暂停保护。
+// @version      0.6.52
+// @description  横屏自动尝试全屏、竖屏自动恢复；手机手势区避让原生控制栏，修复 YouTube 连接速度面板可见性判定；保留同排全屏图标与快速暂停保护。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -1008,8 +1008,17 @@
       const apiVisibility=playerInfoVisible(p);
       const existing=pageDoc.querySelector(
         '.html5-video-info-panel-content, .html5-video-info-panel, .ytp-stats-for-nerds');
-      const rect=existing?.getClientRects?.();
-      const visible=apiVisibility===null?!!rect?.length:apiVisibility;
+      // A pre-rendered panel can keep layout rects while hidden via
+      // visibility/display. Rects alone would wrongly report "visible", so
+      // showVideoInfo() never runs and Connection Speed stays "—" forever.
+      // Use the same computed-style evidence as the proven Holodex bridge.
+      const existingStyle=existing?
+        pageDoc.defaultView?.getComputedStyle?.(existing):null;
+      const trulyVisible=!!existing?.getClientRects?.().length&&
+        existingStyle?.display!=='none'&&existingStyle?.visibility!=='hidden';
+      // Real DOM evidence wins: a panel the user can actually see is read
+      // passively and never hidden, whatever the visibility API claims.
+      const visible=trulyVisible||apiVisibility===true;
       if(!visible&&typeof p.showVideoInfo!=='function')
         return {started:false,reason:'播放器未开放原生统计显示接口'};
       if(!visible&&!monitor.forced){
@@ -1033,6 +1042,19 @@
           monitor.lastArm=now;
           css(true);
           try{p.showVideoInfo();}catch{}
+        }
+      }else if(visible&&!monitor.forced&&!trulyVisible&&
+        typeof p.showVideoInfo==='function'){
+        // The visibility API claims stats are on, but no readable panel
+        // exists and no real sample arrived recently. Verify silently
+        // instead of reporting "—" forever. Once data flows, lastSample
+        // stays fresh and this branch never interferes again.
+        const now=Date.now();
+        const noSample=!monitor.lastSample||now-monitor.lastSample.at>6000;
+        if(noSample&&(!monitor.lastArm||now-monitor.lastArm>=2000)){
+          monitor.lastArm=now;
+          css(true);
+          try{p.showVideoInfo();monitor.forced=true;}catch{}
         }
       }
       return {started:visible||monitor.forced,hidden:monitor.forced};
@@ -1909,7 +1931,7 @@
     // Fixed-position edge portals survive YouTube's play/pause overlays,
     // dynamic control rebuilding and SPA video changes. Reposition rather
     // than relying on child stacking order inside #movie_player.
-    function placeEdge(el,rect,side){
+    function placeEdge(el,rect,side,controlsHeight=0){
       if(!el)return;
       const winWidth=innerWidth||document.documentElement.clientWidth;
       const winHeight=innerHeight||document.documentElement.clientHeight;
@@ -1918,7 +1940,13 @@
       el.style.display=intersects?'block':'none';
       if(!intersects)return;
       const w=Math.min(112,Math.max(20,rect.width*.36));
-      const h=rect.height*.78;
+      // YouTube's native bottom bar (fullscreen, play/pause, seek bar) must
+      // stay tappable. The right portal intercepts touches, so it must STOP
+      // above that bar even while the bar is auto-hidden. Use the measured
+      // bar height when available, with a touch-sized minimum fallback.
+      const bottomGuard=Math.max(44,Math.ceil(controlsHeight)+6);
+      const h=Math.min(rect.height*.78,rect.height*.89-bottomGuard);
+      if(h<24){el.style.display='none';return;}
       const leftPos=side==='left'?rect.left:rect.right-w;
       const x=Math.max(0,Math.min(winWidth,leftPos));
       const y=Math.max(0,Math.min(winHeight,rect.top+rect.height*.11));
@@ -1944,8 +1972,12 @@
         // Fixed portals are above YouTube's dynamically added controls but
         // still below our stats sheet. Native settings menus opt out.
         const rect=player.getBoundingClientRect();
-        placeEdge(left,rect,'left');
-        placeEdge(right,rect,'right');
+        // Measure the real native bottom bar so the fullscreen button and
+        // seek bar keep receiving taps on every player size and locale.
+        const bar=player.querySelector('.ytp-chrome-bottom,.ytm-chrome-bottom');
+        const barHeight=bar?.getBoundingClientRect?.().height||0;
+        placeEdge(left,rect,'left',barHeight);
+        placeEdge(right,rect,'right',barHeight);
       }
       if(sheet&&!sheet.hidden){
         if(!player)close();
@@ -2359,7 +2391,7 @@
   }
   if(window.top!==window.self || !/^(www\.)?holodex\.net$/.test(location.hostname))return;
 
-  const VERSION='0.6.51', KEY='hmtc_enabled_v1';
+  const VERSION='0.6.52', KEY='hmtc_enabled_v1';
   const EDGE_KEY='hmtc_edge_gestures_enabled_v1';
   const SENS_KEY='hmtc_volume_sensitivity_v1';
   const STATS_MODE_KEY='hmtc_stats_trigger_v1';
@@ -5073,8 +5105,8 @@
         if(Number.isInteger(n)&&n>=1&&n<=rows.length)openSheet(rows[n-1]);
       });
     }
-    GM_registerMenuCommand('Touch Controls v0.6.51 说明',()=>
-      alert('v0.6.51：可开启横屏自动尝试、竖屏自动恢复；浏览器拒绝自动进入时保留一触全屏。竖屏手动全屏和同排图标保留。'));
+    GM_registerMenuCommand('Touch Controls v0.6.52 说明',()=>
+      alert('v0.6.52：横屏自动尝试全屏、竖屏自动恢复；手机手势区避让原生底部控制栏，修复 YouTube 连接速度面板可见性判定；保留同排全屏图标与快速暂停保护。'));
 
     installBridge();
     let last=location.href,previousMulti=isMulti();

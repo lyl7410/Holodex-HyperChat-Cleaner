@@ -37,6 +37,32 @@ test('input changes and legacy MediaQueryList listeners refresh policy',()=>{
   vm.runInContext('watchTouchZonePolicy(refresh)',ctx);
   env.media.get('(pointer:coarse)').change();assert.equal(calls,2);
 });
+test('mobile edge zones stop above the native bottom bar so fullscreen stays tappable',()=>{
+  const ctx=vm.createContext({innerWidth:390,innerHeight:844,
+    document:{documentElement:{clientWidth:390,clientHeight:844}}});
+  vm.runInContext(section('    function placeEdge(','    function refresh(){'),ctx);
+  const make=()=>({style:{}}),num=v=>parseFloat(v);
+  // 16:9 phone player; the native bottom bar measures 49px tall.
+  const rect={left:0,top:100,right:390,bottom:319.75,width:390,height:219.75};
+  for(const side of ['left','right']){
+    const el=make();ctx.placeEdge(el,rect,side,49);
+    assert.equal(el.style.display,'block');
+    assert.ok(num(el.style.top)+num(el.style.height)<=rect.bottom-49+0.5,
+      side+' zone must end above the native control bar');
+    assert.ok(num(el.style.height)>=24);
+  }
+  // Bar auto-hidden or unmeasurable: a touch-sized minimum guard remains.
+  const right=make();ctx.placeEdge(right,rect,'right',0);
+  assert.ok(num(right.style.top)+num(right.style.height)<=rect.bottom-44+0.5);
+  // Tall fullscreen players keep the original 78% gesture height.
+  const tall={left:0,top:0,right:844,bottom:600,width:844,height:600};
+  const full=make();ctx.placeEdge(full,tall,'right',56);
+  assert.equal(num(full.style.height),600*.78);
+  // Degenerate tiny players hide the zone instead of covering controls.
+  const tiny={left:0,top:0,right:390,bottom:65,width:390,height:65};
+  const small=make();ctx.placeEdge(small,tiny,'right',49);
+  assert.equal(small.style.display,'none');
+});
 test('PC initialization registers statistics; selection opens the correct video without an overlay',()=>{
   const menus=new Map(),opened=[],rows=[{videoId:'abcdefghijk',layoutId:1,title:'A'}];
   let removed=0,policyChange;
@@ -320,6 +346,64 @@ test('switching from touch silent sampling releases ownership before native stat
   allowed=false;ctx.collector.start();assert.equal(hides,1);assert.equal(classes.size,0);
   player.showVideoInfo();ctx.collector.start();ctx.collector.stop();
   assert.equal(visible,true);assert.equal(hides,1);assert.equal(shows,2);
+});
+test('watch collector enables stats when a pre-rendered panel is hidden and the visibility API is absent',()=>{
+  let shows=0,hides=0;const classes=new Set();
+  const panel={getClientRects:()=>[{}],textContent:''};
+  const player={showVideoInfo(){shows++;panel.textContent='Connection Speed 9800 Kbps';},
+    hideVideoInfo(){hides++;panel.textContent='';},
+    getVideoData:()=>({video_id:'vid1'})};
+  const pageDoc={getElementById:()=>({}),querySelector:()=>panel,
+    querySelectorAll:()=>[panel],
+    defaultView:{getComputedStyle:()=>({display:'block',visibility:'hidden'})},
+    documentElement:{classList:{toggle(c,on){on?classes.add(c):classes.delete(c);}}}};
+  const ctx=vm.createContext({pageDoc,player,touchZonesAllowed:()=>true});
+  vm.runInContext(section('  function youtubeWatchBandwidth(',
+    '  // HTMLMediaElement.duration')+'\nvar collector=youtubeWatchBandwidth(pageDoc,()=>player);',ctx);
+  const started=ctx.collector.start();
+  // Layout rects alone must not pass a visibility:hidden panel as "visible".
+  assert.equal(shows,1);assert.equal(started.hidden,true);
+  const net=ctx.collector.read();
+  assert.equal(net.available,true);assert.equal(net.bandwidthKbps,9800);
+  ctx.collector.stop();
+  assert.equal(hides,1);assert.equal(classes.size,0);
+});
+test('watch collector verifies a lying visibility API once, then stops interfering when data flows',()=>{
+  let shows=0,panel=null;
+  const player={isVideoInfoVisible:()=>true,
+    showVideoInfo(){shows++;panel={getClientRects:()=>[{}],
+      textContent:'Connection Speed 12345 Kbps'};},
+    getVideoData:()=>({video_id:'vid1'})};
+  const pageDoc={getElementById:()=>({}),querySelector:()=>panel,
+    querySelectorAll:()=>panel?[panel]:[],
+    defaultView:{getComputedStyle:()=>({display:'block',visibility:'visible'})},
+    documentElement:{classList:{toggle(){}}}};
+  const ctx=vm.createContext({pageDoc,player,touchZonesAllowed:()=>true});
+  vm.runInContext(section('  function youtubeWatchBandwidth(',
+    '  // HTMLMediaElement.duration')+'\nvar collector=youtubeWatchBandwidth(pageDoc,()=>player);',ctx);
+  // API claims visible, but no readable panel and no sample: verify silently.
+  ctx.collector.start();assert.equal(shows,1);
+  assert.equal(ctx.collector.read().bandwidthKbps,12345);
+  ctx.collector.start();ctx.collector.start();
+  assert.equal(shows,1);
+});
+test('watch collector reads a genuinely visible user panel passively without hiding it',()=>{
+  let shows=0,hides=0;const classes=new Set();
+  const panel={getClientRects:()=>[{}],textContent:'Connection Speed 5000 Kbps'};
+  const player={isVideoInfoVisible:()=>false,showVideoInfo(){shows++;},
+    hideVideoInfo(){hides++;},getVideoData:()=>({video_id:'vid1'})};
+  const pageDoc={getElementById:()=>({}),querySelector:()=>panel,
+    querySelectorAll:()=>[panel],
+    defaultView:{getComputedStyle:()=>({display:'block',visibility:'visible'})},
+    documentElement:{classList:{toggle(c,on){on?classes.add(c):classes.delete(c);}}}};
+  const ctx=vm.createContext({pageDoc,player,touchZonesAllowed:()=>true});
+  vm.runInContext(section('  function youtubeWatchBandwidth(',
+    '  // HTMLMediaElement.duration')+'\nvar collector=youtubeWatchBandwidth(pageDoc,()=>player);',ctx);
+  const started=ctx.collector.start();
+  assert.equal(shows,0);assert.equal(started.hidden,false);
+  assert.equal(ctx.collector.read().bandwidthKbps,5000);
+  ctx.collector.stop();
+  assert.equal(hides,0);assert.equal(classes.size,0);
 });
 
 test('desktop iframe monitor stays passive while explicit native toggle remains usable',()=>{
