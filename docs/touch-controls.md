@@ -1,4 +1,4 @@
-# Holodex / YouTube Touch Controls — v0.6.29 连接速度兼容性修复
+# Holodex / YouTube Touch Controls — v0.6.42 手势区避让原生控制栏
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
@@ -10,6 +10,16 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. Cleaner 的聊天间距功能已独立更新至 v2.5.0；Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.42：手机手势区避让原生底部控制栏
+
+手机端右侧音量手势区原先覆盖播放器高度的 11%～89%，在较矮的播放画面上会压住 YouTube 自带的底部控制栏；右侧手势区又会拦截触摸事件，导致右下角全屏按钮点不到。
+
+本版改为：**手势区底边始终停在原生底部控制栏上方**。优先实测 `.ytp-chrome-bottom` 控制栏高度并额外留 6px 余量；控制栏自动隐藏或无法测量时，仍保留至少 44px 的触控保护带。左右两侧手势区同样避让，底部播放／暂停与进度条也不再被拦截。较高的全屏画面保持原有 78% 手势高度不变；极矮画面（保护后手势区不足 24px）直接隐藏手势区，优先保证原生按钮可用。
+
+同时修复 v0.6.36 引入 HUD 位置／大小功能后遗留的 3 项测试桩缺失（`chooseHudPosition`、面板 `querySelector`、`hudPosition` 导出），并新增手势区避让回归测试。
+
+**验证**：73 项 Touch Controls 测试、24 项 Channel Name Fix 测试、93 项 Embed Recovery 测试全部通过；新增测试覆盖手机矮画面、控制栏隐藏、全屏高画面与极矮画面四种几何场景。手机实站全屏按钮手感仍待安装确认。
 
 ## v0.6.29：恢复安卓原生 Connection Speed 采集
 

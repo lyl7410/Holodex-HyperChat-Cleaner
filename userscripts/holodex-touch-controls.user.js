@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.41
-// @description  清理 Holodex 旧视频与右键诊断菜单，保留自动播放诊断、快捷统计与 TrustedHTML 兼容。
+// @version      0.6.42
+// @description  手机手势区不再遮挡 YouTube 原生底部控制栏（全屏等按钮可点）；修复 HUD 位置相关回归测试。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -1861,7 +1861,7 @@
     // Fixed-position edge portals survive YouTube's play/pause overlays,
     // dynamic control rebuilding and SPA video changes. Reposition rather
     // than relying on child stacking order inside #movie_player.
-    function placeEdge(el,rect,side){
+    function placeEdge(el,rect,side,controlsHeight=0){
       if(!el)return;
       const winWidth=innerWidth||document.documentElement.clientWidth;
       const winHeight=innerHeight||document.documentElement.clientHeight;
@@ -1870,7 +1870,13 @@
       el.style.display=intersects?'block':'none';
       if(!intersects)return;
       const w=Math.min(112,Math.max(20,rect.width*.36));
-      const h=rect.height*.78;
+      // YouTube's native bottom bar (fullscreen, play/pause, seek bar) must
+      // stay tappable. The right portal intercepts touches, so it must STOP
+      // above that bar even while the bar is auto-hidden. Use the measured
+      // bar height when available, with a touch-sized minimum fallback.
+      const bottomGuard=Math.max(44,Math.ceil(controlsHeight)+6);
+      const h=Math.min(rect.height*.78,rect.height*.89-bottomGuard);
+      if(h<24){el.style.display='none';return;}
       const leftPos=side==='left'?rect.left:rect.right-w;
       const x=Math.max(0,Math.min(winWidth,leftPos));
       const y=Math.max(0,Math.min(winHeight,rect.top+rect.height*.11));
@@ -1896,8 +1902,12 @@
         // Fixed portals are above YouTube's dynamically added controls but
         // still below our stats sheet. Native settings menus opt out.
         const rect=player.getBoundingClientRect();
-        placeEdge(left,rect,'left');
-        placeEdge(right,rect,'right');
+        // Measure the real native bottom bar so the fullscreen button and
+        // seek bar keep receiving taps on every player size and locale.
+        const bar=player.querySelector('.ytp-chrome-bottom,.ytm-chrome-bottom');
+        const barHeight=bar?.getBoundingClientRect?.().height||0;
+        placeEdge(left,rect,'left',barHeight);
+        placeEdge(right,rect,'right',barHeight);
       }
       if(sheet&&!sheet.hidden){
         if(!player)close();

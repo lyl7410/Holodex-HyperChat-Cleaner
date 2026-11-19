@@ -37,6 +37,32 @@ test('input changes and legacy MediaQueryList listeners refresh policy',()=>{
   vm.runInContext('watchTouchZonePolicy(refresh)',ctx);
   env.media.get('(pointer:coarse)').change();assert.equal(calls,2);
 });
+test('mobile edge zones stop above the native bottom bar so fullscreen stays tappable',()=>{
+  const ctx=vm.createContext({innerWidth:390,innerHeight:844,
+    document:{documentElement:{clientWidth:390,clientHeight:844}}});
+  vm.runInContext(section('    function placeEdge(','    function refresh(){'),ctx);
+  const make=()=>({style:{}}),num=v=>parseFloat(v);
+  // 16:9 phone player; the native bottom bar measures 49px tall.
+  const rect={left:0,top:100,right:390,bottom:319.75,width:390,height:219.75};
+  for(const side of ['left','right']){
+    const el=make();ctx.placeEdge(el,rect,side,49);
+    assert.equal(el.style.display,'block');
+    assert.ok(num(el.style.top)+num(el.style.height)<=rect.bottom-49+0.5,
+      side+' zone must end above the native control bar');
+    assert.ok(num(el.style.height)>=24);
+  }
+  // Bar auto-hidden or unmeasurable: a touch-sized minimum guard remains.
+  const right=make();ctx.placeEdge(right,rect,'right',0);
+  assert.ok(num(right.style.top)+num(right.style.height)<=rect.bottom-44+0.5);
+  // Tall fullscreen players keep the original 78% gesture height.
+  const tall={left:0,top:0,right:844,bottom:600,width:844,height:600};
+  const full=make();ctx.placeEdge(full,tall,'right',56);
+  assert.equal(num(full.style.height),600*.78);
+  // Degenerate tiny players hide the zone instead of covering controls.
+  const tiny={left:0,top:0,right:390,bottom:65,width:390,height:65};
+  const small=make();ctx.placeEdge(small,tiny,'right',49);
+  assert.equal(small.style.display,'none');
+});
 test('PC initialization registers statistics; selection opens the correct video without an overlay',()=>{
   const menus=new Map(),opened=[],rows=[{videoId:'abcdefghijk',layoutId:1,title:'A'}];
   let removed=0,policyChange;
@@ -47,7 +73,8 @@ test('PC initialization registers statistics; selection opens the correct video 
     location:{href:'https://holodex.net/multiview'},backdrop:{hidden:false},sheet:{hidden:false},
     GM_registerMenuCommand:(name,fn)=>menus.set(name,fn),
     watchTouchZonePolicy:fn=>{policyChange=fn;},touchZonesAllowed:()=>false,
-    cycleHudMode:noop,pollCornerHuds:noop,clearHudCells:noop,openSettings:noop,
+    cycleHudMode:noop,chooseHudPosition:noop,chooseHudSize:noop,
+    pollCornerHuds:noop,clearHudCells:noop,openSettings:noop,
     manualAutoPlay:noop,diagnoseAutoPlay:noop,makeSheet:noop,installDesktopDismiss:noop,get:(_k,d)=>d,DEBUG_KEY:'debug',
     installBridge:noop,isMulti:()=>true,setInterval:noop,refresh:noop,
     rowMap:new Map(rows.map(r=>[r.layoutId+':'+r.videoId,r])),
@@ -172,7 +199,8 @@ test('YouTube Trusted Types: static panels render with innerHTML prohibited',()=
 test('YouTube panel opens with no full-screen mouse blocker and closes cleanly',()=>{
   for(const touch of [false,true]){
     const ctx=vm.createContext({supported:()=>true,p:()=>({}),makePanel(){},
-      sheet:{hidden:true},backdrop:{hidden:true},touchZonesAllowed:()=>touch,desktopMountAllowed:()=>true,desktopVideoAnchor:()=>null,presentPanel(){},
+      sheet:{hidden:true,querySelector:()=>({value:'',textContent:''})},backdrop:{hidden:true},touchZonesAllowed:()=>touch,desktopMountAllowed:()=>true,desktopVideoAnchor:()=>null,presentPanel(){},
+      hudPosition:()=>'top-left',hudSize:()=>100,
       bandwidth:{start(){},stop(){}},hudWantsSpeed:()=>false,
       refreshSheet(){},refreshQualityChoices(){}});
     const yt=source.slice(0,source.indexOf('  // Run a minimal, read-only stats bridge'));
@@ -326,7 +354,8 @@ test('HUD position setting persists and rejects invalid values',()=>{
     document:{dispatchEvent:event=>events.push(event.type)},
     Event,GM_getValue:(key,fallback)=>store.has(key)?store.get(key):fallback,
     GM_setValue:(key,value)=>store.set(key,value),prompt:()=>null,alert(){}});
-  vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES='),ctx);
+  vm.runInContext(section('  const HUD_KEY=','  const HUD_MODES=')+
+    '\nthis.hudPosition=hudPosition;',ctx);
   assert.equal(ctx.hudPosition(),'top-left');
   assert.equal(ctx.setHudPosition('bottom-right'),true);
   assert.equal(ctx.hudPosition(),'bottom-right');
