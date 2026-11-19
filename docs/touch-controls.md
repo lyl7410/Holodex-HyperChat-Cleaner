@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.43 连接速度可见性判定修复
+# Holodex / YouTube Touch Controls — v0.6.52 整合底部控制栏避让与连接速度修复
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新正式版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.43；更新后完整刷新页面与 iframe） · [项目首页](../README.md)
+**[安装／更新分支版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/feat/android-landscape-fullscreen-v0642/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.52；更新后完整刷新页面与 iframe） · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -11,27 +11,20 @@
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. Cleaner 的聊天间距功能已独立更新至 v2.5.0；Quick Add、Channel Name Fix 不需修改。
 
+## v0.6.52：整合 main 分支的 v0.6.42 与 v0.6.43 修复
+
+在 `v0.6.51`（横屏自动尝试全屏／竖屏自动恢复、工具栏同排全屏图标、快速暂停保护与红色 LIVE 追新）基础上，合并入 `main` 分支的两个关键修复及对应回归测试：
+
+- **来自 v0.6.43 — 修复 YouTube 页面连接速度一直显示「—」**：YouTube 页面采集器在缺少 `isVideoInfoVisible()` 时曾仅凭布局矩形判断原生面板可见，导致 `visibility:hidden` 的预渲染面板被误判为已开启、`showVideoInfo()` 永不执行。现改为与 Holodex 桥接一致，同时校验布局矩形与计算样式（`display` / `visibility`），并在 `isVideoInfoVisible()` 谎报已开启且 6 秒无真实读数时静默补开一次原生统计（2 秒节流）；真实可见的用户面板仍被动读取、绝不隐藏。
+- **来自 v0.6.42 — 手机手势区避让原生底部控制栏**：手势区底边改为停在原生底部控制栏上方（优先实测 `.ytp-chrome-bottom` / `.ytm-chrome-bottom` 高度并留 6px 余量，隐藏或无法测量时至少保留 44px 保护带），右下角全屏按钮与底部播放／进度条恢复可点；极矮画面（保护后不足 24px）自动隐藏手势区，高画面保持原有 78% 手势高度。
+
 ## v0.6.43：修复 YouTube 页面连接速度一直显示「—」
 
 Holodex 多视图连接速度正常、普通 YouTube 页面却始终读不出数值的根源：两条采集路径的「原生统计面板是否可见」判定不一致。Holodex iframe 桥接会检查面板的计算样式（display/visibility），而 YouTube 页面采集器在缺少 `isVideoInfoVisible()` 接口时只看面板有没有布局矩形。YouTube 预渲染的统计面板可以用 `visibility:hidden` 隐藏但仍保留布局矩形，于是被误判为「统计已开启」，`showVideoInfo()` 永远不会被调用，统计引擎不填充数据，连接速度一直是「—」。
 
-本版修复：
-
-- **可见性判定与 Holodex 桥接对齐**：同时检查布局矩形与计算样式，隐藏面板不再被误判为已开启；真实可见的用户面板优先按 DOM 证据被动读取，绝不隐藏或接管。
-- **接口谎报兜底**：`isVideoInfoVisible()` 声称已开启、但实际没有可读面板且超过 6 秒没有任何真实读数时，静默补开一次原生统计（2 秒节流）；数据恢复流动后不再干预。
-- 桌面被动模式、用户自开统计的所有权保护、6 秒缓存边界均不变。
-
-**验证**：新增 3 项回归测试（隐藏预渲染面板＋无可见性接口、接口谎报＋无样本、真实可见面板被动读取），在旧代码上全部失败、修复后全部通过；76 项 Touch Controls 测试、24 项 Channel Name Fix、93 项 Embed Recovery 全部通过。本环境无法直连 YouTube 实站，手机真机效果待安装确认；若仍为「—」，说明该播放器构建未开放任何原生统计接口，属 YouTube 侧限制。
-
 ## v0.6.42：手机手势区避让原生底部控制栏
 
-手机端右侧音量手势区原先覆盖播放器高度的 11%～89%，在较矮的播放画面上会压住 YouTube 自带的底部控制栏；右侧手势区又会拦截触摸事件，导致右下角全屏按钮点不到。
-
-本版改为：**手势区底边始终停在原生底部控制栏上方**。优先实测 `.ytp-chrome-bottom` 控制栏高度并额外留 6px 余量；控制栏自动隐藏或无法测量时，仍保留至少 44px 的触控保护带。左右两侧手势区同样避让，底部播放／暂停与进度条也不再被拦截。较高的全屏画面保持原有 78% 手势高度不变；极矮画面（保护后手势区不足 24px）直接隐藏手势区，优先保证原生按钮可用。
-
-同时修复 v0.6.36 引入 HUD 位置／大小功能后遗留的 3 项测试桩缺失（`chooseHudPosition`、面板 `querySelector`、`hudPosition` 导出），并新增手势区避让回归测试。
-
-**验证**：73 项 Touch Controls 测试、24 项 Channel Name Fix 测试、93 项 Embed Recovery 测试全部通过；新增测试覆盖手机矮画面、控制栏隐藏、全屏高画面与极矮画面四种几何场景。手机实站全屏按钮手感仍待安装确认。
+手机端右侧音量手势区原先覆盖播放器高度的 11%～89%，在较矮的播放画面上会压住 YouTube 自带的底部控制栏；右侧手势区又会拦截触摸事件，导致右下角全屏按钮点不到。本版改为手势区底边始终停在原生底部控制栏上方。
 
 ## v0.6.29：恢复安卓原生 Connection Speed 采集
 
