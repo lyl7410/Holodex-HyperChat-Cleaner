@@ -1278,9 +1278,15 @@ function watchFullscreenHarness({initialEnabled,mobile=true,pathname='/watch',la
   const store=new Map();
   if(initialEnabled!==undefined)store.set('hmtc_yt_landscape_auto_fullscreen_v1',initialEnabled);
   const requests=[],exits=[];
+  const makeClassList=()=>{const s=new Set();return {add:c=>s.add(c),remove:c=>s.delete(c),contains:c=>s.has(c),has:c=>s.has(c)};};
+  const body={classList:makeClassList()};
+  const watchAncestor={classList:makeClassList(),parentElement:body};
   const overlay={contains:()=>false};
   const ytmPlayer={
     id:'ytm-player',
+    isConnected:true,
+    classList:makeClassList(),
+    parentElement:watchAncestor,
     contains:node=>node===player||node===overlay,
     requestFullscreen(opts){
       requests.push({target:'ytm-player',opts});
@@ -1292,6 +1298,9 @@ function watchFullscreenHarness({initialEnabled,mobile=true,pathname='/watch',la
   };
   const player={
     id:'movie_player',
+    isConnected:true,
+    classList:makeClassList(),
+    parentElement:ytmPlayer,
     contains:node=>node===player,
     closest:sel=>sel==='ytm-player'?ytmPlayer:null,
     requestFullscreen(opts){
@@ -1303,8 +1312,11 @@ function watchFullscreenHarness({initialEnabled,mobile=true,pathname='/watch',la
     }
   };
   const checkbox={checked:false};
+  let refreshCount=0;
   const doc={
     fullscreenElement:null,
+    documentElement:{classList:makeClassList()},
+    body,
     querySelector:sel=>sel==='#player-control-overlay,ytm-custom-control'?overlay:null,
     exitFullscreen(){
       exits.push(doc.fullscreenElement?.id||'unknown');
@@ -1328,15 +1340,17 @@ function watchFullscreenHarness({initialEnabled,mobile=true,pathname='/watch',la
     sheet:{querySelector:sel=>sel==='[data-id="ytFullscreenAuto"]'?checkbox:null},
     setting:(k,d)=>store.has(k)?store.get(k):d,
     GM_getValue:(k,d)=>store.has(k)?store.get(k):d,
-    GM_setValue:(k,v)=>store.set(k,v)
+    GM_setValue:(k,v)=>store.set(k,v),
+    refresh:()=>{refreshCount++;}
   });
   const code=section('    const ytFullscreenAutoKey=','    let watchHud=null;')+
-    '\nthis.watchAutoEnabled=watchAutoEnabled;';
+    '\nthis.watchAutoEnabled=watchAutoEnabled;\nthis.isWebFullscreenActive=isWebFullscreenActive;';
   vm.runInContext(code,ctx);
-  return {ctx,doc,player,ytmPlayer,requests,exits,checkbox,screenObj,store,setOrientation(land){
-    ctx.innerWidth=land?844:390;ctx.innerHeight=land?390:844;
-    screenObj.orientation.type=land?'landscape-primary':'portrait-primary';
-  }};
+  return {ctx,doc,player,ytmPlayer,watchAncestor,requests,exits,checkbox,screenObj,store,
+    refreshes:()=>refreshCount,setMode(m){mode=m;},setOrientation(land){
+      ctx.innerWidth=land?844:390;ctx.innerHeight=land?390:844;
+      screenObj.orientation.type=land?'landscape-primary':'portrait-primary';
+    }};
 }
 test('YouTube mobile watch auto-fullscreen defaults to on, picks outer ytm-player container, and restores on portrait',async()=>{
   const h=watchFullscreenHarness();
@@ -1350,29 +1364,55 @@ test('YouTube mobile watch auto-fullscreen defaults to on, picks outer ytm-playe
   await new Promise(r=>setTimeout(r,0));
   assert.deepEqual(h.exits,['ytm-player']);assert.equal(h.doc.fullscreenElement,null);
 });
-test('YouTube mobile watch suppresses re-entry after manual exit in landscape and restores manual landscape fullscreen on portrait',async()=>{
+test('YouTube mobile watch falls back to CSS web-fullscreen when native fullscreen is rejected and restores on portrait',async()=>{
   const h=watchFullscreenHarness({mode:'reject'});
+  // 第1次被浏览器拒绝 -> 自动切入 CSS 网页铺满全屏兜底
   h.setOrientation(true);h.ctx.reconcileWatchFullscreen();
   await new Promise(r=>setTimeout(r,0));
   assert.equal(h.requests.length,1);assert.equal(h.doc.fullscreenElement,null);
-  // 浏览器拒绝自动全屏后，用户在横屏下手动点击进入全屏；转回竖屏时仍应自动退出恢复。
+  assert.equal(h.ctx.isWebFullscreenActive(),true);
+  assert.equal(h.doc.documentElement.classList.has('hmtc-yt-web-fullscreen'),true);
+  assert.equal(h.ytmPlayer.classList.has('hmtc-yt-fs-host'),true);
+  assert.equal(h.watchAncestor.classList.has('hmtc-yt-fs-ancestor'),true);
+  assert.ok(h.refreshes()>=1);
+  // 转回竖屏 -> 自动退出 CSS 网页全屏并清理所有辅助类
+  h.setOrientation(false);h.ctx.reconcileWatchFullscreen();
+  assert.equal(h.ctx.isWebFullscreenActive(),false);
+  assert.equal(h.doc.documentElement.classList.has('hmtc-yt-web-fullscreen'),false);
+  assert.equal(h.ytmPlayer.classList.has('hmtc-yt-fs-host'),false);
+  assert.equal(h.watchAncestor.classList.has('hmtc-yt-fs-ancestor'),false);
+  // 连续第2次转横屏（仍无激活被拒绝）-> 依然能自动进入 CSS 网页全屏
+  h.setOrientation(true);h.ctx.reconcileWatchFullscreen();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.requests.length,2);
+  assert.equal(h.ctx.isWebFullscreenActive(),true);
+  // 若用户在 CSS 网页全屏下手动点击了原生全屏升级为系统全屏 -> 自动清除 CSS 类，回竖屏时正常退出系统全屏
   h.doc.fullscreenElement=h.ytmPlayer;h.ctx.onWatchFullscreenChange();
+  assert.equal(h.ctx.isWebFullscreenActive(),false);
+  assert.equal(h.ytmPlayer.classList.has('hmtc-yt-fs-host'),false);
   h.setOrientation(false);h.ctx.reconcileWatchFullscreen();
   await new Promise(r=>setTimeout(r,0));
   assert.deepEqual(h.exits,['ytm-player']);assert.equal(h.doc.fullscreenElement,null);
-  // 再次转横屏后成功进入全屏，然后用户主动按返回退出：同一横屏周期内不得再次拉起。
-  h2Test:{
-    const h2=watchFullscreenHarness({mode:'resolve'});
-    h2.setOrientation(true);h2.ctx.reconcileWatchFullscreen();
-    await new Promise(r=>setTimeout(r,0));
-    assert.equal(h2.requests.length,1);
-    h2.doc.fullscreenElement=null;h2.ctx.onWatchFullscreenChange();
-    h2.ctx.reconcileWatchFullscreen();
-    assert.equal(h2.requests.length,1);
-    h2.setOrientation(false);h2.ctx.reconcileWatchFullscreen();
-    h2.setOrientation(true);h2.ctx.reconcileWatchFullscreen();
-    assert.equal(h2.requests.length,2);
-  }
+});
+test('YouTube mobile watch suppresses re-entry after manual exit in landscape and clears web-fullscreen when leaving watch',async()=>{
+  const h=watchFullscreenHarness({mode:'resolve'});
+  h.setOrientation(true);h.ctx.reconcileWatchFullscreen();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.requests.length,1);
+  // 用户主动退出系统全屏：同一横屏周期内不再拉起系统或 CSS 全屏
+  h.doc.fullscreenElement=null;h.ctx.onWatchFullscreenChange();
+  h.ctx.reconcileWatchFullscreen();
+  assert.equal(h.requests.length,1);assert.equal(h.ctx.isWebFullscreenActive(),false);
+  h.setOrientation(false);h.ctx.reconcileWatchFullscreen();
+  h.setOrientation(true);h.ctx.reconcileWatchFullscreen();
+  assert.equal(h.requests.length,2);
+  // 在 CSS 网页全屏期间跳转到非视频页或关闭开关时立即退出网页全屏
+  const h2=watchFullscreenHarness({mode:'reject'});
+  h2.setOrientation(true);h2.ctx.reconcileWatchFullscreen();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h2.ctx.isWebFullscreenActive(),true);
+  h2.ctx.location.pathname='/';h2.ctx.reconcileWatchFullscreen();
+  assert.equal(h2.ctx.isWebFullscreenActive(),false);
 });
 test('YouTube auto-fullscreen ignores desktop, Shorts, portrait manual fullscreen, and disabled setting',async()=>{
   const desktop=watchFullscreenHarness({mobile:false});

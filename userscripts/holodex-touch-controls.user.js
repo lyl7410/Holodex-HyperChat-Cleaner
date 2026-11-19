@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.54
-// @description  新增手机版 YouTube 横屏自动尝试全屏、竖屏自动恢复（默认开启，含设置开关）；手机手势区跨外层容器避让原生控制栏，保留 Holodex 横屏全屏与快速暂停保护。
+// @version      0.6.55
+// @description  手机版 YouTube 横屏自动尝试系统全屏，被浏览器拦截时自动切换网页铺满全屏兜底，回竖屏一律自动恢复；手势区跨容器避让控制栏。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -1457,6 +1457,13 @@
       '#hmtc-yt-panel details summary{cursor:pointer;font-size:12px;font-weight:650;color:#b9dfdf}',
       '#hmtc-yt-panel details .row input{accent-color:#66dad1}',
       '#hmtc-yt-panel input[type="checkbox"]{flex:0 0 auto!important;width:20px;height:20px;margin:0;accent-color:#66dad1}',
+      'html.hmtc-yt-web-fullscreen,html.hmtc-yt-web-fullscreen body{overflow:hidden!important;overscroll-behavior:none!important}',
+      'html.hmtc-yt-web-fullscreen ytm-mobile-topbar-renderer,html.hmtc-yt-web-fullscreen #header-bar,html.hmtc-yt-web-fullscreen header.mobile-topbar-header{display:none!important}',
+      'html.hmtc-yt-web-fullscreen .hmtc-yt-fs-ancestor{transform:none!important;filter:none!important;perspective:none!important;contain:none!important;will-change:auto!important;z-index:auto!important}',
+      'html.hmtc-yt-web-fullscreen .hmtc-yt-fs-host{position:fixed!important;inset:0!important;top:0!important;left:0!important;right:0!important;bottom:0!important;width:100vw!important;height:100vh!important;height:100dvh!important;max-width:none!important;max-height:none!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;aspect-ratio:auto!important;z-index:1000!important;background:#000!important;transform:none!important;contain:none!important}',
+      'html.hmtc-yt-web-fullscreen .hmtc-yt-fs-host ytm-player,html.hmtc-yt-web-fullscreen .hmtc-yt-fs-host #player,html.hmtc-yt-web-fullscreen .hmtc-yt-fs-host .html5-video-player,html.hmtc-yt-web-fullscreen .hmtc-yt-fs-host .html5-video-container{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;aspect-ratio:auto!important;left:0!important;top:0!important;right:0!important;bottom:0!important}',
+      'html.hmtc-yt-web-fullscreen .hmtc-yt-fs-host video.html5-main-video{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;left:0!important;top:0!important;object-fit:contain!important;transform:none!important}',
+      'html.hmtc-yt-web-fullscreen .bottom-sheet-container,html.hmtc-yt-web-fullscreen ytm-bottom-sheet-renderer,html.hmtc-yt-web-fullscreen .ytp-popup,html.hmtc-yt-web-fullscreen ytm-dialog{z-index:2147481000!important}',
       '#hmtc-yt-toast{position:fixed;z-index:2147482992;pointer-events:none;',
       'transform:translate(-50%,-50%);background:#1a2c41f5;border-radius:12px;',
       'padding:11px 15px;color:#eff;font:800 22px system-ui}',
@@ -1503,15 +1510,22 @@
     };
     let watchFsRequestBusy=false,watchFsSuppressed=false,watchFsSession=false;
     let watchFsExitInProgress=false,watchFsWasOurs=false;
+    let webFsHost=null,webFsAncestors=[];
     let lastWatchLandscape=watchLandscapeNow(),lastWatchSupported=watchFullscreenSupported();
     const watchFsElement=()=>(page.document||document).fullscreenElement||null;
+    const isWebFullscreenActive=()=>{
+      const doc=page.document||document;
+      return !!webFsHost&&webFsHost.isConnected!==false&&
+        !!doc.documentElement?.classList?.contains?.('hmtc-yt-web-fullscreen');
+    };
     const isOwnWatchFullscreen=()=>{
       const fs=watchFsElement(),player=p(),v=video();
       if(fs){
         if(!player)return false;
         return fs===player||!!fs.contains?.(player)||!!player.contains?.(fs);
       }
-      return !!v?.webkitDisplayingFullscreen;
+      if(v?.webkitDisplayingFullscreen)return true;
+      return isWebFullscreenActive();
     };
     function pickWatchFullscreenTarget(player){
       if(!player)return null;
@@ -1525,6 +1539,43 @@
       }
       return typeof player.requestFullscreen==='function'?player:null;
     }
+    function syncWatchWebFsLayout(){
+      if(typeof refresh==='function'){
+        refresh();
+        if(typeof requestAnimationFrame==='function')requestAnimationFrame(()=>refresh());
+      }
+    }
+    function exitWebFullscreen(){
+      const doc=page.document||document;
+      const had=!!webFsHost||!!doc.documentElement?.classList?.contains?.('hmtc-yt-web-fullscreen');
+      doc.documentElement?.classList?.remove?.('hmtc-yt-web-fullscreen');
+      webFsHost?.classList?.remove?.('hmtc-yt-fs-host');
+      for(const node of webFsAncestors)node?.classList?.remove?.('hmtc-yt-fs-ancestor');
+      webFsAncestors=[];
+      webFsHost=null;
+      if(had)syncWatchWebFsLayout();
+      return had;
+    }
+    function enterWebFullscreen(target){
+      const doc=page.document||document;
+      const host=target||pickWatchFullscreenTarget(p())||p();
+      if(!host||!doc.documentElement?.classList)return false;
+      if(webFsHost&&webFsHost!==host)exitWebFullscreen();
+      // 清除从全屏容器向上直到 body 的层叠上下文限制，避免 fixed 定位被粘性头或 transform 困住。
+      const ancestors=[];
+      let cur=host.parentElement;
+      while(cur&&cur!==doc.body&&cur!==doc.documentElement){
+        cur.classList?.add?.('hmtc-yt-fs-ancestor');
+        ancestors.push(cur);
+        cur=cur.parentElement;
+      }
+      webFsAncestors=ancestors;
+      webFsHost=host;
+      host.classList?.add?.('hmtc-yt-fs-host');
+      doc.documentElement.classList.add('hmtc-yt-web-fullscreen');
+      syncWatchWebFsLayout();
+      return true;
+    }
     function syncWatchAutoFullscreenUi(){
       const check=sheet?.querySelector('[data-id="ytFullscreenAuto"]');
       if(check)check.checked=watchAutoEnabled();
@@ -1532,11 +1583,17 @@
     function exitWatchFullscreen(automatic=false){
       if(watchFsRequestBusy)return;
       const doc=page.document||document,v=video();
-      if(!watchFsElement()&&!v?.webkitDisplayingFullscreen)return;
+      const webActive=isWebFullscreenActive();
+      if(!watchFsElement()&&!v?.webkitDisplayingFullscreen&&!webActive)return;
       if(!isOwnWatchFullscreen())return;
       watchFsSuppressed=!automatic;
       watchFsExitInProgress=automatic;
       watchFsSession=false;
+      if(webActive&&!watchFsElement()&&!v?.webkitDisplayingFullscreen){
+        exitWebFullscreen();
+        watchFsExitInProgress=false;
+        return;
+      }
       watchFsRequestBusy=true;
       const done=()=>{watchFsRequestBusy=false;};
       try{
@@ -1556,11 +1613,25 @@
     }
     function requestWatchFullscreen(){
       if(!watchFullscreenSupported()||!watchMobileDevice()||!watchAutoEnabled()||
-         watchFsSuppressed||watchFsRequestBusy||watchFsElement()||video()?.webkitDisplayingFullscreen)return false;
+         watchFsSuppressed||watchFsRequestBusy||watchFsElement()||
+         video()?.webkitDisplayingFullscreen||isWebFullscreenActive())return false;
       const player=p(),target=pickWatchFullscreenTarget(player),v=video();
       if(!target&&typeof v?.webkitEnterFullscreen!=='function')return false;
       watchFsRequestBusy=true;
       watchFsSession=true;
+      const fallbackToWeb=()=>{
+        watchFsRequestBusy=false;
+        if(watchFullscreenSupported()&&watchMobileDevice()&&
+           watchLandscapeNow()&&watchAutoEnabled()&&!watchFsSuppressed&&
+           !watchFsElement()&&!video()?.webkitDisplayingFullscreen){
+          if(enterWebFullscreen(target||player)){
+            watchFsSession=true;
+            return true;
+          }
+        }
+        if(!isOwnWatchFullscreen())watchFsSession=false;
+        return false;
+      };
       const finish=()=>{
         watchFsRequestBusy=false;
         const own=isOwnWatchFullscreen();
@@ -1568,7 +1639,7 @@
           watchFsWasOurs=true;
           if(!watchLandscapeNow()&&watchAutoEnabled()&&watchFsSession)exitWatchFullscreen(true);
         }else if(!watchFsElement()){
-          watchFsSession=false;
+          fallbackToWeb();
         }
       };
       try{
@@ -1576,32 +1647,32 @@
           let result;
           try{result=target.requestFullscreen({navigationUI:'hide'});}
           catch{result=target.requestFullscreen();}
-          Promise.resolve(result).then(finish,()=>{
-            watchFsRequestBusy=false;
-            if(!isOwnWatchFullscreen())watchFsSession=false;
-          });
+          Promise.resolve(result).then(finish,fallbackToWeb);
           return true;
         }
         v.webkitEnterFullscreen();
         finish();
         return true;
       }catch{
-        watchFsRequestBusy=false;
-        if(!isOwnWatchFullscreen())watchFsSession=false;
-        return false;
+        return fallbackToWeb();
       }
     }
     function reconcileWatchFullscreen(){
+      if(webFsHost&&webFsHost.isConnected===false)exitWebFullscreen();
       const active=watchFullscreenSupported()&&watchMobileDevice();
       const landscape=watchLandscapeNow();
       const changedToLandscape=landscape&&!lastWatchLandscape;
       const changedToPortrait=!landscape&&lastWatchLandscape;
       const leftWatch=!active&&lastWatchSupported;
       let shouldAttempt=false;
-      if(!active||!watchAutoEnabled())watchFsSession=false;
+      if(!active||!watchAutoEnabled()){
+        watchFsSession=false;
+        if(isWebFullscreenActive())exitWebFullscreen();
+      }
       if(!active||!landscape||!watchAutoEnabled()){
         if(changedToPortrait||leftWatch)watchFsSuppressed=false;
-      }else if(changedToLandscape&&!watchFsElement()&&!video()?.webkitDisplayingFullscreen){
+      }else if(changedToLandscape&&!watchFsElement()&&
+               !video()?.webkitDisplayingFullscreen&&!isWebFullscreenActive()){
         watchFsSuppressed=false;
         shouldAttempt=true;
       }
@@ -1612,6 +1683,8 @@
         exitWatchFullscreen(true);
     }
     function onWatchFullscreenChange(){
+      // 系统全屏激活后立即移除 CSS 网页全屏，避免两者样式叠加错位。
+      if(watchFsElement()&&isWebFullscreenActive())exitWebFullscreen();
       const own=isOwnWatchFullscreen();
       if(own){
         if(watchFullscreenSupported()&&watchMobileDevice()&&
@@ -1628,11 +1701,12 @@
       const next=!!enabled;
       GM_setValue(ytFullscreenAutoKey,next);
       watchFsSuppressed=false;
+      if(!next&&isWebFullscreenActive())exitWebFullscreen();
       watchFsSession=next&&watchFullscreenSupported()&&watchMobileDevice()&&
         watchLandscapeNow()&&isOwnWatchFullscreen();
       if(next&&fromUserGesture&&watchFullscreenSupported()&&watchMobileDevice()&&
          watchLandscapeNow()&&!watchFsElement()&&!video()?.webkitDisplayingFullscreen&&
-         navigator.userActivation?.isActive===true)
+         !isWebFullscreenActive()&&navigator.userActivation?.isActive===true)
         requestWatchFullscreen();
       syncWatchAutoFullscreenUi();
       return next;
@@ -1942,7 +2016,7 @@
         '<div class="row"><label>横屏</label>',
         '<label style="flex:1;display:flex;align-items:center;gap:8px;font-weight:500">',
         '<input type="checkbox" data-id="ytFullscreenAuto">',
-        '<span>横屏自动尝试全屏，回竖屏恢复</span></label></div>',
+        '<span>横屏自动全屏（拦截时网页铺满），回竖屏恢复</span></label></div>',
         '</details>'
       ].join(''));
       document.body.appendChild(sheet);
@@ -2246,6 +2320,10 @@
     window.addEventListener('orientationchange',onWatchRotate,{passive:true});
     window.screen?.orientation?.addEventListener?.('change',onWatchRotate);
     window.addEventListener('yt-navigate-finish',onWatchRotate,{passive:true});
+    document.addEventListener('keydown',event=>{
+      if(event.key==='Escape'&&isWebFullscreenActive()&&(!sheet||sheet.hidden))
+        exitWatchFullscreen(false);
+    });
     window.addEventListener('pagehide',()=>bandwidth.stop(),{passive:true});
     refresh();
   }
