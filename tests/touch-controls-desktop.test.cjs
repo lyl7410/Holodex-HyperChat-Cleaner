@@ -249,6 +249,64 @@ test('switching from touch silent sampling releases ownership before native stat
   player.showVideoInfo();ctx.collector.start();ctx.collector.stop();
   assert.equal(visible,true);assert.equal(hides,1);assert.equal(shows,2);
 });
+test('watch collector enables stats when a pre-rendered panel is hidden and the visibility API is absent',()=>{
+  let shows=0,hides=0;const classes=new Set();
+  const panel={getClientRects:()=>[{}],textContent:''};
+  const player={showVideoInfo(){shows++;panel.textContent='Connection Speed 9800 Kbps';},
+    hideVideoInfo(){hides++;panel.textContent='';},
+    getVideoData:()=>({video_id:'vid1'})};
+  const pageDoc={getElementById:()=>({}),querySelector:()=>panel,
+    querySelectorAll:()=>[panel],
+    defaultView:{getComputedStyle:()=>({display:'block',visibility:'hidden'})},
+    documentElement:{classList:{toggle(c,on){on?classes.add(c):classes.delete(c);}}}};
+  const ctx=vm.createContext({pageDoc,player,touchZonesAllowed:()=>true});
+  vm.runInContext(section('  function youtubeWatchBandwidth(',
+    '  // HTMLMediaElement.duration')+'\nvar collector=youtubeWatchBandwidth(pageDoc,()=>player);',ctx);
+  const started=ctx.collector.start();
+  // Layout rects alone must not pass a visibility:hidden panel as "visible".
+  assert.equal(shows,1);assert.equal(started.hidden,true);
+  const net=ctx.collector.read();
+  assert.equal(net.available,true);assert.equal(net.bandwidthKbps,9800);
+  ctx.collector.stop();
+  assert.equal(hides,1);assert.equal(classes.size,0);
+});
+test('watch collector verifies a lying visibility API once, then stops interfering when data flows',()=>{
+  let shows=0,panel=null;
+  const player={isVideoInfoVisible:()=>true,
+    showVideoInfo(){shows++;panel={getClientRects:()=>[{}],
+      textContent:'Connection Speed 12345 Kbps'};},
+    getVideoData:()=>({video_id:'vid1'})};
+  const pageDoc={getElementById:()=>({}),querySelector:()=>panel,
+    querySelectorAll:()=>panel?[panel]:[],
+    defaultView:{getComputedStyle:()=>({display:'block',visibility:'visible'})},
+    documentElement:{classList:{toggle(){}}}};
+  const ctx=vm.createContext({pageDoc,player,touchZonesAllowed:()=>true});
+  vm.runInContext(section('  function youtubeWatchBandwidth(',
+    '  // HTMLMediaElement.duration')+'\nvar collector=youtubeWatchBandwidth(pageDoc,()=>player);',ctx);
+  // API claims visible, but no readable panel and no sample: verify silently.
+  ctx.collector.start();assert.equal(shows,1);
+  assert.equal(ctx.collector.read().bandwidthKbps,12345);
+  ctx.collector.start();ctx.collector.start();
+  assert.equal(shows,1);
+});
+test('watch collector reads a genuinely visible user panel passively without hiding it',()=>{
+  let shows=0,hides=0;const classes=new Set();
+  const panel={getClientRects:()=>[{}],textContent:'Connection Speed 5000 Kbps'};
+  const player={isVideoInfoVisible:()=>false,showVideoInfo(){shows++;},
+    hideVideoInfo(){hides++;},getVideoData:()=>({video_id:'vid1'})};
+  const pageDoc={getElementById:()=>({}),querySelector:()=>panel,
+    querySelectorAll:()=>[panel],
+    defaultView:{getComputedStyle:()=>({display:'block',visibility:'visible'})},
+    documentElement:{classList:{toggle(c,on){on?classes.add(c):classes.delete(c);}}}};
+  const ctx=vm.createContext({pageDoc,player,touchZonesAllowed:()=>true});
+  vm.runInContext(section('  function youtubeWatchBandwidth(',
+    '  // HTMLMediaElement.duration')+'\nvar collector=youtubeWatchBandwidth(pageDoc,()=>player);',ctx);
+  const started=ctx.collector.start();
+  assert.equal(shows,0);assert.equal(started.hidden,false);
+  assert.equal(ctx.collector.read().bandwidthKbps,5000);
+  ctx.collector.stop();
+  assert.equal(hides,0);assert.equal(classes.size,0);
+});
 
 test('desktop iframe monitor stays passive while explicit native toggle remains usable',()=>{
   let visible=false,shows=0,hides=0,silentState=false;

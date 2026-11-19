@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.42
-// @description  手机手势区不再遮挡 YouTube 原生底部控制栏（全屏等按钮可点）；修复 HUD 位置相关回归测试。
+// @version      0.6.43
+// @description  修复 YouTube 页面连接速度一直显示—：统计面板可见性判定与 Holodex 桥接对齐，隐藏面板不再被误判为已开启。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -972,8 +972,17 @@
       const apiVisibility=playerInfoVisible(p);
       const existing=pageDoc.querySelector(
         '.html5-video-info-panel-content, .html5-video-info-panel, .ytp-stats-for-nerds');
-      const rect=existing?.getClientRects?.();
-      const visible=apiVisibility===null?!!rect?.length:apiVisibility;
+      // A pre-rendered panel can keep layout rects while hidden via
+      // visibility/display. Rects alone would wrongly report "visible", so
+      // showVideoInfo() never runs and Connection Speed stays "—" forever.
+      // Use the same computed-style evidence as the proven Holodex bridge.
+      const existingStyle=existing?
+        pageDoc.defaultView?.getComputedStyle?.(existing):null;
+      const trulyVisible=!!existing?.getClientRects?.().length&&
+        existingStyle?.display!=='none'&&existingStyle?.visibility!=='hidden';
+      // Real DOM evidence wins: a panel the user can actually see is read
+      // passively and never hidden, whatever the visibility API claims.
+      const visible=trulyVisible||apiVisibility===true;
       if(!visible&&typeof p.showVideoInfo!=='function')
         return {started:false,reason:'播放器未开放原生统计显示接口'};
       if(!visible&&!monitor.forced){
@@ -997,6 +1006,19 @@
           monitor.lastArm=now;
           css(true);
           try{p.showVideoInfo();}catch{}
+        }
+      }else if(visible&&!monitor.forced&&!trulyVisible&&
+        typeof p.showVideoInfo==='function'){
+        // The visibility API claims stats are on, but no readable panel
+        // exists and no real sample arrived recently. Verify silently
+        // instead of reporting "—" forever. Once data flows, lastSample
+        // stays fresh and this branch never interferes again.
+        const now=Date.now();
+        const noSample=!monitor.lastSample||now-monitor.lastSample.at>6000;
+        if(noSample&&(!monitor.lastArm||now-monitor.lastArm>=2000)){
+          monitor.lastArm=now;
+          css(true);
+          try{p.showVideoInfo();monitor.forced=true;}catch{}
         }
       }
       return {started:visible||monitor.forced,hidden:monitor.forced};

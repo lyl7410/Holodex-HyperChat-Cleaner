@@ -1,8 +1,8 @@
-# Holodex / YouTube Touch Controls — v0.6.42 手势区避让原生控制栏
+# Holodex / YouTube Touch Controls — v0.6.43 连接速度可见性判定修复
 
 独立的油猴脚本，同时支持 **Holodex 多视图（YouTube iframe）** 和 **普通 YouTube watch/live/shorts 视频页（含移动版）**。v0.6.7 直接在原脚本中整合左上角常驻小标签，无需打开详细控制面板就能查看时间或 YouTube 原生 Connection Speed；保持 v0.6.6 已修复的直播播放位置显示和真实测速逻辑。保留单排五档倍速、手机画质入口、播放后触控修复与 Holodex 智能自动播放；不增加第二个脚本。
 
-**[安装／更新正式版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.29；更新后完整刷新页面与 iframe） · [项目首页](../README.md)
+**[安装／更新正式版](https://raw.githubusercontent.com/lyl7410/Holodex-HyperChat-Cleaner/main/userscripts/holodex-touch-controls.user.js)**（安装页面确认版本为 v0.6.43；更新后完整刷新页面与 iframe） · [项目首页](../README.md)
 
 ## 安装与升级
 
@@ -10,6 +10,18 @@
 2. 刷新 `holodex.net/multiview` 页面，必要时也刷新 YouTube。**智能自动播放仅适用于 Holodex 多视图 YouTube 格子**；透明音量手势及快捷播放控制额外支持 `youtube.com/watch`、`youtube.com/live/...`、`youtube.com/shorts/...` 和 `m.youtube.com` 的相应页面。YouTube 页面不会启动 Holodex 自动播放引擎。
 3. 触摸手势和播放时间通过 Holodex 页面运行。**Connection Speed、Buffer Health、Live Latency 和原生分辨率**则还需要脚本获得在 `www.youtube.com/embed/*` / `www.youtube-nocookie.com/embed/*` 等第三方 iframe 内运行的权限。
 4. Cleaner 的聊天间距功能已独立更新至 v2.5.0；Quick Add、Channel Name Fix 不需修改。
+
+## v0.6.43：修复 YouTube 页面连接速度一直显示「—」
+
+Holodex 多视图连接速度正常、普通 YouTube 页面却始终读不出数值的根源：两条采集路径的「原生统计面板是否可见」判定不一致。Holodex iframe 桥接会检查面板的计算样式（display/visibility），而 YouTube 页面采集器在缺少 `isVideoInfoVisible()` 接口时只看面板有没有布局矩形。YouTube 预渲染的统计面板可以用 `visibility:hidden` 隐藏但仍保留布局矩形，于是被误判为「统计已开启」，`showVideoInfo()` 永远不会被调用，统计引擎不填充数据，连接速度一直是「—」。
+
+本版修复：
+
+- **可见性判定与 Holodex 桥接对齐**：同时检查布局矩形与计算样式，隐藏面板不再被误判为已开启；真实可见的用户面板优先按 DOM 证据被动读取，绝不隐藏或接管。
+- **接口谎报兜底**：`isVideoInfoVisible()` 声称已开启、但实际没有可读面板且超过 6 秒没有任何真实读数时，静默补开一次原生统计（2 秒节流）；数据恢复流动后不再干预。
+- 桌面被动模式、用户自开统计的所有权保护、6 秒缓存边界均不变。
+
+**验证**：新增 3 项回归测试（隐藏预渲染面板＋无可见性接口、接口谎报＋无样本、真实可见面板被动读取），在旧代码上全部失败、修复后全部通过；76 项 Touch Controls 测试、24 项 Channel Name Fix、93 项 Embed Recovery 全部通过。本环境无法直连 YouTube 实站，手机真机效果待安装确认；若仍为「—」，说明该播放器构建未开放任何原生统计接口，属 YouTube 侧限制。
 
 ## v0.6.42：手机手势区避让原生底部控制栏
 
