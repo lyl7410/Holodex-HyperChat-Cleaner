@@ -1274,3 +1274,120 @@ test('returning to touch restores original DOM order and mobile labels without d
   ctx.prepareDesktopMetrics(f.panel,false);assert.deepEqual(f.grid.children,grid);
 });
 
+function watchFullscreenHarness({initialEnabled,mobile=true,pathname='/watch',landscape=false,mode='resolve'}={}){
+  const store=new Map();
+  if(initialEnabled!==undefined)store.set('hmtc_yt_landscape_auto_fullscreen_v1',initialEnabled);
+  const requests=[],exits=[];
+  const overlay={contains:()=>false};
+  const ytmPlayer={
+    id:'ytm-player',
+    contains:node=>node===player||node===overlay,
+    requestFullscreen(opts){
+      requests.push({target:'ytm-player',opts});
+      if(mode==='reject')return Promise.reject(new Error('not allowed'));
+      doc.fullscreenElement=ytmPlayer;
+      ctx.onWatchFullscreenChange();
+      return Promise.resolve();
+    }
+  };
+  const player={
+    id:'movie_player',
+    contains:node=>node===player,
+    closest:sel=>sel==='ytm-player'?ytmPlayer:null,
+    requestFullscreen(opts){
+      requests.push({target:'movie_player',opts});
+      if(mode==='reject')return Promise.reject(new Error('not allowed'));
+      doc.fullscreenElement=player;
+      ctx.onWatchFullscreenChange();
+      return Promise.resolve();
+    }
+  };
+  const checkbox={checked:false};
+  const doc={
+    fullscreenElement:null,
+    querySelector:sel=>sel==='#player-control-overlay,ytm-custom-control'?overlay:null,
+    exitFullscreen(){
+      exits.push(doc.fullscreenElement?.id||'unknown');
+      doc.fullscreenElement=null;
+      ctx.onWatchFullscreenChange();
+      return Promise.resolve();
+    }
+  };
+  const screenObj={orientation:{type:landscape?'landscape-primary':'portrait-primary'}};
+  const ctx=vm.createContext({
+    location:{pathname},
+    innerWidth:landscape?844:390,
+    innerHeight:landscape?390:844,
+    navigator:{userAgent:mobile?'Mozilla/5.0 (Linux; Android 14)':'Mozilla/5.0 (Windows NT 10.0)',userActivation:{isActive:true}},
+    window:{matchMedia:q=>({matches:mobile?q==='(pointer:coarse)':true}),screen:screenObj},
+    document:doc,
+    page:{document:doc},
+    supported:()=>/^\/(?:watch(?:\/|$)|live\/|shorts\/)/.test(ctx.location.pathname),
+    p:()=>player,
+    video:()=>({webkitDisplayingFullscreen:false}),
+    sheet:{querySelector:sel=>sel==='[data-id="ytFullscreenAuto"]'?checkbox:null},
+    setting:(k,d)=>store.has(k)?store.get(k):d,
+    GM_getValue:(k,d)=>store.has(k)?store.get(k):d,
+    GM_setValue:(k,v)=>store.set(k,v)
+  });
+  const code=section('    const ytFullscreenAutoKey=','    let watchHud=null;')+
+    '\nthis.watchAutoEnabled=watchAutoEnabled;';
+  vm.runInContext(code,ctx);
+  return {ctx,doc,player,ytmPlayer,requests,exits,checkbox,screenObj,store,setOrientation(land){
+    ctx.innerWidth=land?844:390;ctx.innerHeight=land?390:844;
+    screenObj.orientation.type=land?'landscape-primary':'portrait-primary';
+  }};
+}
+test('YouTube mobile watch auto-fullscreen defaults to on, picks outer ytm-player container, and restores on portrait',async()=>{
+  const h=watchFullscreenHarness();
+  assert.equal(h.ctx.watchAutoEnabled(),true);
+  h.ctx.syncWatchAutoFullscreenUi();assert.equal(h.checkbox.checked,true);
+  h.setOrientation(true);h.ctx.reconcileWatchFullscreen();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.requests.length,1);assert.equal(h.requests[0].target,'ytm-player');
+  assert.equal(h.doc.fullscreenElement,h.ytmPlayer);
+  h.setOrientation(false);h.ctx.reconcileWatchFullscreen();
+  await new Promise(r=>setTimeout(r,0));
+  assert.deepEqual(h.exits,['ytm-player']);assert.equal(h.doc.fullscreenElement,null);
+});
+test('YouTube mobile watch suppresses re-entry after manual exit in landscape and restores manual landscape fullscreen on portrait',async()=>{
+  const h=watchFullscreenHarness({mode:'reject'});
+  h.setOrientation(true);h.ctx.reconcileWatchFullscreen();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.requests.length,1);assert.equal(h.doc.fullscreenElement,null);
+  // 浏览器拒绝自动全屏后，用户在横屏下手动点击进入全屏；转回竖屏时仍应自动退出恢复。
+  h.doc.fullscreenElement=h.ytmPlayer;h.ctx.onWatchFullscreenChange();
+  h.setOrientation(false);h.ctx.reconcileWatchFullscreen();
+  await new Promise(r=>setTimeout(r,0));
+  assert.deepEqual(h.exits,['ytm-player']);assert.equal(h.doc.fullscreenElement,null);
+  // 再次转横屏后成功进入全屏，然后用户主动按返回退出：同一横屏周期内不得再次拉起。
+  h2Test:{
+    const h2=watchFullscreenHarness({mode:'resolve'});
+    h2.setOrientation(true);h2.ctx.reconcileWatchFullscreen();
+    await new Promise(r=>setTimeout(r,0));
+    assert.equal(h2.requests.length,1);
+    h2.doc.fullscreenElement=null;h2.ctx.onWatchFullscreenChange();
+    h2.ctx.reconcileWatchFullscreen();
+    assert.equal(h2.requests.length,1);
+    h2.setOrientation(false);h2.ctx.reconcileWatchFullscreen();
+    h2.setOrientation(true);h2.ctx.reconcileWatchFullscreen();
+    assert.equal(h2.requests.length,2);
+  }
+});
+test('YouTube auto-fullscreen ignores desktop, Shorts, portrait manual fullscreen, and disabled setting',async()=>{
+  const desktop=watchFullscreenHarness({mobile:false});
+  desktop.setOrientation(true);desktop.ctx.reconcileWatchFullscreen();
+  assert.equal(desktop.requests.length,0);
+  const shorts=watchFullscreenHarness({pathname:'/shorts/abc'});
+  shorts.setOrientation(true);shorts.ctx.reconcileWatchFullscreen();
+  assert.equal(shorts.requests.length,0);
+  const portraitManual=watchFullscreenHarness();
+  portraitManual.doc.fullscreenElement=portraitManual.ytmPlayer;
+  portraitManual.ctx.onWatchFullscreenChange();
+  portraitManual.ctx.reconcileWatchFullscreen();
+  assert.equal(portraitManual.exits.length,0);
+  const disabled=watchFullscreenHarness({initialEnabled:false});
+  disabled.setOrientation(true);disabled.ctx.reconcileWatchFullscreen();
+  assert.equal(disabled.requests.length,0);
+});
+

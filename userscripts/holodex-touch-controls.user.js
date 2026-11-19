@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Holodex Touch Controls（手势音量、播放统计与智能自动播放）
 // @namespace    https://github.com/lyl7410/Holodex-HyperChat-Cleaner
-// @version      0.6.53
-// @description  横屏自动尝试全屏、竖屏自动恢复；手机手势区跨外层容器避让原生底部控制栏与全屏按钮，修复连接速度面板可见性判定。
+// @version      0.6.54
+// @description  新增手机版 YouTube 横屏自动尝试全屏、竖屏自动恢复（默认开启，含设置开关）；手机手势区跨外层容器避让原生控制栏，保留 Holodex 横屏全屏与快速暂停保护。
 // @match        https://holodex.net/*
 // @match        https://www.holodex.net/*
 // @match        https://www.youtube.com/embed/*
@@ -1456,6 +1456,7 @@
       '#hmtc-yt-panel details{margin-top:8px;border-top:1px solid #ffffff20;padding-top:7px}',
       '#hmtc-yt-panel details summary{cursor:pointer;font-size:12px;font-weight:650;color:#b9dfdf}',
       '#hmtc-yt-panel details .row input{accent-color:#66dad1}',
+      '#hmtc-yt-panel input[type="checkbox"]{flex:0 0 auto!important;width:20px;height:20px;margin:0;accent-color:#66dad1}',
       '#hmtc-yt-toast{position:fixed;z-index:2147482992;pointer-events:none;',
       'transform:translate(-50%,-50%);background:#1a2c41f5;border-radius:12px;',
       'padding:11px 15px;color:#eff;font:800 22px system-ui}',
@@ -1483,6 +1484,158 @@
       let id=null;try{id=p()?.getVideoData?.()?.video_id;}catch{}
       const data=readFrameClock(page.document,p,video,page,id);
       return {time:playbackTimeText(data),state:data};
+    }
+    // 手机版 YouTube 播放页：横屏自动尝试全屏、竖屏自动恢复（默认开启）。
+    const ytFullscreenAutoKey='hmtc_yt_landscape_auto_fullscreen_v1';
+    const watchAutoEnabled=()=>!!setting(ytFullscreenAutoKey,true);
+    const watchFullscreenSupported=()=>supported()&&!/\/shorts\//.test(location.pathname);
+    const watchMobileDevice=()=>{
+      const ua=navigator.userAgent||'';
+      const touchOnly=!!window.matchMedia?.('(pointer:coarse)')?.matches&&
+        !window.matchMedia?.('(any-pointer:fine)')?.matches;
+      return /Android|iPhone|iPad|iPod/i.test(ua)||touchOnly;
+    };
+    const watchLandscapeNow=()=>{
+      const orientation=window.screen?.orientation?.type;
+      if(/Android/i.test(navigator.userAgent||'')&&/^(landscape|portrait)-/.test(orientation||''))
+        return orientation.startsWith('landscape');
+      return innerWidth>innerHeight;
+    };
+    let watchFsRequestBusy=false,watchFsSuppressed=false,watchFsSession=false;
+    let watchFsExitInProgress=false,watchFsWasOurs=false;
+    let lastWatchLandscape=watchLandscapeNow(),lastWatchSupported=watchFullscreenSupported();
+    const watchFsElement=()=>(page.document||document).fullscreenElement||null;
+    const isOwnWatchFullscreen=()=>{
+      const fs=watchFsElement(),player=p(),v=video();
+      if(fs){
+        if(!player)return false;
+        return fs===player||!!fs.contains?.(player)||!!player.contains?.(fs);
+      }
+      return !!v?.webkitDisplayingFullscreen;
+    };
+    function pickWatchFullscreenTarget(player){
+      if(!player)return null;
+      const doc=page.document||document;
+      const overlay=doc.querySelector?.('#player-control-overlay,ytm-custom-control');
+      if(overlay){
+        for(const sel of ['ytm-player','#player-container-id','#player-container','#player']){
+          const host=player.closest?.(sel);
+          if(host&&host.contains?.(overlay)&&typeof host.requestFullscreen==='function')return host;
+        }
+      }
+      return typeof player.requestFullscreen==='function'?player:null;
+    }
+    function syncWatchAutoFullscreenUi(){
+      const check=sheet?.querySelector('[data-id="ytFullscreenAuto"]');
+      if(check)check.checked=watchAutoEnabled();
+    }
+    function exitWatchFullscreen(automatic=false){
+      if(watchFsRequestBusy)return;
+      const doc=page.document||document,v=video();
+      if(!watchFsElement()&&!v?.webkitDisplayingFullscreen)return;
+      if(!isOwnWatchFullscreen())return;
+      watchFsSuppressed=!automatic;
+      watchFsExitInProgress=automatic;
+      watchFsSession=false;
+      watchFsRequestBusy=true;
+      const done=()=>{watchFsRequestBusy=false;};
+      try{
+        if(watchFsElement()&&typeof doc.exitFullscreen==='function'){
+          Promise.resolve(doc.exitFullscreen()).then(done,()=>{
+            watchFsRequestBusy=false;watchFsExitInProgress=false;
+          });
+          return;
+        }
+        if(v?.webkitDisplayingFullscreen&&typeof v.webkitExitFullscreen==='function'){
+          v.webkitExitFullscreen();
+          watchFsRequestBusy=false;
+          return;
+        }
+      }catch{}
+      watchFsRequestBusy=false;watchFsExitInProgress=false;
+    }
+    function requestWatchFullscreen(){
+      if(!watchFullscreenSupported()||!watchMobileDevice()||!watchAutoEnabled()||
+         watchFsSuppressed||watchFsRequestBusy||watchFsElement()||video()?.webkitDisplayingFullscreen)return false;
+      const player=p(),target=pickWatchFullscreenTarget(player),v=video();
+      if(!target&&typeof v?.webkitEnterFullscreen!=='function')return false;
+      watchFsRequestBusy=true;
+      watchFsSession=true;
+      const finish=()=>{
+        watchFsRequestBusy=false;
+        const own=isOwnWatchFullscreen();
+        if(own){
+          watchFsWasOurs=true;
+          if(!watchLandscapeNow()&&watchAutoEnabled()&&watchFsSession)exitWatchFullscreen(true);
+        }else if(!watchFsElement()){
+          watchFsSession=false;
+        }
+      };
+      try{
+        if(target){
+          let result;
+          try{result=target.requestFullscreen({navigationUI:'hide'});}
+          catch{result=target.requestFullscreen();}
+          Promise.resolve(result).then(finish,()=>{
+            watchFsRequestBusy=false;
+            if(!isOwnWatchFullscreen())watchFsSession=false;
+          });
+          return true;
+        }
+        v.webkitEnterFullscreen();
+        finish();
+        return true;
+      }catch{
+        watchFsRequestBusy=false;
+        if(!isOwnWatchFullscreen())watchFsSession=false;
+        return false;
+      }
+    }
+    function reconcileWatchFullscreen(){
+      const active=watchFullscreenSupported()&&watchMobileDevice();
+      const landscape=watchLandscapeNow();
+      const changedToLandscape=landscape&&!lastWatchLandscape;
+      const changedToPortrait=!landscape&&lastWatchLandscape;
+      const leftWatch=!active&&lastWatchSupported;
+      let shouldAttempt=false;
+      if(!active||!watchAutoEnabled())watchFsSession=false;
+      if(!active||!landscape||!watchAutoEnabled()){
+        if(changedToPortrait||leftWatch)watchFsSuppressed=false;
+      }else if(changedToLandscape&&!watchFsElement()&&!video()?.webkitDisplayingFullscreen){
+        watchFsSuppressed=false;
+        shouldAttempt=true;
+      }
+      lastWatchLandscape=landscape;lastWatchSupported=active;
+      if(shouldAttempt)requestWatchFullscreen();
+      if(active&&!landscape&&watchAutoEnabled()&&watchFsSession&&
+         isOwnWatchFullscreen()&&!watchFsRequestBusy)
+        exitWatchFullscreen(true);
+    }
+    function onWatchFullscreenChange(){
+      const own=isOwnWatchFullscreen();
+      if(own){
+        if(watchFullscreenSupported()&&watchMobileDevice()&&
+           watchLandscapeNow()&&watchAutoEnabled())
+          watchFsSession=true;
+      }else if(watchFsWasOurs){
+        watchFsSuppressed=!watchFsExitInProgress;
+        watchFsSession=false;
+      }
+      if(!own)watchFsExitInProgress=false;
+      watchFsWasOurs=own;
+    }
+    function setWatchAutoFullscreen(enabled,fromUserGesture=false){
+      const next=!!enabled;
+      GM_setValue(ytFullscreenAutoKey,next);
+      watchFsSuppressed=false;
+      watchFsSession=next&&watchFullscreenSupported()&&watchMobileDevice()&&
+        watchLandscapeNow()&&isOwnWatchFullscreen();
+      if(next&&fromUserGesture&&watchFullscreenSupported()&&watchMobileDevice()&&
+         watchLandscapeNow()&&!watchFsElement()&&!video()?.webkitDisplayingFullscreen&&
+         navigator.userActivation?.isActive===true)
+        requestWatchFullscreen();
+      syncWatchAutoFullscreenUi();
+      return next;
     }
     let watchHud=null;
     function refreshWatchHud(player){
@@ -1786,6 +1939,10 @@
         '<div class="row"><label>灵敏度</label>',
         '<input type="range" data-id="sense" min="0.4" max="2.5" step="0.1">',
         '<strong data-id="senseText">1.0×</strong></div>',
+        '<div class="row"><label>横屏</label>',
+        '<label style="flex:1;display:flex;align-items:center;gap:8px;font-weight:500">',
+        '<input type="checkbox" data-id="ytFullscreenAuto">',
+        '<span>横屏自动尝试全屏，回竖屏恢复</span></label></div>',
         '</details>'
       ].join(''));
       document.body.appendChild(sheet);
@@ -1810,6 +1967,9 @@
         GM_setValue('hmtc_volume_sensitivity_v1',Math.round(n*10)/10);
         text('senseText',n.toFixed(1)+'×');
       });
+      const fsAutoInput=sheet.querySelector('[data-id="ytFullscreenAuto"]');
+      fsAutoInput.checked=watchAutoEnabled();
+      fsAutoInput.addEventListener('change',event=>setWatchAutoFullscreen(event.target.checked,true));
       sheet.querySelector('[data-id="slider"]').addEventListener('input',e=>{
         try{volume(e.target.value);refreshSheet();}catch(error){text('hint',error.message);}
       });
@@ -1854,6 +2014,7 @@
       sheet.querySelector('[data-id="hudPosition"]').value=hudPosition();
       sheet.querySelector('[data-id="hudSize"]').value=String(hudSize());
       sheet.querySelector('[data-id="hudSizeText"]').textContent=hudSize()+'%';
+      if(typeof syncWatchAutoFullscreenUi==='function')syncWatchAutoFullscreenUi();
       presentPanel(sheet,touchZonesAllowed()?anchor:desktopVideoAnchor(p()));
       bandwidth.start();
       refreshSheet();
@@ -2036,6 +2197,7 @@
         }
       }
       refreshWatchHud(player);
+      reconcileWatchFullscreen();
     }
     installDesktopDismiss(()=>{if(sheet&&!sheet.hidden)close();});
     const handleWatchRightClick=event=>{
@@ -2067,13 +2229,23 @@
     GM_registerMenuCommand('YouTube：打开触控设置',()=>{
       open();sheet?.querySelector('.hmtc-yt-preferences')?.setAttribute('open','');
     });
+    GM_registerMenuCommand('YouTube：横屏自动全屏／竖屏恢复',()=>{
+      const next=setWatchAutoFullscreen(!watchAutoEnabled());
+      alert('YouTube 横屏自动尝试全屏／竖屏自动恢复已'+(next?'开启':'关闭'));
+    });
+    const onWatchRotate=()=>{reconcileWatchFullscreen();refresh();};
+    const onWatchFsEvent=()=>{onWatchFullscreenChange();reconcileWatchFullscreen();refresh();};
     setInterval(refresh,600);
     // Keep the transparent overlay aligned while the player scrolls,
     // resizes, enters fullscreen or switches between Shorts.
     document.addEventListener('scroll',refresh,{passive:true,capture:true});
-    window.addEventListener('resize',refresh,{passive:true});
-    document.addEventListener('fullscreenchange',refresh);
-    window.addEventListener('orientationchange',refresh,{passive:true});
+    window.addEventListener('resize',onWatchRotate,{passive:true});
+    document.addEventListener('fullscreenchange',onWatchFsEvent);
+    if(page.document&&page.document!==document)
+      page.document.addEventListener('fullscreenchange',onWatchFsEvent);
+    window.addEventListener('orientationchange',onWatchRotate,{passive:true});
+    window.screen?.orientation?.addEventListener?.('change',onWatchRotate);
+    window.addEventListener('yt-navigate-finish',onWatchRotate,{passive:true});
     window.addEventListener('pagehide',()=>bandwidth.stop(),{passive:true});
     refresh();
   }
